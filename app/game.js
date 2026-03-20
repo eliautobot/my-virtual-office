@@ -4894,6 +4894,25 @@ function drawInteriorWallOccluders() {
     });
 }
 
+function _isFurnitureNearHorizontalWall(item) {
+    var interior = (officeConfig.walls && officeConfig.walls.interior) || [];
+    var bounds = FURNITURE_BOUNDS[item.type] || { w: 40, h: 40 };
+    var ix = item.x, iy = item.y, iw = bounds.w, ih = bounds.h;
+    for (var i = 0; i < interior.length; i++) {
+        var wall = interior[i];
+        if (wall.x1 === wall.x2) continue; // skip vertical walls
+        var px = Math.min(wall.x1, wall.x2) * TILE;
+        var pw = Math.abs(wall.x2 - wall.x1) * TILE;
+        var py = wall.y1 * TILE;
+        var faceH = 36;
+        // Check if furniture overlaps the wall's face area (with some margin)
+        if (ix + iw > px && ix < px + pw && iy < py + 10 && iy + ih > py - faceH - 16) {
+            return true;
+        }
+    }
+    return false;
+}
+
 function _isAgentBehindHorizontalWall(agent) {
     var interior = (officeConfig.walls && officeConfig.walls.interior) || [];
     for (var i = 0; i < interior.length; i++) {
@@ -7911,6 +7930,12 @@ function loop() {
     _behindWalls.forEach(function(a) { a.draw(); });
     _perfEnd('agents');
     _perfStart('wallOccluders'); drawInteriorWallOccluders(); _perfEnd('wallOccluders');
+    // Redraw furniture near horizontal walls (occluders may have covered them)
+    officeConfig.furniture.forEach(function(item) {
+        if (item.type === 'branchSign' || item.type === 'textLabel') return;
+        if (item.type === 'wall' || item.type === 'door') return;
+        if (_isFurnitureNearHorizontalWall(item)) drawFurnitureItem(item);
+    });
     // Labels on top of walls
     officeConfig.furniture.forEach(function(item) {
         if (item.type === 'branchSign' || item.type === 'textLabel') drawFurnitureItem(item);
