@@ -1664,7 +1664,7 @@ const FURNITURE_ACTIONS = {
         ]
     },
     'coffeeTable':    { spots: [],                               action: null     },
-    'dartBoard':      { spots: [{ dx: 0, dy: 30 }],             action: 'darts'  },
+    'dartBoard':      { spots: [{ dx: 0, dy: 140 }],            action: 'darts'  },
     'pingPongTable':  { spots: [{ dx: -20, dy: 20 }, { dx: 60, dy: 20 }], action: 'pong' },
     'desk':           { spots: [{ dx: 0, dy: 0 }],              action: 'work'   },
     'bossDesk':       { spots: [{ dx: 0, dy: 0 }],              action: 'work'   },
@@ -7702,13 +7702,13 @@ function startDartGame(agent1, agent2) {
         resultTimer: 0,
     };
     dartGames.push(game);
-    // Position agents tightly within dart-board area
-    agent1.targetX = spot.x - 14;
-    agent1.targetY = spot.y + 4;
+    // Position agents 3-4 tiles in front of the dart board
+    agent1.targetX = spot.x - 16;
+    agent1.targetY = spot.y;
     agent1.idleAction = 'darts';
     agent1.idleReturnTimer = 0;
-    agent2.targetX = spot.x + 14;
-    agent2.targetY = spot.y + 4;
+    agent2.targetX = spot.x + 16;
+    agent2.targetY = spot.y;
     agent2.idleAction = 'darts';
     agent2.idleReturnTimer = 0;
     agent1.addIntent('Playing darts with ' + agent2.name);
