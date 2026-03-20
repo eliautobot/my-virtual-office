@@ -4817,50 +4817,80 @@ function drawInteriorWallShadows() {
     });
 }
 
+function _drawSingleWall(wall, idx) {
+    var wallThick = 6;
+    var isSel = (editMode && selectedWallIdx === idx);
+    var mainColor = isSel ? '#ffd600' : _wallMainColor(wall);
+    if (wall.x1 === wall.x2) {
+        // Vertical wall
+        var px = wall.x1 * TILE - Math.floor(wallThick / 2);
+        var py = Math.min(wall.y1, wall.y2) * TILE;
+        var ph = Math.abs(wall.y2 - wall.y1) * TILE;
+        if (ph <= 0) return;
+        // Shadow (right side depth)
+        ctx.fillStyle = 'rgba(0,0,0,0.28)';
+        ctx.fillRect(px + wallThick, py + 2, 3, ph - 2);
+        // Main wall body
+        ctx.fillStyle = mainColor;
+        ctx.fillRect(px, py, wallThick, ph);
+        // Highlight (left edge)
+        ctx.fillStyle = isSel ? 'rgba(255,255,200,0.5)' : 'rgba(255,255,255,0.20)';
+        ctx.fillRect(px, py, 2, ph);
+        // Dark right edge (inner shadow)
+        ctx.fillStyle = 'rgba(0,0,0,0.18)';
+        ctx.fillRect(px + wallThick - 2, py, 2, ph);
+    } else {
+        // Horizontal wall with upward wall face
+        var px = Math.min(wall.x1, wall.x2) * TILE;
+        var py = wall.y1 * TILE - Math.floor(wallThick / 2);
+        var pw = Math.abs(wall.x2 - wall.x1) * TILE;
+        var faceH = 36;
+        if (pw <= 0) return;
+        // Main wall body / face
+        ctx.fillStyle = isSel ? '#f9a825' : mainColor;
+        ctx.fillRect(px + 1, py - faceH, pw - 2, faceH);
+        // Trim stripe
+        ctx.fillStyle = isSel ? '#fff3b0' : _wallTrimColor(wall);
+        ctx.fillRect(px + 1, py - 8, pw - 2, 4);
+        // Trim 2 lower band + map-plane edge merged together
+        ctx.fillStyle = isSel ? '#ffca28' : _wallTrim2Color(wall);
+        ctx.fillRect(px, py - 4, pw, wallThick + 4);
+        // Top cap highlight
+        ctx.fillStyle = isSel ? 'rgba(255,245,180,0.45)' : 'rgba(255,255,255,0.12)';
+        ctx.fillRect(px + 2, py - faceH, pw - 4, 2);
+    }
+}
+
+function _verticalWallGoesDown(wall, interior) {
+    // A vertical wall "goes down" if its top end connects to a horizontal wall
+    // and the wall extends downward from that junction
+    if (wall.x1 !== wall.x2) return false; // not vertical
+    var topY = Math.min(wall.y1, wall.y2);
+    var wallX = wall.x1;
+    for (var i = 0; i < interior.length; i++) {
+        var hw = interior[i];
+        if (hw.x1 === hw.x2) continue; // skip other verticals
+        var hLeft = Math.min(hw.x1, hw.x2);
+        var hRight = Math.max(hw.x1, hw.x2);
+        if (wallX >= hLeft && wallX <= hRight && Math.abs(topY - hw.y1) <= 1) {
+            return true; // top of vertical wall meets a horizontal wall — it goes down
+        }
+    }
+    return false;
+}
+
 function drawInteriorWalls() {
     var interior = officeConfig.walls && officeConfig.walls.interior;
     if (!interior || interior.length === 0) return;
-    var wallThick = 6;
+    // Pass 1: vertical walls going UP + all horizontal walls
     interior.forEach(function(wall, idx) {
-        var isSel = (editMode && selectedWallIdx === idx);
-        var mainColor = isSel ? '#ffd600' : _wallMainColor(wall);
-        if (wall.x1 === wall.x2) {
-            // Vertical wall
-            var px = wall.x1 * TILE - Math.floor(wallThick / 2);
-            var py = Math.min(wall.y1, wall.y2) * TILE;
-            var ph = Math.abs(wall.y2 - wall.y1) * TILE;
-            if (ph <= 0) return;
-            // Shadow (right side depth)
-            ctx.fillStyle = 'rgba(0,0,0,0.28)';
-            ctx.fillRect(px + wallThick, py + 2, 3, ph - 2);
-            // Main wall body
-            ctx.fillStyle = mainColor;
-            ctx.fillRect(px, py, wallThick, ph);
-            // Highlight (left edge)
-            ctx.fillStyle = isSel ? 'rgba(255,255,200,0.5)' : 'rgba(255,255,255,0.20)';
-            ctx.fillRect(px, py, 2, ph);
-            // Dark right edge (inner shadow)
-            ctx.fillStyle = 'rgba(0,0,0,0.18)';
-            ctx.fillRect(px + wallThick - 2, py, 2, ph);
-        } else {
-            // Horizontal wall with upward wall face (like top wall height)
-            var px = Math.min(wall.x1, wall.x2) * TILE;
-            var py = wall.y1 * TILE - Math.floor(wallThick / 2);
-            var pw = Math.abs(wall.x2 - wall.x1) * TILE;
-            var faceH = 36;
-            if (pw <= 0) return;
-            // Main wall body / face
-            ctx.fillStyle = isSel ? '#f9a825' : mainColor;
-            ctx.fillRect(px + 1, py - faceH, pw - 2, faceH);
-            // Trim stripe
-            ctx.fillStyle = isSel ? '#fff3b0' : _wallTrimColor(wall);
-            ctx.fillRect(px + 1, py - 8, pw - 2, 4);
-            // Trim 2 lower band + map-plane edge merged together
-            ctx.fillStyle = isSel ? '#ffca28' : _wallTrim2Color(wall);
-            ctx.fillRect(px, py - 4, pw, wallThick + 4);
-            // Top cap highlight
-            ctx.fillStyle = isSel ? 'rgba(255,245,180,0.45)' : 'rgba(255,255,255,0.12)';
-            ctx.fillRect(px + 2, py - faceH, pw - 4, 2);
+        if (wall.x1 === wall.x2 && _verticalWallGoesDown(wall, interior)) return; // skip downward verticals
+        _drawSingleWall(wall, idx);
+    });
+    // Pass 2: vertical walls going DOWN (drawn on top of horizontal walls)
+    interior.forEach(function(wall, idx) {
+        if (wall.x1 === wall.x2 && _verticalWallGoesDown(wall, interior)) {
+            _drawSingleWall(wall, idx);
         }
     });
 }
@@ -7930,6 +7960,13 @@ function loop() {
     _behindWalls.forEach(function(a) { a.draw(); });
     _perfEnd('agents');
     _perfStart('wallOccluders'); drawInteriorWallOccluders(); _perfEnd('wallOccluders');
+    // Redraw vertical walls going down (they must stay on top of horizontal wall occluders)
+    var _intWalls = (officeConfig.walls && officeConfig.walls.interior) || [];
+    _intWalls.forEach(function(wall, idx) {
+        if (wall.x1 === wall.x2 && _verticalWallGoesDown(wall, _intWalls)) {
+            _drawSingleWall(wall, idx);
+        }
+    });
     // Redraw furniture near horizontal walls (occluders may have covered them)
     officeConfig.furniture.forEach(function(item) {
         if (item.type === 'branchSign' || item.type === 'textLabel') return;
