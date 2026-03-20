@@ -44,7 +44,7 @@ A paid license unlocks:
 ### Docker Compose (recommended)
 
 ```bash
-git clone https://github.com/REPO_URL_HERE/virtual-office.git
+git clone https://github.com/eliautobot/virtual-office.git
 cd virtual-office
 docker compose up -d
 ```
