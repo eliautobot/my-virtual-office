@@ -4771,15 +4771,15 @@ function drawEnvironment() {
     // --- INTERIOR WALL SHADOWS (above floor, below everything else) ---
     drawInteriorWallShadows();
 
+    // --- INTERIOR WALLS (drawn before furniture so items aren't hidden behind walls) ---
+    drawInteriorWalls();
+
     // --- FURNITURE (data-driven from officeConfig) — non-label items first ---
     officeConfig.furniture.forEach(function(item) {
         if (item.type !== 'branchSign' && item.type !== 'textLabel') drawFurnitureItem(item);
     });
 
-    // --- INTERIOR WALLS ---
-    drawInteriorWalls();
-
-    // --- LABELS (drawn on top of walls) ---
+    // --- LABELS (drawn on top of everything) ---
     officeConfig.furniture.forEach(function(item) {
         if (item.type === 'branchSign' || item.type === 'textLabel') drawFurnitureItem(item);
     });
