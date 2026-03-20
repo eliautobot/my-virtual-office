@@ -698,10 +698,16 @@
                 // Watermark banner
                 var banner = document.createElement('div');
                 banner.id = 'demo-banner';
-                banner.style.cssText = 'position:fixed;bottom:12px;left:12px;z-index:99999;background:rgba(255,107,0,0.92);color:#000;padding:8px 16px;font-size:11px;font-weight:bold;cursor:pointer;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.4);backdrop-filter:blur(4px);max-width:320px;line-height:1.4;';
-                banner.innerHTML = '⚡ DEMO — 3 agents max. <u>Get a license key</u>';
+                banner.style.cssText = 'width:100%;background:linear-gradient(90deg,#ff6b00,#ff9500);color:#000;text-align:center;padding:5px 12px;font-size:11px;font-weight:bold;cursor:pointer;flex-shrink:0;';
+                banner.innerHTML = '⚡ DEMO — 3 agents max, some features locked. <u>Get a license key</u>';
                 banner.onclick = function() { window.open('/setup','_blank'); };
-                document.querySelector('.game-wrapper')?.appendChild(banner) || document.body.appendChild(banner);
+                // Insert above the toolbar
+                var toolbar = document.querySelector('.toolbar');
+                if (toolbar && toolbar.parentElement) {
+                    toolbar.parentElement.insertBefore(banner, toolbar);
+                } else {
+                    document.body.prepend(banner);
+                }
                 // Watermark on canvas
                 if (typeof window._drawDemoWatermark === 'undefined') {
                     window._drawDemoWatermark = function(ctx, w, h) {

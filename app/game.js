@@ -39,6 +39,11 @@ function _loadServerConfig() {
         if (data.furniture) officeConfig.furniture = data.furniture;
         if (data.agents) officeConfig.agents = data.agents;
         if (data.branches) officeConfig.branches = data.branches;
+        // Migration: add default interactive windows if none exist
+        if (officeConfig.furniture && !officeConfig.furniture.some(function(f){ return f.type === 'interactiveWindow'; })) {
+            officeConfig.furniture.push({ id: 'iw-hq-left',  type: 'interactiveWindow', x: 388, y: 10, weather: true, showSun: true });
+            officeConfig.furniture.push({ id: 'iw-hq-right', type: 'interactiveWindow', x: 576, y: 10, weather: true, showSun: false });
+        }
         // Trigger proper canvas resize (reads wrapper dimensions, applies DPR)
         if (typeof resizeCanvas === 'function') resizeCanvas();
         if (typeof _refreshWallSectionButtons === 'function') _refreshWallSectionButtons();
@@ -278,6 +283,7 @@ const FURNITURE_BOUNDS = {
     'microwave':     { w: 30,  h: 24,  ox: 0,    oy: 0    },
     'toaster':       { w: 18,  h: 16,  ox: 0,    oy: 0    },
     'window':        { w: 44,  h: 52,  ox: 0.09, oy: 0.08 },  // frame extends beyond glass
+    'interactiveWindow': { w: 44, h: 52, ox: 0.09, oy: 0.08 },  // interactive window with weather/sun settings
     'clock':         { w: 28,  h: 28,  ox: 0.5,  oy: 0.5  },  // (x,y)=center, radius 14
     'bookshelf':     { w: 50,  h: 80,  ox: 0,    oy: 0    },  // top-left, tall bookshelf
     'couch':         { w: 140, h: 100, ox: 0,    oy: 0    },  // L-shape inside
@@ -323,6 +329,7 @@ const CATALOG_CATEGORIES = [
     { name: 'Structure', items: [
         { type: 'meetingTable', label: 'Meeting Table', icon: '📊' },
         { type: 'window',       label: 'Window',        icon: '🪟' },
+        { type: 'interactiveWindow', label: 'Weather Window', icon: '🌤️' },
         { type: 'clock',        label: 'Clock',         icon: '🕐' },
         { type: 'floorLamp',    label: 'Floor Lamp',    icon: '💡' },
     ]},
@@ -407,6 +414,7 @@ var weatherData = { condition: 'clear', code: 113, temp: 0, wind: 0, humidity: 0
 var lastWeatherPoll = 0;
 var weatherParticles = []; // rain/snow particles
 var _weatherTick = 0;
+var _tod = { sky: "#2196f3", upper: "#42a5f5", top: "#bbdefb", cloud: "rgba(255,255,255,0.5)", glow: "rgba(255,255,240,0.08)", stars: false }; // global time-of-day sky
 var _lastLightningFlash = 0;
 var _nextLightningAt = 0;
 var _lightningBoltX = 0;
@@ -1379,8 +1387,9 @@ function clampCamera() {
     const totalZoom = base * camera.zoom;
     const halfViewW = displayW / totalZoom / 2;
     const halfViewH = displayH / totalZoom / 2;
-    const maxX = Math.max(0, W / 2 - halfViewW);
-    const maxY = Math.max(0, H / 2 - halfViewH);
+    const CAM_EDGE_BUFFER = TILE * 3; // allow panning 3 tiles past canvas edge
+    const maxX = Math.max(0, W / 2 - halfViewW + CAM_EDGE_BUFFER);
+    const maxY = Math.max(0, H / 2 - halfViewH + CAM_EDGE_BUFFER);
     camera.x = Math.max(-maxX, Math.min(maxX, camera.x));
     camera.y = Math.max(-maxY, Math.min(maxY, camera.y));
 }
@@ -1744,6 +1753,9 @@ function getDefaultFurniture() {
         var frac = (_si + 1) / (defaultBranches.length + 1);
         f.push({ id: 'sign-' + defaultBranches[_si].id.toLowerCase(), type: 'branchSign', x: topWall.x + topWall.w * frac, y: 42, branchId: defaultBranches[_si].id });
     }
+    // HQ interactive windows (north wall, flanking center)
+    f.push({ id: "iw-hq-left",  type: "interactiveWindow", x: 388, y: 10, weather: true, showSun: true });
+    f.push({ id: "iw-hq-right", type: "interactiveWindow", x: 576, y: 10, weather: true, showSun: false });
     return f;
 }
 
@@ -4673,7 +4685,7 @@ function drawEnvironment() {
         if (t < sun.dusk)                return { sky: '#4a148c', upper: '#6a1b9a', top: '#e65100', cloud: 'rgba(180,160,255,0.2)', glow: 'rgba(150,80,180,0.15)', stars: false };
         return                                  { sky: '#0d1b2a', upper: '#162032', top: '#0a1020', cloud: 'rgba(200,200,255,0.12)', glow: 'rgba(40,60,120,0.15)', stars: true };
     }
-    var _tod = getTimeOfDaySky();
+    _tod = getTimeOfDaySky();
 
     function drawWindow(wx, wy, ww, wh) {
         // Outer sill / ledge
@@ -4751,13 +4763,10 @@ function drawEnvironment() {
         ctx.closePath();
         ctx.fill();
     }
-    drawWindow(388, 10, 36, 44);   // HQ left window
-    drawWindow(576, 10, 36, 44);   // HQ right window
 
     // --- SECTION LABELS ---
     ctx.font = 'bold 10px "Press Start 2P", monospace'; ctx.textAlign = 'center';
     // Branch signs are now rendered as branchSign furniture items
-    drawClock(500, 22);
 
     // --- INTERIOR WALL SHADOWS (above floor, below everything else) ---
     drawInteriorWallShadows();
@@ -5235,6 +5244,7 @@ function drawFurnitureItem(item) {
         case 'microwave':     drawMicrowaveStandalone(item.x, item.y);   break;
         case 'toaster':       drawToasterStandalone(item.x, item.y);     break;
         case 'window':        drawWindow(item.x, item.y);        break;
+        case 'interactiveWindow': drawInteractiveWindow(item); break;
         case 'clock':         drawClock(item.x, item.y);         break;
         case 'bookshelf':     drawBookshelf(item.x, item.y);     break;
         case 'couch':         drawCouch(item.x, item.y);         break;
@@ -5443,6 +5453,162 @@ function _showTextLabelEditor(item) {
         item.text = document.getElementById('tl-text').value || 'Label';
         item.labelColor = document.getElementById('tl-color').value;
         item.fontSize = parseInt(document.getElementById('tl-size').value) || 12;
+        saveOfficeConfig();
+        popup.remove();
+    };
+
+    var escHandler = function(e) { if (e.key === 'Escape') { popup.remove(); document.removeEventListener('keydown', escHandler); } };
+    document.addEventListener('keydown', escHandler);
+}
+
+
+// --- INTERACTIVE WINDOW (weather + sun configurable) ---
+function drawInteractiveWindow(item) {
+    var wx = item.x, wy = item.y, ww = 36, wh = 44;
+    var showWeather = item.weather !== false; // default true
+    var showSun = item.showSun || false;      // default false
+
+    // Outer sill / ledge
+    ctx.fillStyle = '#999'; ctx.fillRect(wx - 4, wy - 4, ww + 8, wh + 8);
+    // Inner frame
+    ctx.fillStyle = '#e0e0e0'; ctx.fillRect(wx - 2, wy - 2, ww + 4, wh + 4);
+    // Glass — sky (time-of-day)
+    ctx.fillStyle = _tod.sky; ctx.fillRect(wx, wy, ww, wh);
+    ctx.fillStyle = _tod.upper; ctx.fillRect(wx, wy, ww, Math.floor(wh * 0.35));
+    ctx.fillStyle = _tod.top; ctx.fillRect(wx, wy, ww, Math.floor(wh * 0.15));
+    // Stars at night (twinkling)
+    if (_tod.stars) {
+        var _stars = [
+            { x: 6, y: 8, s: 2 }, { x: 18, y: 4, s: 1 }, { x: 12, y: 18, s: 2 },
+            { x: 28, y: 12, s: 1 }, { x: 24, y: 6, s: 1.5 }, { x: 8, y: 28, s: 1 },
+            { x: 32, y: 20, s: 1 }, { x: 15, y: 32, s: 1.5 }, { x: 3, y: 22, s: 1 }
+        ];
+        for (var si = 0; si < _stars.length; si++) {
+            var star = _stars[si];
+            var twinkle = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(_weatherTick * 0.04 + si * 2.3));
+            ctx.fillStyle = 'rgba(255,255,255,' + twinkle.toFixed(2) + ')';
+            ctx.fillRect(wx + star.x, wy + star.y, star.s, star.s);
+        }
+        // Moon — only on windows with showSun enabled
+        if (showSun) {
+            ctx.fillStyle = 'rgba(255,255,220,0.8)';
+            ctx.fillRect(wx + ww - 12, wy + 4, 6, 6);
+            ctx.fillStyle = _tod.sky;
+            ctx.fillRect(wx + ww - 10, wy + 3, 5, 5);
+        }
+    }
+    // Clouds (skip at night)
+    if (!_tod.stars) {
+        ctx.fillStyle = _tod.cloud;
+        ctx.fillRect(wx + 4, wy + 6, 8, 3);
+        ctx.fillRect(wx + 6, wy + 4, 4, 2);
+        ctx.fillRect(wx + ww - 14, wy + 10, 6, 2);
+        ctx.fillRect(wx + ww - 12, wy + 8, 4, 2);
+    }
+    // Weather effects on glass
+    if (showWeather) {
+        drawWeatherOnWindow(wx, wy, ww, wh, showSun);
+    }
+    // Cross panes
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(wx + Math.floor(ww / 2) - 1, wy, 3, wh);
+    ctx.fillRect(wx, wy + Math.floor(wh / 2) - 1, ww, 3);
+    ctx.fillStyle = '#ccc';
+    ctx.fillRect(wx + Math.floor(ww/2) - 2, wy + Math.floor(wh/2) - 2, 5, 5);
+    // Glass shine
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(wx + 2, wy + 2, 5, 3);
+    ctx.fillRect(wx + 3, wy + 4, 3, 2);
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    var px = wx + Math.floor(ww/2) + 4, py = wy + Math.floor(wh/2) + 4;
+    ctx.fillRect(px, py, 4, 3);
+    // Bottom sill
+    ctx.fillStyle = '#bbb';
+    ctx.fillRect(wx - 3, wy + wh + 2, ww + 6, 3);
+    ctx.fillStyle = '#ddd';
+    ctx.fillRect(wx - 2, wy + wh + 2, ww + 4, 1);
+    // Light projection on floor
+    var lightTop = wy + wh + 5;
+    var lightBottom = wy + wh + 120;
+    var lightGrad = ctx.createLinearGradient(0, lightTop, 0, lightBottom);
+    lightGrad.addColorStop(0, _tod.glow);
+    lightGrad.addColorStop(0.4, _tod.glow.replace(/[\d.]+\)$/, function(m) { return (parseFloat(m) * 0.5).toFixed(2) + ')'; }));
+    lightGrad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = lightGrad;
+    ctx.beginPath();
+    ctx.moveTo(wx - 2, lightTop);
+    ctx.lineTo(wx + ww + 2, lightTop);
+    ctx.lineTo(wx + ww + 40, lightBottom);
+    ctx.lineTo(wx - 40, lightBottom);
+    ctx.closePath();
+    ctx.fill();
+    // Edit mode indicator — small weather/sun badges
+    if (editMode) {
+        ctx.fillStyle = 'rgba(0,0,0,0.5)';
+        ctx.fillRect(wx - 4, wy + wh + 6, ww + 8, 10);
+        ctx.font = '7px Arial';
+        ctx.fillStyle = '#fff';
+        ctx.textAlign = 'center';
+        var badges = [];
+        if (showWeather) badges.push('🌧️');
+        if (showSun) badges.push('☀️');
+        if (badges.length === 0) badges.push('—');
+        ctx.fillText(badges.join(' '), wx + ww/2, wy + wh + 13);
+    }
+}
+
+function _showInteractiveWindowEditor(item) {
+    var existing = document.getElementById('iw-editor');
+    if (existing) existing.remove();
+
+    var popup = document.createElement('div');
+    popup.id = 'iw-editor';
+    popup.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:99999;background:#1a1a2e;border:2px solid #ffd700;border-radius:12px;padding:20px;min-width:300px;box-shadow:0 8px 40px rgba(0,0,0,0.6);font-family:Arial,sans-serif;color:#e0e0e0;';
+
+    var weatherChecked = item.weather !== false ? 'checked' : '';
+    var sunChecked = item.showSun ? 'checked' : '';
+
+    popup.innerHTML = '<div style="font-size:14px;font-weight:bold;color:#ffd700;margin-bottom:14px;">🌤️ Weather Window Settings</div>' +
+        '<div style="margin-bottom:16px;">' +
+        '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px;background:#0d0d1e;border:1px solid #2a2a4e;border-radius:8px;margin-bottom:8px;">' +
+        '<input id="iw-weather" type="checkbox" ' + weatherChecked + ' style="width:18px;height:18px;cursor:pointer;">' +
+        '<div><div style="font-size:13px;color:#e0e0e0;">🌧️ Show Weather Effects</div>' +
+        '<div style="font-size:11px;color:#888;margin-top:2px;">Rain, snow, clouds, fog animations on the glass</div></div>' +
+        '</label>' +
+        '<label style="display:flex;align-items:center;gap:10px;cursor:pointer;padding:8px;background:#0d0d1e;border:1px solid #2a2a4e;border-radius:8px;">' +
+        '<input id="iw-sun" type="checkbox" ' + sunChecked + ' style="width:18px;height:18px;cursor:pointer;">' +
+        '<div><div style="font-size:13px;color:#e0e0e0;">☀️ Show Sun / Moon</div>' +
+        '<div style="font-size:11px;color:#888;margin-top:2px;">Animated sun during the day, crescent moon at night</div></div>' +
+        '</label>' +
+        '</div>' +
+        '<div id="iw-preview" style="padding:12px;background:#0d0d1e;border:1px solid #2a2a4e;border-radius:8px;margin-bottom:14px;text-align:center;font-size:12px;color:#aaa;"></div>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+        '<button id="iw-cancel" style="padding:6px 16px;background:#333;border:1px solid #555;border-radius:6px;color:#ccc;cursor:pointer;font-size:12px;">Cancel</button>' +
+        '<button id="iw-save" style="padding:6px 16px;background:#ffd700;border:none;border-radius:6px;color:#000;font-weight:bold;cursor:pointer;font-size:12px;">Save</button>' +
+        '</div>';
+
+    document.body.appendChild(popup);
+
+    function updatePreview() {
+        var pv = document.getElementById('iw-preview');
+        var w = document.getElementById('iw-weather').checked;
+        var s = document.getElementById('iw-sun').checked;
+        var desc = [];
+        if (w) desc.push('🌧️ Weather effects ON');
+        else desc.push('Weather effects OFF');
+        if (s) desc.push('☀️ Sun/Moon ON');
+        else desc.push('Sun/Moon OFF');
+        pv.innerHTML = desc.join(' &nbsp;|&nbsp; ');
+    }
+
+    document.getElementById('iw-weather').addEventListener('change', updatePreview);
+    document.getElementById('iw-sun').addEventListener('change', updatePreview);
+    updatePreview();
+
+    document.getElementById('iw-cancel').onclick = function() { popup.remove(); };
+    document.getElementById('iw-save').onclick = function() {
+        item.weather = document.getElementById('iw-weather').checked;
+        item.showSun = document.getElementById('iw-sun').checked;
         saveOfficeConfig();
         popup.remove();
     };
@@ -8369,10 +8535,10 @@ function _snapToCounterTop(type, worldX, worldY) {
 // Check if a position is valid for a given furniture type
 function _isValidPlacement(type, x, y) {
     // Windows can only be placed on the top wall
-    if (type === 'window') {
+    if (type === 'window' || type === 'interactiveWindow') {
         var wallH = officeConfig.walls.height || 70;
         if (y > wallH - 10 || y < 0) return false;
-        if (x < 0 || x + (FURNITURE_BOUNDS['window'] || {w:40}).w > W) return false;
+        if (x < 0 || x + (FURNITURE_BOUNDS[type] || {w:40}).w > W) return false;
     }
     // Kitchen appliances can only be placed on kitchen counters
     if (COUNTER_ONLY_ITEMS.indexOf(type) >= 0) {
@@ -8698,6 +8864,24 @@ function _updateFloatingToolbarPosition() {
         _floatingToolbar.appendChild(labelEditBtn);
     }
     labelEditBtn.style.display = (selItem.type === 'textLabel') ? '' : 'none';
+
+    // Show settings button for interactiveWindow items
+    var iwSettingsBtn = document.getElementById('ftb-iw-settings-btn');
+    if (!iwSettingsBtn) {
+        iwSettingsBtn = document.createElement('button');
+        iwSettingsBtn.id = 'ftb-iw-settings-btn';
+        iwSettingsBtn.textContent = '⚙️';
+        iwSettingsBtn.title = 'Window settings (weather/sun)';
+        iwSettingsBtn.style.cssText = 'padding:4px 6px;background:#2a2a4e;border:1px solid #3a3a5e;border-radius:4px;cursor:pointer;font-size:12px;';
+        iwSettingsBtn.onclick = function() {
+            if (!selectedItemId) return;
+            var item = officeConfig.furniture.find(function(f){ return f.id === selectedItemId; });
+            if (!item || item.type !== 'interactiveWindow') return;
+            _showInteractiveWindowEditor(item);
+        };
+        _floatingToolbar.appendChild(iwSettingsBtn);
+    }
+    iwSettingsBtn.style.display = (selItem.type === 'interactiveWindow') ? '' : 'none';
 }
 
 // --- EDIT MODE MOUSE TRACKING ---
@@ -8756,7 +8940,7 @@ canvas.addEventListener('mousemove', function(e) {
                         snapX >= 0 && snapY >= 0 &&
                         snapX + dBounds.w <= W &&
                         snapY + (dBounds.h || TILE) <= H) {
-                        if (dragItem.type === 'window') {
+                        if (dragItem.type === 'window' || dragItem.type === 'interactiveWindow') {
                             var wallH = officeConfig.walls.height || 70;
                             if (snapY <= wallH - 10) {
                                 dragItem.x = snapX;
@@ -8786,6 +8970,10 @@ canvas.addEventListener('mousemove', function(e) {
 
 // --- EDIT MODE TOGGLE (called from toolbar button) ---
 function toggleEditMode() {
+    if (window._voLicense && window._voLicense.demo) {
+        alert('Edit Office is a premium feature. Get a license key at myvirtualoffice.ai to unlock.');
+        return;
+    }
     editMode = !editMode;
     var btn = document.getElementById('btn-edit-office');
     var saveBtn = document.getElementById('btn-save-edits');
@@ -8850,6 +9038,18 @@ function _mmLoadCurrentSettings() {
         if (nameInput) nameInput.value = (cfg.office || {}).name || '';
         if (weatherInput) weatherInput.value = (cfg.weather || {}).location || '';
         if (pathInput) pathInput.value = (cfg.openclaw || {}).homePath || '';
+        // PC Metrics
+        var pcmEnabled = ((cfg.features || {}).pcMetrics) || false;
+        var pcmUrl = ((cfg.pcMetrics || {}).url) || "";
+        var pcmCb = document.getElementById("mm-pcmetrics-enable");
+        var pcmUrlEl = document.getElementById("mm-pcmetrics-url");
+        var pcmFields = document.getElementById("mm-pcmetrics-fields");
+        if (pcmCb) pcmCb.checked = pcmEnabled;
+        if (pcmUrlEl) pcmUrlEl.value = pcmUrl;
+        if (pcmFields) pcmFields.style.display = pcmEnabled ? "block" : "none";
+        // API Usage
+        var apiUsageCb = document.getElementById("mm-apiusage-enable");
+        if (apiUsageCb) apiUsageCb.checked = (cfg.features || {}).apiUsage !== false;
     }).catch(function(){});
     // Load display prefs from localStorage
     var prefs = {};
@@ -8860,6 +9060,43 @@ function _mmLoadCurrentSettings() {
     if (cb1) cb1.checked = prefs.showBubbles !== false;
     if (cb2) cb2.checked = prefs.showWeather !== false;
     if (cb3) cb3.checked = prefs.showNames !== false;
+}
+
+
+// PC Metrics toggle in settings
+(function() {
+    var _pcmCb = document.getElementById('mm-pcmetrics-enable');
+    if (_pcmCb) _pcmCb.addEventListener('change', function() {
+        var f = document.getElementById('mm-pcmetrics-fields');
+        if (f) f.style.display = this.checked ? 'block' : 'none';
+    });
+})();
+
+function mmTestPcMetrics() {
+    var url = document.getElementById('mm-pcmetrics-url').value.trim();
+    var statusEl = document.getElementById('mm-pcmetrics-status');
+    if (!url) { statusEl.innerHTML = '<div class="mm-status err">Enter a Metrics Server URL</div>'; return; }
+    statusEl.innerHTML = '<div class="mm-status info">Saving and testing...</div>';
+    fetch('/setup/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ features: { pcMetrics: true }, pcMetrics: { url: url } })
+    }).then(function() { return fetch('/pc-metrics'); })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.error) {
+            statusEl.innerHTML = '<div class="mm-status err">❌ ' + data.error + '</div>';
+        } else if (data.cpu) {
+            var info = 'CPU: ' + (data.cpu.percent||0).toFixed(0) + '% (' + (data.cpu.threads||'?') + ' threads)';
+            info += ' · RAM: ' + (data.memory.percent||0).toFixed(0) + '%';
+            if (data.gpus && data.gpus.length > 0) info += ' · GPU: ' + data.gpus[0].name;
+            statusEl.innerHTML = '<div class="mm-status ok">✅ Connected!<br>' + info + '</div>';
+        } else {
+            statusEl.innerHTML = '<div class="mm-status err">❌ Unexpected response format</div>';
+        }
+    }).catch(function(e) {
+        statusEl.innerHTML = '<div class="mm-status err">❌ ' + e.message + '</div>';
+    });
 }
 
 function mmTestConnection() {
@@ -8899,6 +9136,20 @@ function mmSaveSettings() {
     if (ocPath) config.openclaw.homePath = ocPath;
     config.office = { name: officeName || 'Virtual Office' };
     config.weather = { location: weather || null };
+    // PC Metrics
+    var _pcmCb = document.getElementById("mm-pcmetrics-enable");
+    var _pcmUrl = document.getElementById("mm-pcmetrics-url");
+    if (_pcmCb) {
+        if (!config.features) config.features = {};
+        config.features.pcMetrics = _pcmCb.checked;
+        config.pcMetrics = { url: (_pcmUrl ? _pcmUrl.value.trim() : "") || null };
+    // API Usage
+    var _apiCb = document.getElementById("mm-apiusage-enable");
+    if (_apiCb) {
+        if (!config.features) config.features = {};
+        config.features.apiUsage = _apiCb.checked;
+    }
+    }
 
     fetch('/setup/save', {
         method: 'POST',
@@ -8987,6 +9238,10 @@ function mmFullReset() {
 }
 
 function toggleAgentPanel() {
+    if (window._voLicense && window._voLicense.demo) {
+        alert('Agent Editor is a premium feature. Get a license key at myvirtualoffice.ai to unlock.');
+        return;
+    }
     if (!_agentPanel) _buildAgentPanel();
     if (_agentPanel.classList.contains('visible')) {
         _agentPanel.classList.remove('visible');
