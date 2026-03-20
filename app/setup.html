@@ -59,7 +59,7 @@
 </head>
 <body>
     <div class="setup-card">
-        <h1>⚡ VIRTUAL OFFICE</h1>
+        <h1>⚡ MY VIRTUAL OFFICE</h1>
         <p class="subtitle">First-time setup</p>
 
         <div class="progress-dots">
@@ -69,6 +69,7 @@
             <div class="dot" id="dot-3"></div>
             <div class="dot" id="dot-4"></div>
             <div class="dot" id="dot-5"></div>
+            <div class="dot" id="dot-6"></div>
         </div>
 
         <!-- Step 0: License Key -->
@@ -85,7 +86,7 @@
                 <b>Demo mode:</b> Free to use with up to 3 agents. Browser panel, SMS panel, model manager, cron manager, and whisper are locked.<br><br>
                 <b>Full license ($35.99):</b> Unlimited agents, all features unlocked.<br>
                 <b>Early bird ($9.99):</b> Same as full — limited-time launch price.<br><br>
-                Get your key at <a href="https://yourvirtualoffice.com" style="color:#90caf9;" target="_blank">yourvirtualoffice.com</a>
+                Get your key at <a href="https://myvirtualoffice.ai" style="color:#90caf9;" target="_blank">myvirtualoffice.ai</a>
             </div>
             <div class="btn-row">
                 <span></span>
@@ -249,9 +250,51 @@
             </div>
         </div>
 
-        <!-- Step 5: Done -->
+        
+        <!-- Step 5: PC Performance -->
         <div class="step" id="step-5">
-            <div class="step-title">5. YOU'RE ALL SET!</div>
+            <div class="step-title">5. PC PERFORMANCE (OPTIONAL)</div>
+            <div class="step-desc">Monitor a PC's CPU, RAM, and GPU stats live in your office dashboard. You can skip this and set it up later.</div>
+
+            <label style="display:flex;align-items:center;gap:8px;margin-top:12px;">
+                <input type="checkbox" id="s-pcmetrics-enable"> Enable PC Performance Monitor
+            </label>
+
+            <div id="pcmetrics-fields" style="display:none;margin-top:16px;">
+                <label>Metrics Server URL</label>
+                <input type="text" id="s-pcmetrics-url" placeholder="http://192.168.1.100:8099">
+                <div style="font-size:12px;color:#666;margin:4px 0 12px;">The address where the PC Metrics Server is running. This can be a local or remote machine.</div>
+
+                <button onclick="testPcMetrics()" style="margin:8px 0 16px;padding:8px 16px;font-size:9px;">🔍 TEST CONNECTION</button>
+                <div id="pcmetrics-test-status"></div>
+            </div>
+
+            <div class="note">
+                <b>What is this?</b> The PC Performance panel shows live CPU, RAM, and GPU usage graphs in your office sidebar.<br><br>
+                <b>How it works:</b><br>
+                You run a small Python script on the PC you want to monitor. It exposes metrics on a port, and the Virtual Office reads from it.<br><br>
+                <b>Quick setup (on the target PC):</b><br>
+                <code style="color:#90caf9;font-size:13px;">pip install psutil</code><br>
+                <code style="color:#90caf9;font-size:13px;">python pc-metrics-server.py 8099</code><br><br>
+                The script is included with the Virtual Office at <code style="color:#90caf9;">/app/pc-metrics-server.py</code>. Copy it to any PC you want to monitor.<br><br>
+                <b>For GPU monitoring</b> (NVIDIA only):<br>
+                <code style="color:#90caf9;font-size:13px;">pip install pynvml</code><br><br>
+                <b>URL examples:</b><br>
+                • Same machine: <code style="color:#90caf9;">http://127.0.0.1:8099</code><br>
+                • LAN PC: <code style="color:#90caf9;">http://192.168.1.100:8099</code><br>
+                • Tailscale: <code style="color:#90caf9;">http://100.x.x.x:8099</code><br><br>
+                <b>Not sure?</b> Skip this step — you can enable it later from ☰ Menu → Settings.
+            </div>
+
+            <div class="btn-row">
+                <button class="secondary" onclick="nextStep(4)">← BACK</button>
+                <button onclick="nextStep(6)">NEXT →</button>
+            </div>
+        </div>
+
+        <!-- Step 6: Done -->
+        <div class="step" id="step-6">
+            <div class="step-title">6. YOU'RE ALL SET!</div>
             <div class="step-desc">Your Virtual Office is ready. You can always change settings later from the ☰ Menu button in the toolbar.</div>
             <div class="note">
                 <b>What you can do:</b>
@@ -261,10 +304,12 @@
                 <br>• <b>☰ Menu</b> — Change office name, connection settings, export/import config
                 <br><br>
                 <b>Want accurate presence?</b> Install the optional Virtual Office skill so agents report their working/idle status. See <code>/setup</code> docs for details.
+                <br><br>
+                <b>☁️ API Usage:</b> The sidebar automatically detects your AI providers (Anthropic, OpenAI, Google, etc.) from your OpenClaw config and shows live usage, quotas, and API key health. No extra setup needed — just connect to OpenClaw above.
             </div>
             <div id="save-status"></div>
             <div class="btn-row">
-                <button class="secondary" onclick="nextStep(4)">← BACK</button>
+                <button class="secondary" onclick="nextStep(5)">← BACK</button>
                 <button onclick="finishSetup()">🚀 LAUNCH OFFICE</button>
             </div>
         </div>
@@ -276,7 +321,7 @@
         function nextStep(n) {
             document.getElementById('step-' + currentStep).classList.remove('active');
             document.getElementById('step-' + n).classList.add('active');
-            for (var i = 0; i <= 5; i++) {
+            for (var i = 0; i <= 6; i++) {
                 var dot = document.getElementById('dot-' + i);
                 dot.className = 'dot';
                 if (i < n) dot.className = 'dot done';
@@ -330,6 +375,42 @@
             document.getElementById('sms-fields').style.display = this.checked ? 'block' : 'none';
             if (this.checked) populateSmsAgentSelect();
         });
+
+        // PC Metrics enable toggle
+        document.getElementById('s-pcmetrics-enable').addEventListener('change', function() {
+            document.getElementById('pcmetrics-fields').style.display = this.checked ? 'block' : 'none';
+        });
+
+        function testPcMetrics() {
+            var url = document.getElementById('s-pcmetrics-url').value.trim();
+            var statusEl = document.getElementById('pcmetrics-test-status');
+            if (!url) {
+                statusEl.innerHTML = '<div class="status-box error">Please enter a Metrics Server URL</div>';
+                return;
+            }
+            statusEl.innerHTML = '<div class="status-box info">Saving and testing...</div>';
+            // Save config so server can proxy
+            fetch('/setup/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ features: { pcMetrics: true }, pcMetrics: { url: url } })
+            }).then(function() {
+                return fetch('/pc-metrics');
+            }).then(function(r) { return r.json(); }).then(function(data) {
+                if (data.error) {
+                    statusEl.innerHTML = '<div class="status-box error">❌ ' + data.error + '<br>Make sure pc-metrics-server.py is running on the target PC.</div>';
+                } else if (data.cpu) {
+                    var info = 'CPU: ' + (data.cpu.percent || 0).toFixed(0) + '% (' + (data.cpu.threads || '?') + ' threads)';
+                    info += ' · RAM: ' + (data.memory.percent || 0).toFixed(0) + '%';
+                    if (data.gpus && data.gpus.length > 0) info += ' · GPU: ' + data.gpus[0].name;
+                    statusEl.innerHTML = '<div class="status-box success">✅ Connected!<br>' + info + '</div>';
+                } else {
+                    statusEl.innerHTML = '<div class="status-box error">❌ Unexpected response. Make sure pc-metrics-server.py is running.</div>';
+                }
+            }).catch(function(e) {
+                statusEl.innerHTML = '<div class="status-box error">Error: ' + e.message + '</div>';
+            });
+        }
 
         function populateSmsAgentSelect() {
             var sel = document.getElementById('s-sms-agent');
@@ -440,12 +521,15 @@
         function finishSetup() {
             var browserEnabled = document.getElementById('s-browser-enable').checked;
             var smsEnabled = document.getElementById('s-sms-enable').checked;
+            var pcMetricsEnabled = document.getElementById('s-pcmetrics-enable').checked;
             var config = {
                 office: { name: document.getElementById('s-name').value || 'Virtual Office' },
                 weather: { location: document.getElementById('s-weather').value || null },
                 features: {
                     browserPanel: browserEnabled,
-                    smsPanel: smsEnabled
+                    smsPanel: smsEnabled,
+                    pcMetrics: pcMetricsEnabled,
+                    apiUsage: true
                 },
                 browser: browserEnabled ? {
                     cdpUrl: document.getElementById('s-cdp-url').value.trim() || null,
@@ -456,6 +540,9 @@
                     twilioAccountSid: document.getElementById('s-twilio-sid').value.trim() || null,
                     twilioAuthToken: document.getElementById('s-twilio-token').value.trim() || null,
                     fromNumber: document.getElementById('s-twilio-from').value.trim() || null
+                } : {},
+                pcMetrics: pcMetricsEnabled ? {
+                    url: document.getElementById('s-pcmetrics-url').value.trim() || null
                 } : {},
                 _setupComplete: true
             };
