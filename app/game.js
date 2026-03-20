@@ -286,7 +286,7 @@ const FURNITURE_BOUNDS = {
     'interactiveWindow': { w: 44, h: 52, ox: 0.09, oy: 0.08 },  // interactive window with weather/sun settings
     'clock':         { w: 28,  h: 28,  ox: 0.5,  oy: 0.5  },  // (x,y)=center, radius 14
     'bookshelf':     { w: 50,  h: 80,  ox: 0,    oy: 0    },  // top-left, tall bookshelf
-    'couch':         { w: 140, h: 100, ox: 0,    oy: 0    },  // L-shape inside
+    'couch':         { w: 100, h: 80,  ox: 0,    oy: 0    },  // L-shaped couch
     'endTable':      { w: 20,  h: 20,  ox: 0,    oy: 0    },  // small decor table with plant
     'coffeeTable':   { w: 64,  h: 34,  ox: 0,    oy: 0    },
     'tv':            { w: 50,  h: 34,  ox: 0,    oy: 0    },
@@ -1656,11 +1656,11 @@ const FURNITURE_ACTIONS = {
     },
     'couch': {
         spots: [
-            { dx: 18, dy: 25, faceDir:  1, action: 'sit' },
-            { dx: 18, dy: 48, faceDir:  1, action: 'sit' },
-            { dx: 48, dy: 80, faceDir: -1, action: 'sit' },
-            { dx: 78, dy: 80, faceDir: -1, action: 'sit' },
-            { dx: 108, dy: 80, faceDir: -1, action: 'sit' },
+            { dx: 12, dy: 15, faceDir:  1, action: 'sit' },
+            { dx: 12, dy: 38, faceDir:  1, action: 'sit' },
+            { dx: 36, dy: 65, faceDir: -1, action: 'sit' },
+            { dx: 60, dy: 65, faceDir: -1, action: 'sit' },
+            { dx: 84, dy: 65, faceDir: -1, action: 'sit' },
         ]
     },
     'coffeeTable':    { spots: [],                               action: null     },
@@ -5296,7 +5296,7 @@ function drawFurnitureItem(item) {
         case 'interactiveWindow': drawInteractiveWindow(item); break;
         case 'clock':         drawClock(item.x, item.y);         break;
         case 'bookshelf':     drawBookshelf(item.x, item.y);     break;
-        case 'couch':         drawCouch(item.x, item.y);         break;
+        case 'couch':         drawCouch(item);                    break;
         case 'coffeeTable':   drawCoffeeTable(item.x, item.y);   break;
         case 'endTable':      drawEndTable(item.x, item.y);      break;
         case 'tv':            drawTV(item.x, item.y);            break;
@@ -5312,21 +5312,87 @@ function drawFurnitureItem(item) {
 }
 
 // --- INDIVIDUAL LOUNGE PIECES (split from drawLoungeArea) ---
-function drawCouch(x, y) {
-    _setFurnitureLampShadow(x + 40, y + 40);
-    // L-shaped couch
-    ctx.fillStyle = 'rgba(0,0,0,0.12)';
-    ctx.fillRect(x + 2, y + 4, 32, 102);
-    ctx.fillRect(x + 2, y + 74, 142, 32);
-    ctx.fillStyle = '#3f51b5';
-    ctx.fillRect(x, y, 30, 100); ctx.fillRect(x, y + 70, 140, 30);
-    // Cushions
-    ctx.fillStyle = '#5c6bc0';
-    ctx.fillRect(x + 3, y + 5, 24, 22); ctx.fillRect(x + 3, y + 32, 24, 22);
-    ctx.fillRect(x + 35, y + 73, 26, 24); ctx.fillRect(x + 65, y + 73, 26, 24); ctx.fillRect(x + 95, y + 73, 26, 24);
-    // Pillows
-    ctx.fillStyle = '#ffb74d'; ctx.fillRect(x + 5, y + 8, 10, 8);
-    ctx.fillStyle = '#ef5350'; ctx.fillRect(x + 100, y + 76, 10, 8);
+function drawCouch(item) {
+    var x, y;
+    if (typeof item === 'object' && item.x !== undefined) { x = item.x; y = item.y; }
+    else { x = arguments[0]; y = arguments[1]; item = {}; }
+    var baseColor = item.couchColor || '#3f51b5';
+    var cushionColor = _lightenColor(baseColor, 25);
+    var armColor = _darkenColor(baseColor, 20);
+    var shadowColor = _darkenColor(baseColor, 40);
+
+    _setFurnitureLampShadow(x + 30, y + 30);
+
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.10)';
+    ctx.fillRect(x + 3, y + 3, 26, 79);
+    ctx.fillRect(x + 3, y + 53, 99, 29);
+
+    // Couch frame — L shape (vertical arm + horizontal seat)
+    ctx.fillStyle = armColor;
+    ctx.fillRect(x, y, 24, 76);
+    ctx.fillRect(x, y + 52, 96, 28);
+
+    // Couch body
+    ctx.fillStyle = baseColor;
+    ctx.fillRect(x + 2, y + 2, 20, 72);
+    ctx.fillRect(x + 2, y + 54, 92, 24);
+
+    // Cushions on vertical section (2 seats)
+    ctx.fillStyle = cushionColor;
+    ctx.fillRect(x + 4, y + 5, 16, 20);
+    ctx.fillRect(x + 4, y + 28, 16, 20);
+
+    // Cushions on horizontal section (3 seats)
+    ctx.fillRect(x + 26, y + 56, 20, 18);
+    ctx.fillRect(x + 50, y + 56, 20, 18);
+    ctx.fillRect(x + 74, y + 56, 18, 18);
+
+    // Cushion stitch lines
+    ctx.fillStyle = _darkenColor(cushionColor, 10);
+    ctx.fillRect(x + 11, y + 5, 1, 20);
+    ctx.fillRect(x + 11, y + 28, 1, 20);
+    ctx.fillRect(x + 35, y + 64, 1, 8);
+    ctx.fillRect(x + 59, y + 64, 1, 8);
+    ctx.fillRect(x + 82, y + 64, 1, 8);
+
+    // Armrest edges
+    ctx.fillStyle = shadowColor;
+    ctx.fillRect(x, y, 24, 3);
+    ctx.fillRect(x, y, 3, 76);
+    ctx.fillRect(x, y + 73, 24, 3);
+    ctx.fillRect(x + 93, y + 52, 3, 28);
+
+    // Back rest shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.08)';
+    ctx.fillRect(x + 20, y + 2, 2, 50);
+    ctx.fillRect(x + 2, y + 52, 92, 2);
+
+    // Highlight on cushion tops
+    ctx.fillStyle = 'rgba(255,255,255,0.12)';
+    ctx.fillRect(x + 5, y + 6, 14, 3);
+    ctx.fillRect(x + 5, y + 29, 14, 3);
+    ctx.fillRect(x + 27, y + 57, 18, 3);
+    ctx.fillRect(x + 51, y + 57, 18, 3);
+    ctx.fillRect(x + 75, y + 57, 16, 3);
+
+    // Throw pillows
+    ctx.fillStyle = '#ffb74d';
+    ctx.fillRect(x + 6, y + 7, 8, 7);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(x + 7, y + 8, 6, 2);
+    ctx.fillStyle = '#ef5350';
+    ctx.fillRect(x + 76, y + 59, 8, 7);
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.fillRect(x + 77, y + 60, 6, 2);
+
+    // Feet
+    ctx.fillStyle = '#333';
+    ctx.fillRect(x + 1, y + 74, 3, 3);
+    ctx.fillRect(x + 21, y + 74, 3, 3);
+    ctx.fillRect(x + 1, y + 1, 3, 3);
+    ctx.fillRect(x + 93, y + 77, 3, 3);
+
     _clearFurnitureShadow();
 }
 
