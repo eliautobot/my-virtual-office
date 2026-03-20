@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Virtual Office</title>
+    <link rel="icon" type="image/png" href="favicon.png">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a1a2e">
+    <link rel="stylesheet" href="style.css?v=1773998000">
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="main-container">
+        <div class="left-column">
+            <div class="game-wrapper">
+                <canvas id="officeCanvas" width="1000" height="700"></canvas>
+                <!-- Main Settings Menu Panel -->
+                <div id="main-menu-panel" class="main-menu-panel">
+                    <div class="main-menu-header">
+                        <span>☰ SETTINGS</span>
+                        <button class="catalog-close-btn" onclick="toggleMainMenu()">✕</button>
+                    </div>
+                    <div class="main-menu-body">
+                        <!-- Connection -->
+                        <div class="mm-section">
+                            <div class="mm-section-title">🔌 OpenClaw Connection</div>
+                            <label class="mm-label">OpenClaw Path <span style="color:#666;font-size:9px">(server-side)</span></label>
+                            <input type="text" id="mm-oc-path" class="mm-input" placeholder="/home/user/.openclaw">
+                            <div style="font-size:9px;color:#666;margin:4px 0 8px;">Path to your OpenClaw installation on the server. Agents are discovered from this directory.</div>
+                            <label class="mm-label">Gateway URL <span style="color:#666;font-size:9px">(server-side)</span></label>
+                            <input type="text" id="mm-gateway-url" class="mm-input" placeholder="ws://127.0.0.1:18789">
+                            <div style="font-size:9px;color:#666;margin:4px 0 8px;">How the server reaches OpenClaw. Default works for local installs.</div>
+                            <button class="mm-btn mm-btn-primary" onclick="mmTestConnection()">🔍 Test Connection</button>
+                            <div id="mm-conn-status"></div>
+                        </div>
+                        <!-- Office Settings -->
+                        <div class="mm-section">
+                            <div class="mm-section-title">🏢 Office</div>
+                            <label class="mm-label">Office Name</label>
+                            <input type="text" id="mm-office-name" class="mm-input" placeholder="My Virtual Office">
+                            <label class="mm-label">Weather Location</label>
+                            <input type="text" id="mm-weather" class="mm-input" placeholder="e.g. New+York,NY">
+                        </div>
+                        <!-- Display -->
+                        <div class="mm-section">
+                            <div class="mm-section-title">🎨 Display</div>
+                            <label class="mm-label">
+                                <input type="checkbox" id="mm-show-bubbles" checked> Show chat bubbles
+                            </label>
+                            <label class="mm-label">
+                                <input type="checkbox" id="mm-show-weather" checked> Show weather effects
+                            </label>
+                            <label class="mm-label">
+                                <input type="checkbox" id="mm-show-names" checked> Show agent names
+                            </label>
+                        </div>
+                        <!-- Actions -->
+                        <div class="mm-section">
+                            <div class="mm-section-title">⚡ Actions</div>
+                            <button class="mm-btn" onclick="mmExportConfig()">📤 Export Office Config</button>
+                            <button class="mm-btn" onclick="mmImportConfig()">📥 Import Office Config</button>
+                            <input type="file" id="mm-import-file" accept=".json" style="display:none">
+                            <button class="mm-btn mm-btn-danger" onclick="mmFullReset()">🗑️ Full Reset</button>
+                            <div class="mm-warning">Resets all furniture, agents, and branches to defaults.</div>
+                        </div>
+                        <!-- Help -->
+                        <div class="mm-section">
+                            <div class="mm-section-title">❓ Help</div>
+                            <div class="mm-help">
+                                <p><b>Navigation:</b> Scroll to zoom, click+drag to pan</p>
+                                <p><b>Edit Office:</b> Place/move furniture, walls, floor colors</p>
+                                <p><b>Agents:</b> Customize appearance, assign desks, set branches</p>
+                                <p><b>Multi-select:</b> Double-click empty space → drag to select area. Or Ctrl+click items one by one.</p>
+                                <p><b>Move group:</b> After multi-selecting, click+hold any selected item to drag them all together.</p>
+                                <p><b>Shortcuts:</b> Del = delete selected, Esc = cancel, click empty = deselect all</p>
+                            </div>
+                            <a href="/setup" class="mm-btn" style="text-align:center;display:block;text-decoration:none">🧙 Run Setup Wizard</a>
+                        </div>
+                        <!-- Save -->
+                        <button class="mm-btn mm-btn-primary mm-save-all" onclick="mmSaveSettings()">💾 Save Settings</button>
+                    </div>
+                </div>
+            </div>
+            <div class="toolbar">
+                <button id="btn-main-menu" title="Settings & Help" onclick="toggleMainMenu()">☰ Menu</button>
+                <button id="btn-edit-office" title="Edit office layout — resize canvas, place furniture" onclick="toggleEditMode()">✏️ Edit Office</button>
+                <button id="btn-save-edits" title="Save changes" onclick="saveEdits()" style="display:none;opacity:0.4" disabled>💾 Save</button>
+                <button id="btn-undo-edit" title="Undo last change" onclick="undoEdit()" style="display:none;opacity:0.4" disabled>↩️ Undo</button>
+                <button id="btn-agent-settings" title="Create and customize agents" onclick="toggleAgentPanel()">👤 Agents</button>
+                <div class="toolbar-divider"></div>
+                <button id="btn-expand-all" title="Expand all bubbles" onclick="expandAllBubbles()">💬 Expand All</button>
+                <button id="btn-minimize-all" title="Minimize all bubbles" onclick="minimizeAllBubbles()">💬 Minimize All</button>
+                <a href="/models.html" style="text-decoration:none"><button title="Model & Provider Settings">⚙️ Models</button></a>
+                <a href="/cron.html" style="text-decoration:none"><button title="Cron Job Manager">⏰ Cron</button></a>
+                <button title="Reset canvas zoom" onclick="resetCamera()">🔍 Reset</button>
+                <button id="sms-toggle" title="SMS/Phone Panel">📞 SMS</button>
+                <button id="browser-toggle" title="Agent Browser (Neko)" class="browser-toggle-btn">🌐 Browser</button>
+            </div>
+        </div>
+        <div class="sidebar-edge" id="sidebar-edge" onclick="toggleSidebar()" title="Toggle sidebar">
+            <span id="sidebar-edge-arrow">◀</span>
+        </div>
+        <div class="sidebar" id="sidebar">
+            <div class="brand">
+                <h2 id="brand-title">VIRTUAL</h2>
+                <h3>⚡ OFFICE ⚡</h3>
+            </div>
+            <script>
+            // Load office name from config
+            fetch('/vo-config').then(r=>r.json()).then(d=>{
+                var el=document.getElementById('brand-title');
+                if(el&&d.office&&d.office.name) el.textContent=d.office.name.toUpperCase();
+                document.title=d.office.name||'Virtual Office';
+            }).catch(()=>{});
+            </script>
+
+            <div class="pc-monitor" id="pc-monitor">
+                <h4 class="pc-monitor-toggle" onclick="togglePcMonitor()">
+                    <span id="pc-toggle-arrow">▼</span> 🖥️ PC PERFORMANCE
+                    <span id="pc-status-dot" class="pc-dot offline" title="Offline"></span>
+                </h4>
+                <div id="pc-monitor-body" class="pc-monitor-body" style="display:block">
+                    <div class="pc-metric-row">
+                        <div class="pc-metric">
+                            <div class="pc-metric-header">
+                                <span class="pc-label">CPU</span>
+                                <span class="pc-value" id="pc-cpu-val">--%</span>
+                            </div>
+                            <div class="pc-bar-track"><div class="pc-bar cpu" id="pc-cpu-bar" style="width:0%"></div></div>
+                            <canvas id="pc-cpu-graph" class="pc-graph" width="260" height="40"></canvas>
+                            <div class="pc-detail" id="pc-cpu-detail">-- cores / -- MHz</div>
+                        </div>
+                    </div>
+                    <div class="pc-metric-row">
+                        <div class="pc-metric">
+                            <div class="pc-metric-header">
+                                <span class="pc-label">RAM</span>
+                                <span class="pc-value" id="pc-ram-val">--%</span>
+                            </div>
+                            <div class="pc-bar-track"><div class="pc-bar ram" id="pc-ram-bar" style="width:0%"></div></div>
+                            <canvas id="pc-ram-graph" class="pc-graph" width="260" height="40"></canvas>
+                            <div class="pc-detail" id="pc-ram-detail">-- / -- GB</div>
+                        </div>
+                    </div>
+                    <div id="pc-gpus-container"></div>
+                </div>
+            </div>
+
+            <div class="api-usage-monitor" id="api-usage-monitor">
+                <h4 class="api-usage-toggle" onclick="toggleApiUsage()">
+                    <span id="api-toggle-arrow">▼</span> ☁️ API USAGE
+                    <span id="api-status-dot" class="pc-dot offline" title="Loading..."></span>
+                </h4>
+                <div id="api-usage-body" class="api-usage-body" style="display:block">
+                    <div id="api-usage-cards"></div>
+                </div>
+            </div>
+
+            <div class="branch-manager-panel collapsible">
+                <h4 onclick="toggleSection(this)"><span class="section-arrow">▼</span> 🏢 BRANCHES</h4>
+                <div class="section-body" style="display:block">
+                    <div class="branch-manager-actions">
+                        <button onclick="branchCreatePrompt()">➕ Add Branch</button>
+                    </div>
+                    <div id="branch-sections-container"></div>
+                </div>
+            </div>
+
+            <div class="status-panel">
+                <p>🟢 Working: <span id="count-working">0</span></p>
+                <p>🟡 Idle: <span id="count-idle">0</span></p>
+                <p>🔵 Meeting: <span id="count-meeting">0</span></p>
+                <p>☕ Break: <span id="count-break">0</span></p>
+            </div>
+
+            <div class="activity-feed collapsible">
+                <h4 onclick="toggleSection(this)"><span class="section-arrow">▼</span> > ACTIVITY LOG</h4>
+                <div class="section-body">
+                    <ul id="log-list">
+                        <li>System initialized...</li>
+                    </ul>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <div id="agentModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span id="modal-emoji" class="modal-emoji"></span>
+                <h2 id="modal-name">Agent Name</h2>
+                <span class="close-btn" onclick="closeModal()">&times;</span>
+            </div>
+            <p id="modal-role" class="modal-role"></p>
+            <div class="modal-grid">
+                <div class="modal-section">
+                    <h3>STATUS</h3>
+                    <p id="modal-status">Online</p>
+                    <p>Task: <span id="modal-task">—</span></p>
+                </div>
+                <div class="modal-section">
+                    <h3>BRANCH</h3>
+                    <p id="modal-branch">—</p>
+                    <p>Updated: <span id="modal-updated">—</span></p>
+                </div>
+                <div class="modal-section full-width">
+                    <h3>⚡ MODEL</h3>
+                    <div class="model-settings-row">
+                        <select id="modal-model-select"></select>
+                        <button id="modal-model-apply" onclick="applyModelChange()">Apply</button>
+                    </div>
+                    <p id="modal-model-status" class="model-status-msg"></p>
+                </div>
+                <div class="modal-section full-width io-section">
+                    <h3>📥 LAST REQUEST</h3>
+                    <div id="modal-input" class="scroll-box io-box"></div>
+                </div>
+                <div class="modal-section full-width io-section">
+                    <h3>📤 RESPONSE</h3>
+                    <div id="modal-output" class="scroll-box io-box"></div>
+                </div>
+            <div class="modal-section full-width bio-section">
+                <h3 class="bio-toggle" onclick="toggleBio('agents')">▶ AGENTS.md</h3>
+                <div id="modal-bio-agents" class="bio-content" style="display:none">
+                    <textarea id="bio-edit-agents" class="bio-editor" spellcheck="false" readonly></textarea>
+                    <div class="bio-btn-row">
+                        <button class="bio-edit-btn" onclick="enableBioEdit('agents')">✏️ Edit</button>
+                        <button class="bio-save-btn" onclick="saveBioFile('AGENTS.md', 'bio-edit-agents')" style="display:none" id="bio-save-agents">💾 Save</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-section full-width bio-section">
+                <h3 class="bio-toggle" onclick="toggleBio('soul')">▶ SOUL.md</h3>
+                <div id="modal-bio-soul" class="bio-content" style="display:none">
+                    <textarea id="bio-edit-soul" class="bio-editor" spellcheck="false" readonly></textarea>
+                    <div class="bio-btn-row">
+                        <button class="bio-edit-btn" onclick="enableBioEdit('soul')">✏️ Edit</button>
+                        <button class="bio-save-btn" onclick="saveBioFile('SOUL.md', 'bio-edit-soul')" style="display:none" id="bio-save-soul">💾 Save</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-section full-width bio-section">
+                <h3 class="bio-toggle" onclick="toggleBio('memory')">▶ MEMORY.md</h3>
+                <div id="modal-bio-memory" class="bio-content" style="display:none">
+                    <textarea id="bio-edit-memory" class="bio-editor" spellcheck="false" readonly></textarea>
+                    <div class="bio-btn-row">
+                        <button class="bio-edit-btn" onclick="enableBioEdit('memory')">✏️ Edit</button>
+                        <button class="bio-save-btn" onclick="saveBioFile('MEMORY.md', 'bio-edit-memory')" style="display:none" id="bio-save-memory">💾 Save</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-section full-width bio-section">
+                <h3 class="bio-toggle" onclick="toggleBio('tools')">▶ TOOLS.md</h3>
+                <div id="modal-bio-tools" class="bio-content" style="display:none">
+                    <textarea id="bio-edit-tools" class="bio-editor" spellcheck="false" readonly></textarea>
+                    <div class="bio-btn-row">
+                        <button class="bio-edit-btn" onclick="enableBioEdit('tools')">✏️ Edit</button>
+                        <button class="bio-save-btn" onclick="saveBioFile('TOOLS.md', 'bio-edit-tools')" style="display:none" id="bio-save-tools">💾 Save</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-section full-width bio-section">
+                <h3 class="bio-toggle" onclick="toggleBio('identity')">▶ IDENTITY.md</h3>
+                <div id="modal-bio-identity" class="bio-content" style="display:none">
+                    <textarea id="bio-edit-identity" class="bio-editor" spellcheck="false" readonly></textarea>
+                    <div class="bio-btn-row">
+                        <button class="bio-edit-btn" onclick="enableBioEdit('identity')">✏️ Edit</button>
+                        <button class="bio-save-btn" onclick="saveBioFile('IDENTITY.md', 'bio-edit-identity')" style="display:none" id="bio-save-identity">💾 Save</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-section full-width bio-section">
+                <h3 class="bio-toggle" onclick="toggleBio('daily')">▶ DAILY NOTES</h3>
+                <div id="modal-bio-daily" class="bio-content" style="display:none">
+                    <textarea id="bio-edit-daily" class="bio-editor" spellcheck="false" readonly></textarea>
+                    <span style="color:#666;font-size:10px;">Daily notes are read-only</span>
+                </div>
+            </div>
+                <div class="modal-section full-width">
+                    <h3>INTENT HISTORY</h3>
+                    <div id="modal-plan" class="scroll-box"></div>
+                </div>
+                <div class="modal-section full-width">
+                    <h3>SYSTEM LOGS</h3>
+                    <div id="modal-logs" class="scroll-box"></div>
+                </div>
+            </div>
+            <div class="modal-controls">
+                <button onclick="overrideAgent('working')">🖥️ Work</button>
+                <button onclick="overrideAgent('meeting')">📊 Meet</button>
+                <button onclick="overrideAgent('break')">💧 Break</button>
+                <button onclick="overrideAgent('lounge')">🛋️ Lounge</button>
+                <span class="modal-controls-sep">|</span>
+                <button id="btn-trigger-thought">💭 Think</button>
+                <button id="btn-trigger-speech">💬 Say</button>
+                <button id="btn-clear-bubbles">🧹 Clear</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SMS Panel -->
+    <div id="sms-panel" class="sms-panel">
+        <div class="sms-header">
+            <span>📞 SMS</span>
+            <span id="sms-count" class="sms-count">0</span>
+            <div class="sms-mode-toggle">
+                <span id="sms-mode-label" class="sms-mode-label">Agent</span>
+                <label class="sms-switch">
+                    <input type="checkbox" id="sms-mode-check">
+                    <span class="sms-slider"></span>
+                </label>
+            </div>
+            <button id="sms-close" class="sms-close">&times;</button>
+        </div>
+        <div id="sms-messages" class="sms-messages"></div>
+        <div class="sms-input-row">
+            <select id="sms-recipient" class="sms-recipient">
+                <option value="">Select contact...</option>
+            </select>
+            <input type="text" id="sms-phone-manual" class="sms-phone-manual" placeholder="+1XXXXXXXXXX" style="display:none">
+            <button id="sms-toggle-manual" class="sms-toggle-manual" title="Type number manually">✏️</button>
+        </div>
+        <div class="sms-input-row">
+            <textarea id="sms-input" class="sms-input" placeholder="Type a message as agent..." rows="2"></textarea>
+            <button id="sms-send" class="sms-send-btn">▶</button>
+        </div>
+    </div>
+
+    <!-- Chat Panel -->
+    <button id="chat-toggle" class="chat-toggle-btn">💬</button>
+    <div id="chat-panel" class="chat-panel">
+        <div id="chat-resize-handle" class="chat-resize-handle"></div>
+        <div class="chat-header">
+            <select id="chat-agent-select" class="chat-agent-select" title="Switch agent">
+                <option value="main" data-emoji="🤖" data-name="Main Agent" selected>🤖 Main Agent</option>
+            </select>
+            <span id="chat-status" class="chat-status">Offline</span>
+            <span style="flex:1"></span>
+            <div class="chat-header-btns">
+                <button id="chat-new-session" class="chat-new-session" title="New Session">🔄</button>
+                <button id="chat-move" class="chat-move-btn" title="Move/snap chat window">⇱</button>
+                <button id="chat-close" class="chat-close">&times;</button>
+            </div>
+        </div>
+        <div id="chat-model-bar" class="chat-model-bar">
+            <span id="chat-model-name">—</span>
+            <span id="chat-context-info">— / —</span>
+        </div>
+        <div id="chat-messages" class="chat-messages"></div>
+        <div id="chat-attachments-preview" class="chat-attachments-preview"></div>
+        <div class="chat-input-row">
+            <button id="chat-attach" class="chat-attach-btn" title="Attach file">📎</button>
+            <input type="file" id="chat-file-input" multiple accept="image/*,.pdf,.txt,.csv,.json,.md,.py,.js" style="display:none">
+            <textarea id="chat-input" class="chat-input" placeholder="Type a message..." rows="1"></textarea>
+            <button id="chat-mic" class="chat-mic-btn" title="Voice input (Whisper)">🎙️</button>
+            <button id="chat-stop" class="chat-stop-btn" title="Stop current model response">⏹</button>
+            <button id="chat-send" class="chat-send-btn">▶</button>
+        </div>
+    </div>
+
+    <!-- Browser Panel (Floating Window) -->
+    <div id="browser-panel" class="browser-panel">
+        <!-- Resize handles: all edges and corners -->
+        <div class="browser-resize-handle top" data-resize="n"></div>
+        <div class="browser-resize-handle bottom" data-resize="s"></div>
+        <div class="browser-resize-handle left" data-resize="w"></div>
+        <div class="browser-resize-handle right" data-resize="e"></div>
+        <div class="browser-resize-handle top-left" data-resize="nw"></div>
+        <div class="browser-resize-handle top-right" data-resize="ne"></div>
+        <div class="browser-resize-handle bottom-left" data-resize="sw"></div>
+        <div class="browser-resize-handle bottom-right" data-resize="se"></div>
+        <div class="browser-header" id="browser-drag-handle">
+            <span class="browser-title">🌐 Agent Browser</span>
+            <span id="browser-status" class="browser-status">Idle</span>
+            <div class="browser-controls">
+                <button id="browser-take-control" class="browser-ctrl-btn" title="Take manual control">🖱️ Take Control</button>
+                <button id="browser-release" class="browser-ctrl-btn browser-release-btn" title="Release control back to AI" style="display:none">🤖 Release to AI</button>
+                <div class="browser-snap-group">
+                    <button class="browser-snap-btn" data-zone="4" title="Snap top-left">4</button>
+                    <button class="browser-snap-btn" data-zone="3" title="Snap top-right">3</button>
+                    <button class="browser-snap-btn" data-zone="2" title="Snap bottom-left">2</button>
+                    <button class="browser-snap-btn active" data-zone="1" title="Snap bottom-right (default)">1</button>
+                </div>
+                <button id="browser-minimize" class="browser-minimize" title="Minimize">—</button>
+                <button id="browser-maximize" class="browser-maximize" title="Maximize">□</button>
+                <button id="browser-close" class="browser-close">&times;</button>
+            </div>
+        </div>
+        <div id="browser-url-bar" class="browser-url-bar">
+            <span id="browser-current-url" class="browser-current-url">about:blank</span>
+        </div>
+        <div id="browser-frame-container" class="browser-frame-container">
+            <iframe id="browser-neko-frame" class="browser-neko-frame" allow="autoplay; clipboard-read; clipboard-write"></iframe>
+        </div>
+    </div>
+
+    <script>
+    function toggleSection(h4) {
+        const body = h4.nextElementSibling;
+        const arrow = h4.querySelector('.section-arrow');
+        const isHidden = body.style.display === 'none';
+        body.style.display = isHidden ? '' : 'none';
+        arrow.textContent = isHidden ? '▼' : '▶';
+    }
+    function toggleSidebar() {
+        const sidebar = document.getElementById('sidebar');
+        const arrow = document.getElementById('sidebar-edge-arrow');
+        sidebar.classList.toggle('collapsed');
+        arrow.textContent = sidebar.classList.contains('collapsed') ? '▶' : '◀';
+        // Single resize after transition finishes (300ms transition)
+        setTimeout(resizeCanvas, 320);
+    }
+    </script>
+    <script src="game.js?v=1774021994"></script>
+    <script src="browser-panel.js?v=1773812451"></script>
+    <script>
+    // Bio sections for agent modal
+    let _bioCache = {};
+    function toggleBio(section) {
+        const el = document.getElementById('modal-bio-' + section);
+        const h3 = el.previousElementSibling;
+        const isHidden = el.style.display === 'none';
+        if (isHidden) {
+            el.style.display = 'block';
+            h3.textContent = h3.textContent.replace('▶', '▼');
+            if (!el.dataset.loaded) {
+                el.dataset.loaded = '1';
+                loadBio();
+            }
+        } else {
+            el.style.display = 'none';
+            h3.textContent = h3.textContent.replace('▼', '▶');
+        }
+    }
+    async function loadBio() {
+        const agent = window.selectedAgent;
+        if (!agent) return;
+        const key = agent.statusKey;
+        // Set loading state in textareas
+        var fileMap = {
+            'AGENTS.md': 'bio-edit-agents',
+            'SOUL.md': 'bio-edit-soul',
+            'MEMORY.md': 'bio-edit-memory',
+            'TOOLS.md': 'bio-edit-tools',
+            'IDENTITY.md': 'bio-edit-identity'
+        };
+        Object.values(fileMap).forEach(id => {
+            var el = document.getElementById(id);
+            if (el) el.value = 'Loading...';
+        });
+        try {
+            const res = await fetch('/agent-bio/' + key);
+            const data = await res.json();
+            Object.entries(fileMap).forEach(([fname, id]) => {
+                var el = document.getElementById(id);
+                if (el) el.value = data[fname] || '';
+            });
+            var dailyEl = document.getElementById('bio-edit-daily');
+            if (dailyEl) dailyEl.value = data['daily'] || '(no daily notes)';
+        } catch(e) {
+            Object.values(fileMap).forEach(id => {
+                var el = document.getElementById(id);
+                if (el) el.value = '(error: ' + e.message + ')';
+            });
+        }
+    }
+
+    window.enableBioEdit = function(section) {
+        var ta = document.getElementById('bio-edit-' + section);
+        var saveBtn = document.getElementById('bio-save-' + section);
+        var bioContent = document.getElementById('modal-bio-' + section);
+        var editBtn = bioContent ? bioContent.querySelector('.bio-edit-btn') : null;
+        if (ta) {
+            ta.readOnly = false;
+            ta.removeAttribute('readonly');
+            ta.style.borderColor = '#ffd600';
+            ta.focus();
+        }
+        if (saveBtn) { saveBtn.style.display = 'inline-block'; saveBtn.disabled = false; }
+        if (editBtn) editBtn.style.display = 'none';
+    };
+
+    window.saveBioFile = async function(filename, textareaId) {
+        const agent = window.selectedAgent;
+        if (!agent) return;
+        const textarea = document.getElementById(textareaId);
+        if (!textarea) return;
+        var bioContent = textarea.closest('.bio-content');
+        const btn = bioContent ? bioContent.querySelector('.bio-save-btn') : null;
+        if (!btn) return;
+        const origText = btn.textContent;
+        btn.textContent = '⏳ Saving...';
+        btn.disabled = true;
+        try {
+            const res = await fetch('/agent-bio-save/' + agent.statusKey, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filename: filename, content: textarea.value })
+            });
+            const data = await res.json();
+            if (data.ok) {
+                btn.textContent = '✅ Saved!';
+                btn.classList.add('saved');
+                // Reset to read-only after save
+                textarea.readOnly = true;
+                textarea.setAttribute('readonly', '');
+                textarea.style.borderColor = '#30363d';
+                // Find edit button in the same bio-content parent
+                var bioContent = textarea.closest('.bio-content');
+                var editBtn = bioContent ? bioContent.querySelector('.bio-edit-btn') : null;
+                setTimeout(() => {
+                    btn.textContent = origText;
+                    btn.classList.remove('saved');
+                    btn.disabled = false;
+                    btn.style.display = 'none';
+                    if (editBtn) editBtn.style.display = 'inline-block';
+                }, 2000);
+            } else {
+                btn.textContent = '❌ Error: ' + (data.error || 'unknown');
+                setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 3000);
+            }
+        } catch(e) {
+            btn.textContent = '❌ ' + e.message;
+            setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 3000);
+        }
+    };
+
+    // Model settings for agent modal
+    let _modelsCache = null;
+    const _origOpenModal = window.openModal;
+    window.openModal = function(agent) {
+        _origOpenModal(agent);
+        // Reset bio sections (collapsed)
+        ['agents','soul','memory','tools','identity','daily'].forEach(s => {
+            const el = document.getElementById('modal-bio-' + s);
+            if (el) {
+                el.style.display = 'none';
+                el.dataset.loaded = '';
+                // Clear textareas
+                var ta = el.querySelector('.bio-editor');
+                if (ta) ta.value = '';
+            }
+        });
+        document.querySelectorAll('.bio-toggle').forEach(h => {
+            h.textContent = h.textContent.replace('▼', '▶');
+        });
+        loadModelSelect(agent);
+    };
+    async function loadModelSelect(agent) {
+        const sel = document.getElementById('modal-model-select');
+        const status = document.getElementById('modal-model-status');
+        sel.innerHTML = '<option>Loading...</option>';
+        status.textContent = '';
+        try {
+            if (!_modelsCache) {
+                const res = await fetch('/models');
+                _modelsCache = await res.json();
+            }
+            const data = _modelsCache;
+            const currentModel = (data.agentModels || {})[agent.statusKey] || data.defaultModel || '';
+            sel.innerHTML = '';
+            const defOpt = document.createElement('option');
+            defOpt.value = '';
+            defOpt.textContent = '(default: ' + (data.defaultModel || '?') + ')';
+            sel.appendChild(defOpt);
+
+            // Group models by provider
+            const groups = {};
+            for (const m of (data.models || [])) {
+                const prov = m.provider || (m.id.includes('/') ? m.id.split('/')[0] : 'other');
+                if (!groups[prov]) groups[prov] = [];
+                groups[prov].push(m);
+            }
+
+            // Provider display order and labels
+            const provLabels = {
+                'anthropic': 'ANTHROPIC 🎫 OAuth',
+                'anthropic-token': 'ANTHROPIC 🎫 OAuth',
+                'anthropic-oauth': 'ANTHROPIC 🎫 OAuth',
+                'openai': 'OPENAI 🔑 API',
+                'openai-codex': 'OPENAI-CODEX 🎫 OAuth',
+                'openai-codex-oauth': 'OPENAI-CODEX 🎫 OAuth',
+                'ollama': 'OLLAMA (Local)',
+                'lmstudio': 'LM STUDIO (Local)',
+                'google': 'GOOGLE'
+            };
+
+            // If OAuth/token variant exists, hide API group to avoid duplicate lists
+            if (groups['anthropic-token']) delete groups['anthropic'];
+            if (groups['openai-codex-oauth']) delete groups['openai-codex'];
+
+            // Merge duplicate provider groups (token/oauth variants → base oauth name)
+            const provMerge = {
+                'anthropic-token': 'anthropic-oauth',
+                'openai-codex': 'openai-codex-oauth',
+            };
+            for (const [from, to] of Object.entries(provMerge)) {
+                if (groups[from] && groups[to]) {
+                    groups[to].push(...groups[from]);
+                    delete groups[from];
+                } else if (groups[from]) {
+                    groups[to] = groups[from];
+                    delete groups[from];
+                }
+            }
+
+            const provOrder = ['anthropic', 'anthropic-oauth', 'openai', 'openai-codex-oauth', 'ollama', 'lmstudio', 'google'];
+            const sortedProvs = [...new Set([...provOrder.filter(p => groups[p]), ...Object.keys(groups).filter(p => !provOrder.includes(p))])];
+
+            for (const prov of sortedProvs) {
+                const provModels = groups[prov] || [];
+                if (provModels.length === 0) continue;
+                const label = provLabels[prov] || prov.toUpperCase();
+                const grp = document.createElement('optgroup');
+                grp.label = label;
+                for (const m of provModels) {
+                    const opt = document.createElement('option');
+                    opt.value = m.id;
+                    opt.textContent = m.label || m.id;
+                    if (m.id === currentModel) opt.selected = true;
+                    grp.appendChild(opt);
+                }
+                sel.appendChild(grp);
+            }
+            if (currentModel) {
+                status.textContent = 'Current: ' + currentModel;
+            }
+        } catch(e) {
+            sel.innerHTML = '<option>Error loading models</option>';
+        }
+    }
+    async function applyModelChange() {
+        const sel = document.getElementById('modal-model-select');
+        const status = document.getElementById('modal-model-status');
+        const agent = window.selectedAgent;
+        if (!agent) return;
+        const model = sel.value;
+        status.textContent = 'Applying...';
+        try {
+            const res = await fetch('/set-model', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agent: agent.statusKey, model: model })
+            });
+            const data = await res.json();
+            if (data.ok) {
+                status.textContent = '✅ ' + (model || 'default');
+                _modelsCache = null; // invalidate
+            } else {
+                status.textContent = '❌ ' + (data.error || 'Failed');
+            }
+        } catch(e) {
+            status.textContent = '❌ ' + e.message;
+        }
+    }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="chat.js?v=1774018976"></script>
+    <script src="sms-panel.js?v=6"></script>
+    <script src="pc-monitor.js?v=4"></script>
+    <script src="api-usage.js?v=4"></script>
+    <script>
+    // License check — demo watermark + feature gates
+    (function() {
+        fetch('/api/license').then(function(r){return r.json();}).then(function(lic) {
+            window._voLicense = lic;
+            if (lic.demo) {
+                // Watermark banner
+                var banner = document.createElement('div');
+                banner.id = 'demo-banner';
+                banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:linear-gradient(90deg,#ff6b00,#ff9500);color:#000;text-align:center;padding:6px 12px;font-size:13px;font-weight:bold;cursor:pointer;';
+                banner.innerHTML = '⚡ DEMO MODE — 3 agents max, some features locked. <u>Get a license key</u> to unlock everything.';
+                banner.onclick = function() { window.open('/setup','_blank'); };
+                document.body.prepend(banner);
+                // Push everything down
+                document.body.style.paddingTop = '32px';
+                // Watermark on canvas
+                if (typeof window._drawDemoWatermark === 'undefined') {
+                    window._drawDemoWatermark = function(ctx, w, h) {
+                        ctx.save();
+                        ctx.globalAlpha = 0.07;
+                        ctx.font = 'bold 48px sans-serif';
+                        ctx.fillStyle = '#fff';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.translate(w/2, h/2);
+                        ctx.rotate(-0.3);
+                        ctx.fillText('DEMO', 0, 0);
+                        ctx.restore();
+                    };
+                }
+            }
+        }).catch(function(){});
+    })();
+    </script>
+</body>
+</html>

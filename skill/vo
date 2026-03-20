@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+"""Virtual Office CLI — wrapper around the Virtual Office Presence API.
+
+Usage:
+  vo status                         Show all agent presence
+  vo status <agent>                 Show one agent's presence
+  vo working <agent> "task"         Set agent to working
+  vo idle <agent>                   Set agent to idle
+  vo break <agent>                  Set agent to break
+  vo agents                         List discovered agents
+  vo branches                       List branches
+
+Environment:
+  VO_URL    Base URL of Virtual Office (default: http://localhost:8090)
+"""
+import json
+import os
+import sys
+import urllib.request
+import urllib.error
+
+BASE = os.environ.get("VO_URL", "http://localhost:8090")
+
+def _get(path):
+    try:
+        req = urllib.request.urlopen(f"{BASE}{path}", timeout=10)
+        return json.loads(req.read().decode())
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+def _post(path, data):
+    try:
+        body = json.dumps(data).encode()
+        req = urllib.request.Request(f"{BASE}{path}", data=body, headers={"Content-Type": "application/json"})
+        resp = urllib.request.urlopen(req, timeout=10)
+        return json.loads(resp.read().decode())
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
+def cmd_status(args):
+    if args:
+        data = _get(f"/api/presence/{args[0]}")
+        print(json.dumps(data, indent=2))
+    else:
+        data = _get("/api/presence")
+        print(f"{'Agent':<20} {'State':<10} {'Task'}")
+        print("-" * 60)
+        for k, v in sorted(data.items()):
+            if k.startswith("_"):
+                continue
+            print(f"{k:<20} {v.get('state','?'):<10} {v.get('task','')}")
+
+def cmd_set_state(state, args):
+    if not args:
+        print(f"Usage: vo {state} <agent> [task]")
+        sys.exit(1)
+    agent = args[0]
+    task = " ".join(args[1:]) if len(args) > 1 else ""
+    body = {"state": state}
+    if task:
+        body["task"] = task
+    result = _post(f"/api/presence/{agent}", body)
+    print(f"✅ {agent} → {state}" + (f" ({task})" if task else ""))
+
+def cmd_agents(args):
+    data = _get("/api/agents")
+    print(f"{'Emoji':<4} {'Name':<14} {'ID':<20} {'Model'}")
+    print("-" * 70)
+    for a in data.get("agents", []):
+        print(f"{a.get('emoji',''):<4} {a.get('name',''):<14} {a.get('id',''):<20} {a.get('model','')[:30]}")
+
+def cmd_branches(args):
+    # Branches are frontend-only for now, fetch from vo-config
+    data = _get("/vo-config")
+    print("Branches are managed in the Virtual Office UI.")
+    print("Open the office and use the sidebar branch manager.")
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(0)
+
+    cmd = sys.argv[1]
+    args = sys.argv[2:]
+
+    if cmd == "status":
+        cmd_status(args)
+    elif cmd == "working":
+        cmd_set_state("working", args)
+    elif cmd == "idle":
+        cmd_set_state("idle", args)
+    elif cmd == "break":
+        cmd_set_state("break", args)
+    elif cmd == "agents":
+        cmd_agents(args)
+    elif cmd == "branches":
+        cmd_branches(args)
+    elif cmd in ("-h", "--help", "help"):
+        print(__doc__)
+    else:
+        print(f"Unknown command: {cmd}")
+        print(__doc__)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

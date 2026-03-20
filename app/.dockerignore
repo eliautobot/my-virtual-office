@@ -1,0 +1,9 @@
+*.bak
+*.bak2
+*.bak3
+__pycache__/
+.git/
+.gitignore
+vo-config.eli.json
+*.pyc
+.DS_Store

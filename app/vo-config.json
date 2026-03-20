@@ -1,0 +1,43 @@
+{
+  "_comment": "Default Virtual Office config — customize during setup or via environment variables",
+  "office": {
+    "name": "Virtual Office",
+    "port": 8090,
+    "wsPort": 8091
+  },
+  "openclaw": {
+    "gatewayUrl": "ws://127.0.0.1:18789",
+    "gatewayHttp": "http://127.0.0.1:18789"
+  },
+  "presence": {
+    "statusDir": "/tmp/vo-data",
+    "inferenceEnabled": true,
+    "inferenceIdleTimeoutSec": 300
+  },
+  "weather": {
+    "location": null
+  },
+  "features": {
+    "pcMetrics": false,
+    "smsPanel": false,
+    "browserPanel": false,
+    "whisper": false,
+    "apiUsage": true
+  },
+  "pcMetrics": {
+    "url": null
+  },
+  "whisper": {
+    "url": "http://127.0.0.1:8087"
+  },
+  "browser": {
+    "cdpUrl": null,
+    "viewerUrl": null
+  },
+  "sms": {
+    "agentId": null,
+    "twilioAccountSid": null,
+    "twilioAuthToken": null,
+    "fromNumber": null
+  }
+}

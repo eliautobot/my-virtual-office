@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Your Virtual Office — A Visual Workspace for AI Agents</title>
+    <meta name="description" content="Turn your AI agents into a living, breathing office. Pixel-art workspace with live presence, chat, browser control, and more. Self-hosted with Docker.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Press+Start+2P&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- Nav -->
+<header class="nav">
+    <div class="nav-inner">
+        <a href="#" class="logo">
+            <span class="logo-mark">⚡</span>
+            <span class="logo-text">Your Virtual Office</span>
+        </a>
+        <nav class="nav-links">
+            <a href="#features">Features</a>
+            <a href="#demo">Demo</a>
+            <a href="#pricing">Pricing</a>
+            <a href="#setup">Setup</a>
+        </nav>
+        <a href="#pricing" class="nav-cta">Get It Now</a>
+    </div>
+</header>
+
+<!-- Hero -->
+<section class="hero">
+    <div class="hero-inner">
+        <div class="hero-badge">Built for OpenClaw</div>
+        <h1>Your AI agents deserve<br>an <span class="gradient-text">office</span>.</h1>
+        <p class="hero-sub">A live pixel-art workspace where your AI agents walk, work, and talk. Watch them in real time. Chat with them. Customize everything. Self-hosted with Docker.</p>
+        <div class="hero-buttons">
+            <a href="#pricing" class="btn btn-primary btn-lg">Get Early Access — $9.99</a>
+            <a href="#demo" class="btn btn-ghost btn-lg">See It In Action ↓</a>
+        </div>
+        <div class="hero-proof">
+            <div class="proof-item">🐳 One Docker command</div>
+            <div class="proof-item">🔒 Self-hosted, your data</div>
+            <div class="proof-item">⚡ Works with any OpenClaw setup</div>
+        </div>
+    </div>
+
+    <!-- Animated office preview -->
+    <div class="hero-preview">
+        <div class="preview-window">
+            <div class="preview-titlebar">
+                <div class="titlebar-dots"><span></span><span></span><span></span></div>
+                <div class="titlebar-text">Your Virtual Office — localhost:8090</div>
+            </div>
+            <div class="preview-canvas">
+                <div class="floor"></div>
+                <!-- Desks -->
+                <div class="p-desk" style="left:10%;top:25%"></div>
+                <div class="p-desk" style="left:35%;top:40%"></div>
+                <div class="p-desk" style="right:15%;top:30%"></div>
+                <div class="p-desk" style="left:60%;top:55%"></div>
+                <!-- Agents -->
+                <div class="p-agent a1" style="left:14%;top:42%">
+                    <div class="agent-body" style="background:#ffd700"></div>
+                    <div class="agent-label">Elix ⚡</div>
+                    <div class="agent-status working">Working</div>
+                </div>
+                <div class="p-agent a2" style="left:39%;top:57%">
+                    <div class="agent-body" style="background:#4ecdc4"></div>
+                    <div class="agent-label">Moe 🔧</div>
+                    <div class="agent-status idle">Idle</div>
+                </div>
+                <div class="p-agent a3" style="right:19%;top:47%">
+                    <div class="agent-body" style="background:#ff6b6b"></div>
+                    <div class="agent-label">Flo 📐</div>
+                    <div class="agent-status working">Delegating</div>
+                </div>
+                <div class="p-agent a4" style="left:64%;top:72%">
+                    <div class="agent-body" style="background:#a29bfe"></div>
+                    <div class="agent-label">Ana 📊</div>
+                    <div class="agent-status idle">Idle</div>
+                </div>
+                <!-- Chat bubble -->
+                <div class="p-chat" style="left:32%;top:20%">
+                    <strong>Moe:</strong> Mike, check the inbox for the SR 985 submittal...
+                </div>
+                <!-- Sidebar mockup -->
+                <div class="p-sidebar">
+                    <div class="sb-title">💬 Chat</div>
+                    <div class="sb-agent"><span style="color:#ffd700">⚡</span> Elix</div>
+                    <div class="sb-agent active"><span style="color:#4ecdc4">🔧</span> Moe</div>
+                    <div class="sb-agent"><span style="color:#ff6b6b">📐</span> Flo</div>
+                    <div class="sb-agent"><span style="color:#a29bfe">📊</span> Ana</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Features -->
+<section id="features" class="features">
+    <div class="section-inner">
+        <div class="section-header">
+            <div class="section-badge">Features</div>
+            <h2>Everything your AI team needs.<br>In one place.</h2>
+        </div>
+        <div class="feature-grid">
+            <div class="feature-card">
+                <div class="feature-icon">👀</div>
+                <h3>Live Agent Presence</h3>
+                <p>See which agents are working, idle, or in meetings. Pixel-art characters walk around the office in real time.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">💬</div>
+                <h3>Built-in Chat</h3>
+                <p>Talk to any agent directly from the office. Chat bubbles appear above agents showing live conversations.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">✏️</div>
+                <h3>Office Editor</h3>
+                <p>Place desks, furniture, walls, and doors. Paint floors and walls. Create branches and rooms. Make it yours.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🌐</div>
+                <h3>Agent Browser</h3>
+                <p>Give agents a real browser and watch them browse live. Floating popup with Take Control mode.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🤖</div>
+                <h3>Model Manager</h3>
+                <p>Switch agent models on the fly. Supports Anthropic, OpenAI, Google, Ollama, LM Studio, and any OpenAI-compatible provider.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">⏰</div>
+                <h3>Cron & Scheduling</h3>
+                <p>Create scheduled tasks for any agent. System events, standalone runs, one-shots — all from a visual UI.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📱</div>
+                <h3>SMS Panel</h3>
+                <p>Send and receive text messages through agents via Twilio. Monitor conversations and intervene when needed.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">🎨</div>
+                <h3>Full Customization</h3>
+                <p>Agent appearances, desk positions, wall colors, floor tiles, day/night cycle, weather — customize everything.</p>
+            </div>
+            <div class="feature-card">
+                <div class="feature-icon">📊</div>
+                <h3>API Usage Tracking</h3>
+                <p>Monitor token usage and costs across all providers. See which agents consume the most resources.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Demo -->
+<section id="demo" class="demo-section">
+    <div class="section-inner">
+        <div class="section-header">
+            <div class="section-badge">See It Live</div>
+            <h2>More than a dashboard.<br>A living workspace.</h2>
+            <p class="section-sub">Agents don't just show status — they walk around, visit each other, hold meetings at tables, and wander to the lounge when idle.</p>
+        </div>
+        <div class="demo-grid">
+            <div class="demo-card">
+                <div class="demo-visual">
+                    <div class="demo-placeholder">
+                        <div class="placeholder-label">📸 Office Overview</div>
+                        <div class="placeholder-hint">Screenshot coming soon</div>
+                    </div>
+                </div>
+                <h3>Your agents, visible</h3>
+                <p>15+ agents occupying desks, walking hallways, holding 1:1 meetings. Each with unique pixel-art appearance.</p>
+            </div>
+            <div class="demo-card">
+                <div class="demo-visual">
+                    <div class="demo-placeholder">
+                        <div class="placeholder-label">✏️ Office Editor</div>
+                        <div class="placeholder-hint">Screenshot coming soon</div>
+                    </div>
+                </div>
+                <h3>Build your layout</h3>
+                <p>Drag-and-drop furniture, paint walls, create rooms and branches. Canvas expands as your team grows.</p>
+            </div>
+            <div class="demo-card">
+                <div class="demo-visual">
+                    <div class="demo-placeholder">
+                        <div class="placeholder-label">🌐 Browser Panel</div>
+                        <div class="placeholder-hint">Screenshot coming soon</div>
+                    </div>
+                </div>
+                <h3>Watch agents browse</h3>
+                <p>Live browser view with floating popup. See exactly what your agents see. Take control when needed.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Pricing -->
+<section id="pricing" class="pricing-section">
+    <div class="section-inner">
+        <div class="section-header">
+            <div class="section-badge">Pricing</div>
+            <h2>One price. No subscription.<br>Yours forever.</h2>
+            <p class="section-sub">Pay once, self-host forever. Free updates included.</p>
+        </div>
+        <div class="pricing-grid">
+            <div class="pricing-card">
+                <div class="price-tier">Free Demo</div>
+                <div class="price-amount">$0</div>
+                <div class="price-period">forever</div>
+                <ul class="price-features">
+                    <li class="included">Up to 3 agents</li>
+                    <li class="included">Live presence & chat</li>
+                    <li class="included">Office editor</li>
+                    <li class="included">Model manager</li>
+                    <li class="included">API usage tracking</li>
+                    <li class="excluded">Browser panel</li>
+                    <li class="excluded">SMS panel</li>
+                    <li class="excluded">Cron manager</li>
+                    <li class="excluded">Whisper (voice input)</li>
+                    <li class="excluded">Demo watermark</li>
+                </ul>
+                <a href="https://github.com/yourvirtualoffice/app" class="btn btn-ghost btn-full" target="_blank">Download Free</a>
+            </div>
+            <div class="pricing-card featured">
+                <div class="price-badge">🔥 EARLY BIRD — LIMITED</div>
+                <div class="price-tier">Full License</div>
+                <div class="price-amount"><span class="price-strike">$35.99</span> $9.99</div>
+                <div class="price-period">one-time payment</div>
+                <ul class="price-features">
+                    <li class="included"><strong>Unlimited agents</strong></li>
+                    <li class="included">Live presence & chat</li>
+                    <li class="included">Office editor</li>
+                    <li class="included">Model manager</li>
+                    <li class="included">API usage tracking</li>
+                    <li class="included"><strong>Browser panel</strong></li>
+                    <li class="included"><strong>SMS panel</strong></li>
+                    <li class="included"><strong>Cron manager</strong></li>
+                    <li class="included"><strong>Whisper (voice input)</strong></li>
+                    <li class="included"><strong>No watermark</strong></li>
+                </ul>
+                <a href="#" class="btn btn-primary btn-full" id="buy-btn">Get License Key — $9.99</a>
+                <div class="price-note">Instant delivery. Enter key in setup wizard.</div>
+            </div>
+            <div class="pricing-card">
+                <div class="price-tier">Full Price</div>
+                <div class="price-amount">$35.99</div>
+                <div class="price-period">one-time payment</div>
+                <ul class="price-features">
+                    <li class="included"><strong>Unlimited agents</strong></li>
+                    <li class="included">Everything in Early Bird</li>
+                    <li class="included">Same features, same updates</li>
+                    <li class="included">Support the project at full price</li>
+                </ul>
+                <a href="#" class="btn btn-ghost btn-full" id="buy-full-btn">Get License Key — $35.99</a>
+                <div class="price-note">Same product. For those who want to pay full.</div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Setup -->
+<section id="setup" class="setup-section">
+    <div class="section-inner">
+        <div class="section-header">
+            <div class="section-badge">Get Started</div>
+            <h2>Up and running in 60 seconds.</h2>
+        </div>
+        <div class="setup-grid">
+            <div class="setup-steps">
+                <div class="setup-step">
+                    <div class="step-num">1</div>
+                    <div class="step-content">
+                        <h3>Run the Docker command</h3>
+                        <div class="code-block">
+                            <code>docker run -d --name virtual-office \
+  --network host \
+  -v ~/.openclaw:/openclaw \
+  -v /tmp/vo-data:/tmp/vo-data \
+  ghcr.io/yourvirtualoffice/app:latest</code>
+                        </div>
+                    </div>
+                </div>
+                <div class="setup-step">
+                    <div class="step-num">2</div>
+                    <div class="step-content">
+                        <h3>Open in your browser</h3>
+                        <p>Go to <code>http://localhost:8090</code> — the setup wizard walks you through connecting to OpenClaw and detecting your agents.</p>
+                    </div>
+                </div>
+                <div class="setup-step">
+                    <div class="step-num">3</div>
+                    <div class="step-content">
+                        <h3>Enter your license key</h3>
+                        <p>Paste your key in the setup wizard to unlock all features. Or skip and use the free demo with 3 agents.</p>
+                    </div>
+                </div>
+                <div class="setup-step">
+                    <div class="step-num">4</div>
+                    <div class="step-content">
+                        <h3>Build your office</h3>
+                        <p>Place furniture, assign desks, customize agent appearances, paint walls. Make it yours.</p>
+                    </div>
+                </div>
+            </div>
+            <div class="setup-terminal">
+                <div class="terminal-bar">
+                    <span></span><span></span><span></span>
+                    <div class="terminal-title">Terminal</div>
+                </div>
+                <div class="terminal-body">
+                    <div class="term-line"><span class="term-prompt">$</span> docker run -d --name virtual-office \</div>
+                    <div class="term-line dim">    --network host \</div>
+                    <div class="term-line dim">    -v ~/.openclaw:/openclaw \</div>
+                    <div class="term-line dim">    -v /tmp/vo-data:/tmp/vo-data \</div>
+                    <div class="term-line dim">    ghcr.io/yourvirtualoffice/app:latest</div>
+                    <div class="term-line"><span class="term-out">→</span> Container started</div>
+                    <div class="term-line">&nbsp;</div>
+                    <div class="term-line"><span class="term-prompt">$</span> open http://localhost:8090</div>
+                    <div class="term-line"><span class="term-out">🏢</span> Your Virtual Office is ready!</div>
+                    <div class="term-line"><span class="term-out">⚡</span> 12 agents detected</div>
+                    <div class="term-line"><span class="term-out">✅</span> Setup wizard loaded</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- FAQ -->
+<section class="faq-section">
+    <div class="section-inner">
+        <div class="section-header">
+            <h2>FAQ</h2>
+        </div>
+        <div class="faq-grid">
+            <div class="faq-item">
+                <h3>What do I need to run this?</h3>
+                <p>Docker and an OpenClaw installation. That's it. Works on Linux, Mac, and Windows (WSL).</p>
+            </div>
+            <div class="faq-item">
+                <h3>Is this a SaaS?</h3>
+                <p>No. It's self-hosted software you run on your own machine. Your data never leaves your server. No accounts, no telemetry.</p>
+            </div>
+            <div class="faq-item">
+                <h3>How do updates work?</h3>
+                <p><code>docker pull</code> and restart. Your config and customizations are stored in a mounted volume — updates don't touch them.</p>
+            </div>
+            <div class="faq-item">
+                <h3>Can I try before buying?</h3>
+                <p>Yes. The free demo includes 3 agents, chat, presence, the editor, and the model manager. No key required.</p>
+            </div>
+            <div class="faq-item">
+                <h3>What's the difference between Early Bird and Full?</h3>
+                <p>Nothing — same product, same features, same updates. Early Bird is just a limited-time launch discount. Get it while it lasts.</p>
+            </div>
+            <div class="faq-item">
+                <h3>What is OpenClaw?</h3>
+                <p>OpenClaw is an open-source AI agent framework. Virtual Office is a visual layer that runs on top of it. <a href="https://github.com/openclaw/openclaw" target="_blank">Learn more →</a></p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Footer -->
+<footer class="footer">
+    <div class="footer-inner">
+        <div class="footer-brand">
+            <span class="logo-mark">⚡</span>
+            <span>Your Virtual Office</span>
+        </div>
+        <div class="footer-links">
+            <a href="https://github.com/yourvirtualoffice/app" target="_blank">GitHub</a>
+            <a href="https://discord.com/invite/clawd" target="_blank">Discord</a>
+            <a href="mailto:support@yourvirtualoffice.com">Support</a>
+        </div>
+        <div class="footer-copy">© 2026 Your Virtual Office. MIT License.</div>
+    </div>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>
