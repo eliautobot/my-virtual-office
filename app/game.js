@@ -1647,10 +1647,10 @@ const FURNITURE_ACTIONS = {
     },
     'meetingTable': {
         spots: [
-            { dx:  35, dy:   5 }, { dx:  85, dy:   5 }, { dx: 135, dy:   5 },
-            { dx: 185, dy:   5 }, { dx: 235, dy:   5 },
-            { dx:  35, dy: 105 }, { dx:  85, dy: 105 }, { dx: 135, dy: 105 },
-            { dx: 185, dy: 105 }, { dx: 235, dy: 105 },
+            { dx:  27, dy:  15, faceDir: 2 }, { dx:  63, dy:  15, faceDir: 2 }, { dx: 100, dy:  15, faceDir: 2 },
+            { dx: 137, dy:  15, faceDir: 2 }, { dx: 173, dy:  15, faceDir: 2 },
+            { dx:  27, dy: 103, faceDir: 0 }, { dx:  63, dy: 103, faceDir: 0 }, { dx: 100, dy: 103, faceDir: 0 },
+            { dx: 137, dy: 103, faceDir: 0 }, { dx: 173, dy: 103, faceDir: 0 },
         ],
         action: 'meeting'
     },
