@@ -1665,7 +1665,7 @@ const FURNITURE_ACTIONS = {
     },
     'coffeeTable':    { spots: [],                               action: null     },
     'dartBoard':      { spots: [{ dx: 0, dy: 140 }],            action: 'darts'  },
-    'pingPongTable':  { spots: [{ dx: -20, dy: 20 }, { dx: 60, dy: 20 }], action: 'pong' },
+    'pingPongTable':  { spots: [{ dx: -50, dy: 0 }, { dx: 50, dy: 0 }], action: 'pong' },
     'desk':           { spots: [{ dx: 0, dy: 0 }],              action: 'work'   },
     'bossDesk':       { spots: [{ dx: 0, dy: 0 }],              action: 'work'   },
     'waterCooler':    { spots: [{ dx: -6, dy: 54 }],            action: 'drink'  },
@@ -6060,6 +6060,7 @@ function maybeStartPong(agent) {
 }
 
 function updatePongGames() {
+    _updatePongTablePos();
     for (var i = pongGames.length - 1; i >= 0; i--) {
         var g = pongGames[i];
         var p1 = g.p1, p2 = g.p2;
