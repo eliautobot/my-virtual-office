@@ -570,7 +570,22 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     self.send_header("Content-Type", "application/json")
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.end_headers()
-                    self.wfile.write(b'{"error":"No saved config"}')
+                    # Try bundled default
+                    _default_oc2 = os.path.join(os.path.dirname(__file__) or '.', 'default-office-config.json')
+                    try:
+                        with open(_default_oc2, 'r') as df:
+                            ddata = df.read()
+                        self.send_response(200)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(ddata.encode())
+                    except FileNotFoundError:
+                        self.send_response(404)
+                        self.send_header('Content-Type', 'application/json')
+                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.end_headers()
+                        self.wfile.write(b'{"error":"No saved config"}')
                     return
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -578,11 +593,22 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data.encode())
             except FileNotFoundError:
-                self.send_response(404)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.end_headers()
-                self.wfile.write(b'{"error":"No saved config"}')
+                # Try bundled default config
+                _default_oc = os.path.join(os.path.dirname(__file__) or '.', 'default-office-config.json')
+                try:
+                    with open(_default_oc, 'r') as f:
+                        data = f.read()
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(data.encode())
+                except FileNotFoundError:
+                    self.send_response(404)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(b'{"error":"No saved config"}')
         elif self.path == "/api/license":
             # License status endpoint
             self.send_response(200)
