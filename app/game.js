@@ -8945,6 +8945,24 @@ function _updateFloatingToolbarPosition() {
         _floatingToolbar.appendChild(iwSettingsBtn);
     }
     iwSettingsBtn.style.display = (selItem.type === 'interactiveWindow') ? '' : 'none';
+
+    // Show color button for couch items
+    var couchColorBtn = document.getElementById('ftb-couch-color-btn');
+    if (!couchColorBtn) {
+        couchColorBtn = document.createElement('button');
+        couchColorBtn.id = 'ftb-couch-color-btn';
+        couchColorBtn.textContent = '🎨';
+        couchColorBtn.title = 'Change couch color';
+        couchColorBtn.style.cssText = 'padding:4px 6px;background:#2a2a4e;border:1px solid #3a3a5e;border-radius:4px;cursor:pointer;font-size:12px;';
+        couchColorBtn.onclick = function() {
+            if (!selectedItemId) return;
+            var item = officeConfig.furniture.find(function(f){ return f.id === selectedItemId; });
+            if (!item || item.type !== 'couch') return;
+            _showCouchColorEditor(item);
+        };
+        _floatingToolbar.appendChild(couchColorBtn);
+    }
+    couchColorBtn.style.display = (selItem.type === 'couch') ? '' : 'none';
 }
 
 // --- EDIT MODE MOUSE TRACKING ---
