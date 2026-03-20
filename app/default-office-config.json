@@ -1,13 +1,13 @@
 {
   "canvasWidth": 1000,
-  "canvasHeight": 660,
+  "canvasHeight": 740,
   "walls": {
     "sections": [
       {
         "x": 0,
         "w": 380,
-        "color": "#878787",
-        "accentColor": "#ffffff"
+        "color": "#546e7a",
+        "accentColor": "#37474f"
       },
       {
         "x": 380,
@@ -23,15 +23,15 @@
       }
     ],
     "height": 70,
-    "trimColor": "#ffffff",
+    "trimColor": "#37474f",
     "interior": [
       {
         "x1": 9,
         "y1": 0,
         "x2": 9,
-        "y2": 2,
-        "color": "#5d6271",
-        "accentColor": "#5d6271",
+        "y2": 4,
+        "color": "#ffd600",
+        "accentColor": "#ffd600",
         "trimColor": "#d2d4da",
         "trim2Color": "#989ca8"
       },
@@ -39,97 +39,107 @@
         "x1": 16,
         "y1": 0,
         "x2": 16,
-        "y2": 2,
-        "color": "#5d6271",
-        "accentColor": "#5d6271",
+        "y2": 4,
+        "color": "#ffd600",
+        "accentColor": "#ffd600",
         "trimColor": "#d2d4da",
         "trim2Color": "#989ca8"
       },
       {
-        "x1": 9,
-        "y1": 3,
-        "x2": 9,
-        "y2": 6,
-        "color": "#5d6271",
-        "accentColor": "#5d6271",
+        "x1": 1,
+        "y1": 13,
+        "x2": 8,
+        "y2": 13,
+        "color": "#4061c8",
+        "accentColor": "#4061c8",
         "trimColor": "#d2d4da",
-        "trim2Color": "#989ca8"
+        "trim2Color": "#112563"
       },
       {
-        "x1": 11,
-        "y1": 6,
-        "x2": 16,
-        "y2": 6,
-        "color": "#5d6271",
-        "accentColor": "#5d6271",
-        "trimColor": "#d2d4da",
-        "trim2Color": "#989ca8"
-      },
-      {
-        "x1": 9,
-        "y1": 6,
-        "x2": 9,
-        "y2": 12,
-        "color": "#5d6271",
-        "accentColor": "#5d6271",
-        "trimColor": "#d2d4da",
-        "trim2Color": "#989ca8"
-      },
-      {
-        "x1": 0,
-        "y1": 14,
-        "x2": 6,
-        "y2": 14,
-        "color": "#5d6271",
-        "accentColor": "#5d6271",
-        "trimColor": "#d2d4da",
-        "trim2Color": "#989ca8"
-      },
-      {
-        "x1": 0,
+        "x1": 1,
         "y1": 5,
-        "x2": 7,
+        "x2": 8,
         "y2": 5,
-        "color": "#5d6271",
-        "accentColor": "#5d6271",
+        "color": "#4d79ff",
+        "accentColor": "#4d79ff",
         "trimColor": "#d2d4da",
-        "trim2Color": "#989ca8"
+        "trim2Color": "#112c7e"
       },
       {
-        "x1": 16,
-        "y1": 6,
-        "x2": 16,
-        "y2": 12,
-        "color": "#5d6271",
-        "accentColor": "#5d6271",
-        "trimColor": "#d2d4da",
-        "trim2Color": "#989ca8"
-      },
-      {
-        "x1": 16,
-        "y1": 3,
-        "x2": 16,
-        "y2": 6,
-        "color": "#5d6271",
-        "accentColor": "#5d6271",
-        "trimColor": "#d2d4da",
-        "trim2Color": "#989ca8"
-      },
-      {
-        "x1": 18,
+        "x1": 17,
         "y1": 5,
         "x2": 24,
         "y2": 5,
-        "color": "#737373",
-        "accentColor": "#737373",
-        "trimColor": "#babdc4",
-        "trim2Color": "#ffffff"
+        "color": "#ff7300",
+        "accentColor": "#ff7300",
+        "trimColor": "#d2d4da",
+        "trim2Color": "#c04b0c"
+      },
+      {
+        "x1": 17,
+        "y1": 13,
+        "x2": 24,
+        "y2": 13,
+        "color": "#cb5c00",
+        "accentColor": "#cb5c00",
+        "trimColor": "#d2d4da",
+        "trim2Color": "#9a3c09"
+      },
+      {
+        "x1": 8,
+        "y1": 4,
+        "x2": 8,
+        "y2": 6,
+        "color": "#4061c8",
+        "accentColor": "#4061c8",
+        "trimColor": "#d2d4da",
+        "trim2Color": "#112563"
+      },
+      {
+        "x1": 8,
+        "y1": 7,
+        "x2": 8,
+        "y2": 13,
+        "color": "#4061c8",
+        "accentColor": "#4061c8",
+        "trimColor": "#d2d4da",
+        "trim2Color": "#112563"
+      },
+      {
+        "x1": 17,
+        "y1": 4,
+        "x2": 17,
+        "y2": 6,
+        "color": "#cb5c00",
+        "accentColor": "#cb5c00",
+        "trimColor": "#d2d4da",
+        "trim2Color": "#853408"
+      },
+      {
+        "x1": 17,
+        "y1": 7,
+        "x2": 17,
+        "y2": 13,
+        "color": "#cb5c00",
+        "accentColor": "#cb5c00",
+        "trimColor": "#d2d4da",
+        "trim2Color": "#9a3c09"
+      },
+      {
+        "x1": 10,
+        "y1": 6,
+        "x2": 15,
+        "y2": 6,
+        "color": "#ffd600",
+        "accentColor": "#ffd600",
+        "trimColor": "#d2d4da",
+        "trim2Color": "#98a300"
       }
     ],
     "topWall": {
-      "color": "#878787",
-      "accentColor": "#ffffff",
-      "trimColor": "#ffffff"
+      "color": "#546e7a",
+      "accentColor": "#37474f",
+      "trimColor": "#37474f"
     }
   },
   "floor": {
@@ -137,12 +147,6 @@
     "color2": "#b0b0b0"
   },
   "furniture": [
-    {
-      "id": "f_1773951806994_9884",
-      "type": "bossDesk",
-      "x": 480,
-      "y": 160
-    },
     {
       "id": "f_1773951840919_325",
       "type": "desk",
@@ -258,61 +262,6 @@
       "y": 53
     },
     {
-      "id": "f_1773952391980_9633",
-      "type": "dartBoard",
-      "x": 960,
-      "y": 460
-    },
-    {
-      "id": "f_1773952608194_4109",
-      "type": "coffeeTable",
-      "x": 400,
-      "y": 520
-    },
-    {
-      "id": "f_1773952721591_6254",
-      "type": "tv",
-      "x": 560,
-      "y": 520
-    },
-    {
-      "id": "f_1773953715969_8893",
-      "type": "filingCabinet",
-      "x": 926,
-      "y": 313
-    },
-    {
-      "id": "f_1773953730365_7042",
-      "type": "whiteboard",
-      "x": 956,
-      "y": 209
-    },
-    {
-      "id": "f_1773953775196_341",
-      "type": "filingCabinet",
-      "x": 46,
-      "y": 313
-    },
-    {
-      "id": "f_1773953798354_5820",
-      "type": "whiteboard",
-      "x": 16,
-      "y": 209
-    },
-    {
-      "id": "f_1773953867447_9058",
-      "type": "branchSign",
-      "x": 160,
-      "y": 240,
-      "branchId": "BRANCH_1"
-    },
-    {
-      "id": "f_1774018086895_6157",
-      "type": "pingPongTable",
-      "x": 820,
-      "y": 560
-    },
-    {
       "id": "f_1774020182553_6139",
       "type": "filingCabinet",
       "x": 326,
@@ -345,6 +294,216 @@
       "y": 0,
       "weather": true,
       "showSun": false
+    },
+    {
+      "id": "f_1774039774420_696",
+      "type": "bossDesk",
+      "x": 500,
+      "y": 140
+    },
+    {
+      "id": "f_1774041752779_6211",
+      "type": "clock",
+      "x": 500,
+      "y": 20
+    },
+    {
+      "id": "f_1774041808546_2675",
+      "type": "whiteboard",
+      "x": 700,
+      "y": 160
+    },
+    {
+      "id": "f_1774041851347_6922",
+      "type": "tallPlant",
+      "x": 571,
+      "y": 201
+    },
+    {
+      "id": "f_1774041852954_5606",
+      "type": "tallPlant",
+      "x": 411,
+      "y": 201
+    },
+    {
+      "id": "f_1774041875615_1973",
+      "type": "tv",
+      "x": 475,
+      "y": 203
+    },
+    {
+      "id": "f_1774041880671_2478",
+      "type": "coffeeTable",
+      "x": 468,
+      "y": 243
+    },
+    {
+      "id": "f_1774041892081_3789",
+      "type": "plant",
+      "x": 651,
+      "y": 493
+    },
+    {
+      "id": "f_1774041893500_1223",
+      "type": "plant",
+      "x": 331,
+      "y": 493
+    },
+    {
+      "id": "f_1774041944242_9699",
+      "type": "trashCan",
+      "x": 750,
+      "y": 203
+    },
+    {
+      "id": "f_1774041962914_1896",
+      "type": "trashCan",
+      "x": 310,
+      "y": 203
+    },
+    {
+      "id": "f_1774041977140_6251",
+      "type": "trashCan",
+      "x": 550,
+      "y": 183
+    },
+    {
+      "id": "f_1774041987248_4059",
+      "type": "trashCan",
+      "x": 670,
+      "y": 63
+    },
+    {
+      "id": "f_1774041995116_341",
+      "type": "filingCabinet",
+      "x": 256,
+      "y": 163
+    },
+    {
+      "id": "f_1774041999102_4234",
+      "type": "filingCabinet",
+      "x": 936,
+      "y": 163
+    },
+    {
+      "id": "f_1774041999852_3121",
+      "type": "filingCabinet",
+      "x": 896,
+      "y": 163
+    },
+    {
+      "id": "f_1774042003928_3767",
+      "type": "filingCabinet",
+      "x": 56,
+      "y": 163
+    },
+    {
+      "id": "f_1774042023081_2461",
+      "type": "plant",
+      "x": 221,
+      "y": 183
+    },
+    {
+      "id": "f_1774042031853_1718",
+      "type": "plant",
+      "x": 861,
+      "y": 183
+    },
+    {
+      "id": "f_1774042050761_2733",
+      "type": "pingPongTable",
+      "x": 500,
+      "y": 540
+    },
+    {
+      "id": "f_1774042070565_9684",
+      "type": "dartBoard",
+      "x": 700,
+      "y": 474
+    },
+    {
+      "id": "f_1774042105307_4370",
+      "type": "vendingMachine",
+      "x": 168,
+      "y": 473
+    },
+    {
+      "id": "f_1774042162665_5092",
+      "type": "bookshelf",
+      "x": 805,
+      "y": 470
+    },
+    {
+      "id": "f_1774042271991_7051",
+      "type": "trashCan",
+      "x": 240,
+      "y": 520
+    },
+    {
+      "id": "f_1774042277772_7686",
+      "type": "trashCan",
+      "x": 780,
+      "y": 520
+    },
+    {
+      "id": "f_1774042430809_6320",
+      "type": "tallPlant",
+      "x": 131,
+      "y": 481
+    },
+    {
+      "id": "f_1774042440661_8982",
+      "type": "endTable",
+      "x": 860,
+      "y": 520
+    },
+    {
+      "id": "f_1774042477363_380",
+      "type": "textLabel",
+      "x": 820,
+      "y": 20,
+      "text": "KITCHEN",
+      "labelColor": "#ff0000",
+      "fontSize": 16
+    },
+    {
+      "id": "f_1774042691482_4383",
+      "type": "textLabel",
+      "x": 200,
+      "y": 20,
+      "text": "LOUNGE",
+      "labelColor": "#00d5ff",
+      "fontSize": 16
+    },
+    {
+      "id": "f_1774043354632_2342",
+      "type": "whiteboard",
+      "x": 166,
+      "y": 159
+    },
+    {
+      "id": "f_1774043371152_7177",
+      "type": "whiteboard",
+      "x": 526,
+      "y": 39
+    },
+    {
+      "id": "f_1774043846543_2713",
+      "type": "couch",
+      "x": 360,
+      "y": 600
+    },
+    {
+      "id": "f_1774043890837_2814",
+      "type": "tallPlant",
+      "x": 331,
+      "y": 601
+    },
+    {
+      "id": "f_1774043917430_9952",
+      "type": "endTable",
+      "x": 500,
+      "y": 680
     }
   ],
   "branches": [
@@ -353,13 +512,14 @@
       "name": "Branch #1",
       "emoji": "\ud83c\udfe2",
       "theme": "branch-gold",
-      "color": "#0011ff"
+      "color": "#427bff"
     },
     {
       "id": "BRANCH_2",
       "name": "Branch #2",
       "emoji": "\ud83c\udfe2",
-      "theme": "branch-blue"
+      "theme": "branch-blue",
+      "color": "#ff6600"
     },
     {
       "id": "CEO",
