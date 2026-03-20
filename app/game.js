@@ -2295,6 +2295,13 @@ function _lighten(hex, amt) {
     b = Math.min(255, Math.floor(b + (255 - b) * amt));
     return '#' + [r,g,b].map(v => v.toString(16).padStart(2,'0')).join('');
 }
+function _lightenColor(hex, pct) {
+    var r = parseInt(hex.slice(1,3), 16), g = parseInt(hex.slice(3,5), 16), b = parseInt(hex.slice(5,7), 16);
+    r = Math.min(255, r + Math.round((255 - r) * pct / 100));
+    g = Math.min(255, g + Math.round((255 - g) * pct / 100));
+    b = Math.min(255, b + Math.round((255 - b) * pct / 100));
+    return '#' + [r,g,b].map(function(v){ return v.toString(16).padStart(2,'0'); }).join('');
+}
 function _darkenColor(hex, amt) {
     let r = parseInt(hex.slice(1, 3), 16);
     let g = parseInt(hex.slice(3, 5), 16);
@@ -5318,8 +5325,8 @@ function drawCouch(item) {
     else { x = arguments[0]; y = arguments[1]; item = {}; }
     var baseColor = item.couchColor || '#3f51b5';
     var cushionColor = _lightenColor(baseColor, 25);
-    var armColor = _darkenColor(baseColor, 20);
-    var shadowColor = _darkenColor(baseColor, 40);
+    var armColor = _darkenColor(baseColor, 0.2);
+    var shadowColor = _darkenColor(baseColor, 0.4);
 
     _setFurnitureLampShadow(x + 30, y + 30);
 
@@ -5349,7 +5356,7 @@ function drawCouch(item) {
     ctx.fillRect(x + 74, y + 56, 18, 18);
 
     // Cushion stitch lines
-    ctx.fillStyle = _darkenColor(cushionColor, 10);
+    ctx.fillStyle = _darkenColor(cushionColor, 0.1);
     ctx.fillRect(x + 11, y + 5, 1, 20);
     ctx.fillRect(x + 11, y + 28, 1, 20);
     ctx.fillRect(x + 35, y + 64, 1, 8);
