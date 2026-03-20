@@ -1,4 +1,4 @@
-# Virtual Office
+# My Virtual Office
 
 A self-hosted retro AI workspace for OpenClaw.
 
@@ -44,7 +44,7 @@ A paid license unlocks:
 ### Docker Compose (recommended)
 
 ```bash
-git clone https://github.com/eliautobot/virtual-office.git
+git clone https://github.com/eliautobot/my-virtual-office.git
 cd virtual-office
 docker compose up -d
 ```
