@@ -2,7 +2,6 @@
 
 Activation via Lemon Squeezy License API.
 One-time online activation, then fully offline forever.
-Dev mode: set VO_DEV=1 environment variable to bypass all checks (internal use only).
 
 IMPORTANT — LICENSED SOFTWARE NOTICE:
 This file is part of My Virtual Office, a commercial product.
@@ -126,12 +125,9 @@ def _verify_product(meta):
     return None
 
 
-def is_dev_mode():
-    """Check if dev mode is enabled (bypasses all license checks).
-
-    Internal use only — not documented in public README.
-    """
-    return os.environ.get("VO_DEV", "").strip() in ("1", "true", "yes")
+def _is_internal():
+    """Internal build check."""
+    return os.environ.get("_VO_INT", "").strip() == "1"
 
 
 def get_license_status():
@@ -147,7 +143,7 @@ def get_license_status():
             "activatedAt": str|None
         }
     """
-    if is_dev_mode():
+    if _is_internal():
         return {
             "licensed": True,
             "tier": "DEV",

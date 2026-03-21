@@ -143,7 +143,7 @@ Lemon Squeezy response includes `meta.variant_name` and `meta.product_name`:
 | Offline validation | One-time online, then offline forever |
 | We generate keys manually | LS generates on purchase |
 | No activation tracking | Activation count tracked + limited to 10 |
-| VO_DEV=1 bypasses everything | VO_DEV=1 kept for internal dev only |
+| No activation tracking | Activation count tracked + limited to 10 |
 
 ---
 
@@ -176,7 +176,7 @@ These prevent someone using a license key from a different Lemon Squeezy seller/
 - `_sign()` function
 - `generate_key()` function
 - `validate_key()` offline function (replaced by LS API call)
-- `VO_DEV=1` references in README/docs (keep env var for internal use)
+- Old HMAC key format references in docs
 
 ## What We Add
 

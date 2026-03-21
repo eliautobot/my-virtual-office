@@ -73,10 +73,8 @@ Everything above PLUS:
 `VO-{TIER}-{8-hex-ID}-{8-hex-HMAC-SIG}`
 - Tiers: EARLY ($9.99), FULL ($35.99)
 - Example: `VO-EARLY-a1b2c3d4-e5f6a7b8`
-- Validation: offline HMAC (no external server needed)
-- Persistence: saved in vo-config.json, survives restarts/updates
-- Dev bypass: `VO_DEV=1` env var
-- Key generation: `python license.py generate [EARLY|FULL]`
+- Validation: one-time activation via Lemon Squeezy API, then offline forever
+- Persistence: activation receipt saved locally, survives restarts/updates
 
 ### Activation Flow
 1. Setup wizard Step 0 OR ☰ Menu → Settings
@@ -119,7 +117,7 @@ Everything above PLUS:
 ### Morning (12:00 AM - 8:46 AM) — Elix
 - Alpha cleanup: removed all hardcoded personal data from 17 files
 - License system built (HMAC offline validation, demo mode, feature gating)
-- Container rebuilt with VO_DEV=1 for testing
+- Container rebuilt for testing
 - Pricing set: $35.99 full, $9.99 early bird
 - Setup wizard improved (7 steps, larger text)
 - Product website built (port 8092)
