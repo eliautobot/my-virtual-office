@@ -1039,10 +1039,47 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
 var _timeLapse = false;
 var _timeLapseStart = 0;
 
+// Time override: null = real time, or fixed hour (0-23)
+var _timeOverride = null;
+var _timeOverrideModes = [
+    null,        // real time
+    12,          // noon (full daylight)
+    21,          // 9 PM (night)
+    6,           // 6 AM (dawn)
+    17.5,        // 5:30 PM (sunset)
+    'lapse'      // time-lapse
+];
+var _timeOverrideIdx = 0;
+
+function cycleTimeOverride() {
+    _timeOverrideIdx = (_timeOverrideIdx + 1) % _timeOverrideModes.length;
+    var mode = _timeOverrideModes[_timeOverrideIdx];
+    var btn = document.getElementById('btn-time-override');
+    if (mode === null) {
+        _timeOverride = null;
+        _timeLapse = false;
+        if (btn) { btn.textContent = '☀️'; btn.title = 'Time: Real time'; }
+        console.log('Time override OFF — real time');
+    } else if (mode === 'lapse') {
+        _timeOverride = null;
+        _timeLapse = true;
+        _timeLapseStart = Date.now();
+        if (btn) { btn.textContent = '⏩'; btn.title = 'Time: Lapse (24h in 60s)'; }
+        console.log('Time-lapse ON — 24h in 60s');
+    } else {
+        _timeOverride = mode;
+        _timeLapse = false;
+        var labels = { 12: '🌞 Noon', 21: '🌙 Night', 6: '🌅 Dawn', 17.5: '🌇 Sunset' };
+        if (btn) { btn.textContent = labels[mode] || '⏰'; btn.title = 'Time: ' + (labels[mode] || mode + 'h'); }
+        console.log('Time override: ' + mode + 'h');
+    }
+}
+
 function _getTimeHour() {
+    if (_timeOverride !== null) return _timeOverride;
     if (_timeLapse) {
-        var elapsed = (Date.now() - _timeLapseStart) / 1000; // seconds since start
-        return (elapsed / 60 * 24) % 24; // 60 seconds = 24 hours
+        var elapsed = (Date.now() - _timeLapseStart) / 1000;
+        return (elapsed / 60 * 24) % 24;
     }
     var h = new Date().getHours();
     var m = new Date().getMinutes();
@@ -1194,42 +1231,8 @@ function getRimLight(agent) {
     return result;
 }
 function _getRimLightInner(agent) {
-    var amb = getAmbientLight();
-    if (amb.dark < 0.05) return null;
-    var g = Math.min(1, amb.dark * 3);
-    var flicker = 0.92 + Math.sin(_weatherTick * 0.03) * 0.08;
-
-    // Find nearest lamp — use per-source range, pick strongest influence
-    var bestInfluence = 0, lampX = 0, lampY = 0, lampColor = '255,165,30', lampRange = 100;
-    for (var i = 0; i < agents.length; i++) {
-        var lx = agents[i].desk.x - 32, ly = agents[i].desk.y - 29;
-        var ddx = agent.x - lx, ddy = agent.y - ly;
-        var d = Math.sqrt(ddx * ddx + ddy * ddy);
-        if (d < DESK_LAMP_RANGE) {
-            var inf = 1 - d / DESK_LAMP_RANGE;
-            if (inf > bestInfluence) { bestInfluence = inf; lampX = lx; lampY = ly; lampColor = '255,165,30'; lampRange = DESK_LAMP_RANGE; }
-        }
-    }
-    var allLights = officeLights.concat(ambientLightSources);
-    for (var j = 0; j < allLights.length; j++) {
-        var ol = allLights[j];
-        var odx = agent.x - ol.x, ody = agent.y - (ol.y - 5);
-        var od = Math.sqrt(odx * odx + ody * ody);
-        if (od < ol.range) {
-            var inf2 = 1 - od / ol.range;
-            if (inf2 > bestInfluence) { bestInfluence = inf2; lampX = ol.x; lampY = ol.y - 5; lampColor = ol.color; lampRange = ol.range; }
-        }
-    }
-    if (bestInfluence < 0.01) return null;
-
-    var falloff = bestInfluence;
-    var intensity = falloff * falloff * g * flicker;
-    if (intensity < 0.03) return null;
-
-    var dirX = lampX - agent.x;
-    var dirY = lampY - agent.y;
-    var dirLen = Math.sqrt(dirX * dirX + dirY * dirY);
-    return { dirX: dirX / dirLen, dirY: dirY / dirLen, intensity: intensity, color: lampColor };
+    // Hardcoded light sources removed — rim lighting will be driven by dynamic light system
+    return null;
 }
 
 // No-op — rim is now drawn inside agent draw()
@@ -1237,38 +1240,7 @@ function drawAgentLampBounce() {}
 
 // Helper: set warm lamp shadow for furniture near a light source
 function _setFurnitureLampShadow(objX, objY) {
-    var amb = getAmbientLight();
-    if (amb.dark < 0.05) return;
-    var g = Math.min(1, amb.dark * 3);
-    var fl = 0.92 + Math.sin(_weatherTick * 0.03) * 0.08;
-    // Find nearest office light or desk lamp
-    var bestInf = 0, bestDirX = 0, bestDirY = 0, bestColor = '255,165,30';
-    var _allL = officeLights.concat(ambientLightSources);
-    for (var i = 0; i < _allL.length; i++) {
-        var dx = _allL[i].x - objX, dy = (_allL[i].y - 5) - objY;
-        var d = Math.sqrt(dx * dx + dy * dy);
-        if (d < _allL[i].range) {
-            var inf = 1 - d / _allL[i].range;
-            if (inf > bestInf) { bestInf = inf; bestDirX = dx; bestDirY = dy; bestColor = _allL[i].color; }
-        }
-    }
-    for (var j = 0; j < agents.length; j++) {
-        var lx = agents[j].desk.x - 32, ly = agents[j].desk.y - 29;
-        var dx2 = lx - objX, dy2 = ly - objY;
-        var d2 = Math.sqrt(dx2 * dx2 + dy2 * dy2);
-        if (d2 < DESK_LAMP_RANGE) {
-            var inf2 = 1 - d2 / DESK_LAMP_RANGE;
-            if (inf2 > bestInf) { bestInf = inf2; bestDirX = dx2; bestDirY = dy2; bestColor = '255,165,30'; }
-        }
-    }
-    if (bestInf < 0.01) return;
-    var falloff = bestInf;
-    var str = Math.min(1, falloff * falloff * g * fl * 4);
-    var dirLen = Math.sqrt(bestDirX * bestDirX + bestDirY * bestDirY);
-    ctx.shadowColor = 'rgba(' + bestColor + ',' + str.toFixed(2) + ')';
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = (bestDirX / dirLen) * 4;
-    ctx.shadowOffsetY = (bestDirY / dirLen) * 4;
+    // Hardcoded light sources removed — no-op until dynamic light system
 }
 function _clearFurnitureShadow() {
     ctx.shadowColor = 'transparent';
@@ -1279,17 +1251,9 @@ function _clearFurnitureShadow() {
 
 // Extra light sources around the office (non-desk lamps)
 // Lamps (draw hardware + glow)
-var officeLights = [
-    { x: 882, y: 566, label: 'counter', color: '255,165,30', range: 160 },
-    { x: 500, y: 488, label: 'meeting', color: '255,165,30', range: 160 },
-    { x: 140, y: 580, label: 'lounge', color: '255,165,30', range: 160 },
-];
-// Light sources without physical lamp (neon signs, etc.) — rim detection only
-var ambientLightSources = [
-    { x: 190, y: 42, label: 'pq-neon', color: '0,229,255', range: 200 },
-    { x: 810, y: 42, label: 'eng-neon', color: '255,145,0', range: 200 },
-    { x: 500, y: 50, label: 'hq-neon', color: '255,235,0', range: 200 },
-];
+// Light sources cleared — lighting is now dynamic/user-configured, not hardcoded
+var officeLights = [];
+var ambientLightSources = [];
 var DESK_LAMP_RANGE = 100;
 
 function drawOfficeLamps() {
@@ -2831,14 +2795,14 @@ class Agent {
             this.idleAction = 'stretch';
             this.idleReturnTimer = 360 + Math.floor(Math.random() * 600);
             this.addIntent('Stretching at desk');
-        } else if (roll < 0.95 && pongGames.length === 0) {
+        } else if (roll < 0.97 && pongGames.length === 0) {
             // Wander to ping pong table — wait for a partner
             var ptx = PONG_TABLE.x + (Math.random() > 0.5 ? -50 : 50);
             var pty = PONG_TABLE.y + (Math.random() - 0.5) * 10;
             this.targetX = ptx;
             this.targetY = pty;
             this.idleAction = 'pong_wait';
-            this.idleReturnTimer = 600 + Math.floor(Math.random() * 600); // 10-20s wait
+            this.idleReturnTimer = 1800 + Math.floor(Math.random() * 1200); // 30-50s wait
             this.addIntent('Heading to the ping pong table');
         } else {
             // Wander to a random spot in the office
@@ -4388,6 +4352,8 @@ async function pollStatus() {
 }
 setInterval(pollStatus, 5000);
 pollStatus();
+setInterval(pollAgentChat, 3000);
+pollAgentChat();
 
 // --- GLOBAL LOG (persisted to localStorage) ---
 function _saveLog() {
@@ -4907,7 +4873,6 @@ function drawInteriorWallOccluders() {
     if (!interior || interior.length === 0) return;
     var wallThick = 6;
     var faceH = 36;
-    var amb = getAmbientLight();
     interior.forEach(function(wall, idx) {
         var isSel = (editMode && selectedWallIdx === idx);
         if (wall.x1 !== wall.x2) {
@@ -4923,10 +4888,7 @@ function drawInteriorWallOccluders() {
             ctx.fillRect(px + 1, py - 8, pw - 2, 4);
             ctx.fillStyle = isSel ? '#ffca28' : _wallTrim2Color(wall);
             ctx.fillRect(px, py - 4, pw, wallThick + 4);
-            if (!isSel && amb.dark > 0) {
-                ctx.fillStyle = 'rgba(' + amb.tint + ',' + amb.dark.toFixed(3) + ')';
-                ctx.fillRect(px, py - faceH, pw, faceH + wallThick + 4);
-            }
+            // No manual ambient tint needed — ambient overlay draws after occluders now
         }
     });
 }
@@ -5140,18 +5102,6 @@ function drawClock(x, y) {
 
 function drawDesk(x, y) {
     ctx.save(); ctx.translate(x, y);
-    // Lamp rim light on desk furniture
-    var _deskAmb = getAmbientLight();
-    if (_deskAmb.dark > 0.05) {
-        var _dg = Math.min(1, _deskAmb.dark * 3);
-        var _df = 0.92 + Math.sin(_weatherTick * 0.03) * 0.08;
-        var _dStr = Math.min(1, _dg * _df * 4);
-        // Lamp is at (-32, -29) relative to desk center — glow on left/top (lamp-facing side)
-        ctx.shadowColor = 'rgba(255,160,20,' + _dStr.toFixed(2) + ')';
-        ctx.shadowBlur = 0;
-        ctx.shadowOffsetX = -2;  // glow on left side (facing lamp)
-        ctx.shadowOffsetY = -3;  // glow on top (lamp is above)
-    }
     // Desk shadow
     ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillRect(-36, -20, 76, 54);
     // Desk surface
@@ -5179,12 +5129,7 @@ function drawDesk(x, y) {
     // Mouse
     ctx.fillStyle = '#78909c'; ctx.fillRect(20, -5, 6, 8);
     ctx.fillStyle = '#90a4ae'; ctx.fillRect(21, -4, 4, 3);
-    // Desk lamp drawn after ambient overlay (see drawDeskLamps)
-    // Clear lamp shadow
-    ctx.shadowColor = 'transparent';
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
+
     // Desk item spots: left (-28, 5) and right (24, 4)
     // Items drawn dynamically by agent (carry system or defaults)
     ctx.restore();
@@ -5475,19 +5420,9 @@ function drawFloorLamp(x, y) {
     ctx.lineTo(x - 5, y - 34);
     ctx.closePath();
     ctx.fill();
-    // Bulb glow
-    var amb = getAmbientLight();
-    if (amb.dark > 0.05) {
-        var g = Math.min(1, amb.dark * 3);
-        var f = 0.92 + Math.sin(_weatherTick * 0.03) * 0.08;
-        ctx.fillStyle = 'rgba(255,180,60,' + (0.5 * g * f) + ')';
-        ctx.beginPath(); ctx.arc(x, y - 30, 6, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = 'rgba(255,240,200,' + (0.6 * g * f) + ')';
-        ctx.beginPath(); ctx.arc(x, y - 30, 2.5, 0, Math.PI * 2); ctx.fill();
-    } else {
-        ctx.fillStyle = '#e0e0e0';
-        ctx.beginPath(); ctx.arc(x, y - 30, 2, 0, Math.PI * 2); ctx.fill();
-    }
+    // Bulb (static, no hardcoded glow — lighting handled dynamically)
+    ctx.fillStyle = '#e0e0e0';
+    ctx.beginPath(); ctx.arc(x, y - 30, 2, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
 }
 
@@ -5503,18 +5438,7 @@ function drawBranchSign(item) {
     ctx.textBaseline = 'middle';
     ctx.font = 'bold 10px "Press Start 2P", monospace';
 
-    // Glow effect
-    var neonAmb = getAmbientLight();
-    var glow = Math.min(1, neonAmb.dark * 3);
-    var flicker = 0.92 + Math.sin(_weatherTick * 0.04) * 0.08;
-    if (glow > 0.03) {
-        ctx.globalAlpha = 0.12 * glow * flicker;
-        ctx.fillStyle = neonColor;
-        ctx.fillText(text, item.x, item.y);
-        ctx.fillText(text, item.x, item.y);
-    }
-
-    // Solid text (always visible)
+    // Solid text (no hardcoded glow — lighting handled dynamically)
     ctx.globalAlpha = 1;
     ctx.fillStyle = neonColor;
     ctx.fillText(text, item.x, item.y);
@@ -6111,20 +6035,41 @@ function startPongGame(a1, a2) {
 
 function maybeStartPong(agent) {
     if (agent.idleAction === 'pong' || pongGames.length >= 1) return;
-    // Agent waiting at table — look for a partner
+    // Agent waiting at table — look for a partner already there
     if (agent.idleAction === 'pong_wait') {
+        // Check if arrived at table first
+        var distToTable = Math.abs(agent.x - PONG_TABLE.x) + Math.abs(agent.y - PONG_TABLE.y);
+        if (distToTable > 80) return; // still walking
         for (var i = 0; i < agents.length; i++) {
             var other = agents[i];
             if (other.id === agent.id) continue;
             if (other.idleAction === 'pong_wait') {
-                startPongGame(agent, other);
-                return;
+                var otherDist = Math.abs(other.x - PONG_TABLE.x) + Math.abs(other.y - PONG_TABLE.y);
+                if (otherDist < 80) { startPongGame(agent, other); return; }
+            }
+        }
+        // Active recruitment — pull a random idle agent to come play
+        if (Math.random() < 0.02) { // ~1.2% per frame → triggers within a few seconds
+            var candidates = [];
+            for (var j = 0; j < agents.length; j++) {
+                var c = agents[j];
+                if (c.id === agent.id) continue;
+                if (c.state === 'idle' && !c.idleAction && !c.meetingId && c.isSitting) candidates.push(c);
+            }
+            if (candidates.length > 0) {
+                var recruit = candidates[Math.floor(Math.random() * candidates.length)];
+                recruit.targetX = PONG_TABLE.x + (agent.x < PONG_TABLE.x ? 50 : -50);
+                recruit.targetY = PONG_TABLE.y + (Math.random() - 0.5) * 10;
+                recruit.idleAction = 'pong_wait';
+                recruit.idleReturnTimer = 1800 + Math.floor(Math.random() * 1200);
+                recruit.isSitting = false;
+                recruit.addIntent('Heading to play ping pong');
             }
         }
         return;
     }
     // Social trigger — two agents near each other anywhere
-    if (agent.socialTarget && agent.id < agent.socialTarget && Math.random() < 0.003) {
+    if (agent.socialTarget && agent.id < agent.socialTarget && Math.random() < 0.005) {
         var other = agentMap[agent.socialTarget];
         if (other && !other.isSitting && !other.idleAction && agent.state === 'idle' && other.state === 'idle') {
             startPongGame(agent, other);
@@ -6952,7 +6897,6 @@ function handleChatBubbleClick(canvasX, canvasY) {
 }
 
 function drawChatBubbles() {
-    pollAgentChat();
     var chatBubbles = [];
     renderedChatBubbles = [];
     renderedChatIcons = [];
@@ -7992,33 +7936,13 @@ function loop() {
     ctx.rect(0, 0, W, H);
     ctx.clip();
     _perfStart('environment'); drawEnvironment(); _perfEnd('environment');
-    _perfStart('ambient'); drawAmbientOverlay(); _perfEnd('ambient');
     _rimFrame++;
-    _perfStart('neon'); drawNeonSigns(); _perfEnd('neon');
-    _perfStart('deskLamps'); drawDeskLamps(); _perfEnd('deskLamps');
-    _perfStart('deskGlows'); drawDeskLampGlows(); _perfEnd('deskGlows');
-    _perfStart('officeLamps'); drawOfficeLamps(); _perfEnd('officeLamps');
-    _perfStart('lightGlows'); drawLightGlows(); _perfEnd('lightGlows');
-    // Draw persistent desk items
+    // Draw persistent desk items (before ambient so they get tinted)
     _perfStart('deskItems');
     agents.forEach(a => {
         ctx.save();
         ctx.translate(a.desk.x, a.desk.y);
-        var _diAmb = getAmbientLight();
-        if (_diAmb.dark > 0.05) {
-            var _dig = Math.min(1, _diAmb.dark * 3);
-            var _dif = 0.92 + Math.sin(_weatherTick * 0.03) * 0.08;
-            var _diStr = Math.min(1, _dig * _dif * 4);
-            ctx.shadowColor = 'rgba(255,160,20,' + _diStr.toFixed(2) + ')';
-            ctx.shadowBlur = 0;
-            ctx.shadowOffsetX = -2;
-            ctx.shadowOffsetY = -3;
-        }
         a._drawDeskCharItem(ctx);
-        ctx.shadowColor = 'transparent';
-        ctx.shadowBlur = 0;
-        ctx.shadowOffsetX = 0;
-        ctx.shadowOffsetY = 0;
         ctx.restore();
     });
     _perfEnd('deskItems');
@@ -8051,6 +7975,15 @@ function loop() {
     officeConfig.furniture.forEach(function(item) {
         if (item.type === 'branchSign' || item.type === 'textLabel') drawFurnitureItem(item);
     });
+    // Ambient overlay AFTER wall occluders + redrawn furniture — everything gets uniform tint
+    _perfStart('ambient'); drawAmbientOverlay(); _perfEnd('ambient');
+    // Lights/neon drawn after ambient so they glow through darkness
+    _perfStart('neon'); drawNeonSigns(); _perfEnd('neon');
+    _perfStart('deskLamps'); drawDeskLamps(); _perfEnd('deskLamps');
+    _perfStart('deskGlows'); drawDeskLampGlows(); _perfEnd('deskGlows');
+    _perfStart('officeLamps'); drawOfficeLamps(); _perfEnd('officeLamps');
+    _perfStart('lightGlows'); drawLightGlows(); _perfEnd('lightGlows');
+    // Front agents drawn after ambient (they appear in front, un-tinted like before)
     _perfStart('agentsFront'); _frontWalls.forEach(function(a) { a.draw(); }); _perfEnd('agentsFront');
     _perfStart('lampBounce'); drawAgentLampBounce(); _perfEnd('lampBounce');
     _perfStart('airplanes'); updateAirplanes(); drawAirplanes(); _perfEnd('airplanes');
