@@ -11268,10 +11268,13 @@ function mmSaveSettings() {
     var weather = document.getElementById('mm-weather').value;
 
     // Save display prefs locally
+    var _elBubbles = document.getElementById('mm-show-bubbles');
+    var _elWeather = document.getElementById('mm-show-weather');
+    var _elNames = document.getElementById('mm-show-names');
     var displayPrefs = {
-        showBubbles: document.getElementById('mm-show-bubbles').checked,
-        showWeather: document.getElementById('mm-show-weather').checked,
-        showNames: document.getElementById('mm-show-names').checked,
+        showBubbles: _elBubbles ? _elBubbles.checked : true,
+        showWeather: _elWeather ? _elWeather.checked : true,
+        showNames: _elNames ? _elNames.checked : true,
     };
     localStorage.setItem('vo-display-prefs', JSON.stringify(displayPrefs));
 

@@ -276,6 +276,327 @@ CONFIG_PATH = os.path.join(WORKSPACE_BASE, "openclaw.json")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+# ---------------------------------------------------------------------------
+# API Usage Collector — background thread that fetches quota data directly
+# from provider APIs using credentials from OpenClaw auth profiles.
+# No CLI dependency. Pure Python. Works in any environment.
+# ---------------------------------------------------------------------------
+
+# Provider display names
+_PROVIDER_LABELS = {
+    "anthropic": "Claude",
+    "openai-codex": "Codex",
+    "openai": "OpenAI",
+    "github-copilot": "Copilot",
+    "google-gemini-cli": "Gemini",
+    "minimax": "MiniMax",
+    "zai": "Z.AI",
+}
+
+
+class ApiUsageCollector:
+    """Collects API usage/quota data directly from provider endpoints.
+
+    Reads auth profiles from OpenClaw's auth-profiles.json, then calls each
+    provider's usage API to get real quota windows (daily/weekly percentages,
+    reset times, etc.).
+
+    Runs in a background thread. The HTTP handler reads the cached result.
+    """
+
+    INTERVAL = 60  # seconds between collections
+    REQUEST_TIMEOUT = 15  # seconds per provider API call
+
+    def __init__(self, auth_profiles_path):
+        self._auth_profiles_path = auth_profiles_path
+        self._data = {"providers": [], "timestamp": 0, "source": "initializing"}
+        self._lock = threading.Lock()
+        self._thread = None
+
+    def start(self):
+        """Start the background collection thread."""
+        self._thread = threading.Thread(target=self._run_loop, daemon=True, name="api-usage-collector")
+        self._thread.start()
+
+    def get_data(self):
+        """Thread-safe read of the latest usage data."""
+        with self._lock:
+            return dict(self._data)
+
+    def _run_loop(self):
+        import time as _time
+        _time.sleep(3)  # let server start
+        while True:
+            try:
+                data = self._collect()
+                with self._lock:
+                    self._data = data
+            except Exception as e:
+                with self._lock:
+                    self._data = {"providers": [], "timestamp": _time.time(), "error": str(e), "source": "error"}
+            _time.sleep(self.INTERVAL)
+
+    def _read_profiles(self):
+        """Read auth profiles and return {profileId: profileData} for supported providers."""
+        try:
+            with open(self._auth_profiles_path, "r") as f:
+                ap = json.load(f)
+            return ap.get("profiles", {})
+        except Exception:
+            return {}
+
+    def _collect(self):
+        """Run one collection cycle across all configured providers."""
+        import time as _time
+        now = _time.time()
+        profiles = self._read_profiles()
+        if not profiles:
+            return {"providers": [], "timestamp": now, "source": "no-profiles"}
+
+        providers = []
+        seen = set()
+
+        for pid, profile in profiles.items():
+            prov = profile.get("provider", pid.split(":")[0])
+            if prov in seen:
+                continue
+
+            token = profile.get("access") or profile.get("token")
+            api_key = profile.get("key")
+            account_id = profile.get("accountId")
+
+            result = None
+            if prov == "anthropic" and token:
+                result = self._fetch_claude(token, now)
+            elif prov == "openai-codex" and token:
+                result = self._fetch_codex(token, account_id, now)
+            elif prov == "github-copilot" and token:
+                result = self._fetch_copilot(token, now)
+            elif api_key and prov not in ("ollama", "lmstudio"):
+                # API key provider — no usage endpoint, just list it
+                result = {
+                    "provider": prov,
+                    "displayName": _PROVIDER_LABELS.get(prov, prov.replace("-", " ").title()),
+                    "type": "api_key",
+                    "usage": None,
+                }
+
+            if result:
+                providers.append(result)
+                seen.add(prov)
+
+        return {"providers": providers, "timestamp": now, "source": "direct-api"}
+
+    def _http_get(self, url, headers):
+        """Make an HTTP GET request. Returns (status, response_body_dict_or_None)."""
+        import urllib.request
+        import urllib.error
+        req = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=self.REQUEST_TIMEOUT) as resp:
+                body = json.loads(resp.read().decode())
+                return resp.status, body
+        except urllib.error.HTTPError as e:
+            # Try to parse error body
+            try:
+                body = json.loads(e.read().decode())
+            except Exception:
+                body = None
+            return e.code, body
+        except Exception:
+            return 0, None
+
+    # --- Anthropic (Claude) ---
+    def _fetch_claude(self, token, now):
+        """Fetch Claude usage from Anthropic OAuth endpoint."""
+        status, data = self._http_get("https://api.anthropic.com/api/oauth/usage", {
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "openclaw",
+            "Accept": "application/json",
+            "anthropic-version": "2023-06-01",
+            "anthropic-beta": "oauth-2025-04-20",
+        })
+        entry = {
+            "provider": "anthropic",
+            "displayName": _PROVIDER_LABELS.get("anthropic", "Claude"),
+        }
+        if status != 200 or not data:
+            msg = ""
+            if data and isinstance(data, dict):
+                msg = data.get("error", {}).get("message", "") if isinstance(data.get("error"), dict) else str(data.get("error", ""))
+            entry["error"] = f"HTTP {status}: {msg}" if msg else f"HTTP {status}"
+            return entry
+
+        # Parse usage windows
+        windows = []
+        if isinstance(data.get("five_hour"), dict) and data["five_hour"].get("utilization") is not None:
+            windows.append({
+                "label": "5h",
+                "usedPercent": min(100, max(0, data["five_hour"]["utilization"])),
+                "resetAt": int(self._parse_ts(data["five_hour"].get("resets_at"))) if data["five_hour"].get("resets_at") else 0,
+            })
+        if isinstance(data.get("seven_day"), dict) and data["seven_day"].get("utilization") is not None:
+            windows.append({
+                "label": "Week",
+                "usedPercent": min(100, max(0, data["seven_day"]["utilization"])),
+                "resetAt": int(self._parse_ts(data["seven_day"].get("resets_at"))) if data["seven_day"].get("resets_at") else 0,
+            })
+        # Model-specific windows (sonnet/opus)
+        for key, label in [("seven_day_sonnet", "Sonnet"), ("seven_day_opus", "Opus")]:
+            mw = data.get(key)
+            if isinstance(mw, dict) and mw.get("utilization") is not None:
+                windows.append({
+                    "label": label,
+                    "usedPercent": min(100, max(0, mw["utilization"])),
+                })
+
+        if windows:
+            entry["usage"] = self._windows_to_usage(windows, now)
+            entry["windows"] = windows
+        return entry
+
+    # --- OpenAI Codex ---
+    def _fetch_codex(self, token, account_id, now):
+        """Fetch Codex/ChatGPT usage from OpenAI endpoint."""
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "CodexBar",
+            "Accept": "application/json",
+        }
+        if account_id:
+            headers["ChatGPT-Account-Id"] = account_id
+
+        status, data = self._http_get("https://chatgpt.com/backend-api/wham/usage", headers)
+        entry = {
+            "provider": "openai-codex",
+            "displayName": _PROVIDER_LABELS.get("openai-codex", "Codex"),
+        }
+        if status != 200 or not data:
+            entry["error"] = f"HTTP {status}"
+            return entry
+
+        windows = []
+        rl = data.get("rate_limit", {})
+
+        # Primary window (usually 3h or 5h)
+        pw = rl.get("primary_window")
+        if pw:
+            hours = round((pw.get("limit_window_seconds", 10800)) / 3600)
+            windows.append({
+                "label": f"{hours}h",
+                "usedPercent": min(100, max(0, pw.get("used_percent", 0))),
+                "resetAt": int(pw["reset_at"] * 1000) if pw.get("reset_at") else 0,
+            })
+
+        # Secondary window (usually week)
+        sw = rl.get("secondary_window")
+        if sw:
+            hours = round((sw.get("limit_window_seconds", 86400)) / 3600)
+            # Determine label
+            label = "Week" if hours >= 168 else f"{hours}h" if hours < 24 else "Day"
+            # Check if gap between resets suggests weekly
+            if pw and sw.get("reset_at") and pw.get("reset_at"):
+                if sw["reset_at"] - pw["reset_at"] >= 4320 * 60:
+                    label = "Week"
+            windows.append({
+                "label": label,
+                "usedPercent": min(100, max(0, sw.get("used_percent", 0))),
+                "resetAt": int(sw["reset_at"] * 1000) if sw.get("reset_at") else 0,
+            })
+
+        # Plan info
+        plan = data.get("plan_type")
+        credits = data.get("credits", {})
+        if credits.get("balance") is not None:
+            balance = float(credits["balance"]) if credits["balance"] else 0
+            plan = f"{plan} (${balance:.2f})" if plan else f"${balance:.2f}"
+        entry["plan"] = plan
+
+        if windows:
+            entry["usage"] = self._windows_to_usage(windows, now)
+            entry["windows"] = windows
+        return entry
+
+    # --- GitHub Copilot ---
+    def _fetch_copilot(self, token, now):
+        """Fetch GitHub Copilot usage."""
+        status, data = self._http_get("https://api.github.com/copilot_internal/v2/token", {
+            "Authorization": f"token {token}",
+            "Accept": "application/json",
+            "User-Agent": "openclaw",
+        })
+        entry = {
+            "provider": "github-copilot",
+            "displayName": _PROVIDER_LABELS.get("github-copilot", "Copilot"),
+        }
+        if status != 200:
+            entry["error"] = f"HTTP {status}"
+        # Copilot doesn't expose usage windows in the same way
+        return entry
+
+    # --- Helpers ---
+    @staticmethod
+    def _windows_to_usage(windows, now):
+        """Convert raw windows list to structured usage object with pctLeft/timeLeft."""
+        usage = {}
+        for w in windows:
+            label = (w.get("label") or "").lower()
+            used = w.get("usedPercent", 0)
+            left = 100 - used
+            reset_at = w.get("resetAt", 0)
+            time_left = ApiUsageCollector._format_time_left(reset_at, now) if reset_at else ""
+
+            if label in ("5h", "day", "daily", "24h", "3h"):
+                usage["dailyPctLeft"] = left
+                usage["dailyWindow"] = w.get("label", "Day")
+                usage["dailyTimeLeft"] = time_left
+            elif label in ("week", "weekly"):
+                usage["weeklyPctLeft"] = left
+                usage["weeklyTimeLeft"] = time_left
+            elif label in ("month", "monthly"):
+                usage["monthlyPctLeft"] = left
+                usage["monthlyTimeLeft"] = time_left
+            elif label in ("sonnet", "opus"):
+                usage[f"{label}PctLeft"] = left
+            else:
+                usage[f"{label}PctLeft"] = left
+                usage[f"{label}TimeLeft"] = time_left
+        return usage
+
+    @staticmethod
+    def _format_time_left(reset_at_ms, now_s):
+        """Format time until reset as human-readable string."""
+        diff = (reset_at_ms / 1000) - now_s
+        if diff <= 0:
+            return "resetting..."
+        hours = int(diff // 3600)
+        mins = int((diff % 3600) // 60)
+        if hours > 24:
+            days = hours // 24
+            return f"{days}d {hours % 24}h"
+        if hours > 0:
+            return f"{hours}h {mins}m"
+        return f"{mins}m"
+
+    @staticmethod
+    def _parse_ts(val):
+        """Parse a timestamp string to milliseconds."""
+        if not val:
+            return 0
+        if isinstance(val, (int, float)):
+            return val * 1000 if val < 1e12 else val
+        try:
+            from datetime import datetime, timezone
+            dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            return dt.timestamp() * 1000
+        except Exception:
+            return 0
+
+
+# Initialize the collector (started in __main__)
+_api_usage_collector = ApiUsageCollector(AUTH_PROFILES_PATH)
+
+
 class OfficeHandler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=APP_DIR, **kwargs)
@@ -665,22 +986,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             super().do_GET()
 
     def _get_api_usage(self):
-        """Get API usage data from shared file written by host-side collector."""
+        """Return the latest API usage data collected by the background thread."""
         import time as _time
-        usage_file = os.path.join(STATUS_DIR, "api-usage.json")
-        try:
-            if os.path.exists(usage_file):
-                with open(usage_file) as f:
-                    data = json.load(f)
-                # Add staleness check — if data is older than 2 min, flag it
-                age = _time.time() - data.get("timestamp", 0)
-                data["ageSeconds"] = round(age, 1)
-                data["stale"] = age > 120
-                return data
-            else:
-                return {"providers": [], "timestamp": _time.time(), "error": "No usage data yet"}
-        except Exception as e:
-            return {"providers": [], "timestamp": _time.time(), "error": str(e)}
+        now = _time.time()
+        data = dict(_api_usage_collector.get_data())
+        data["ageSeconds"] = round(now - data.get("timestamp", 0), 1)
+        return data
 
     def _read_agent_bio(self, agent_key):
         """Read agent's .md files and return structured bio data."""
@@ -956,43 +1267,253 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         }
         return self._send_watcher_request(request)
 
-    def _delete_provider_key(self, provider):
-        """Delete a cloud provider API key via watcher."""
+    def _delete_provider_key(self, provider, profile_id=""):
+        """Delete a cloud provider API key."""
         request = {
             "type": "delete-key",
-            "provider": provider
+            "provider": provider,
+            "profileId": profile_id
         }
         return self._send_watcher_request(request)
 
-    def _save_custom_provider(self, provider, base_url, models):
-        """Save a custom provider config via watcher."""
+    def _save_custom_provider(self, provider, base_url, models, params=None):
+        """Save a custom provider config."""
         request = {
             "type": "save-custom-provider",
             "provider": provider,
             "baseUrl": base_url,
-            "models": models
+            "models": models,
         }
+        if params:
+            request["params"] = params
         return self._send_watcher_request(request)
 
     def _send_watcher_request(self, request):
-        """Send a request to the host-side watcher and wait for result."""
-        import time
+        """Handle config change requests directly — no external watcher needed."""
         try:
-            with open(os.path.join(STATUS_DIR, "model-change-request.json"), "w") as f:
-                json.dump(request, f)
-            os.chmod(os.path.join(STATUS_DIR, "model-change-request.json"), 0o666)
-            os.chmod(os.path.join(STATUS_DIR, "model-change-request.json"), 0o666)
-            for _ in range(20):  # wait up to 10 seconds
-                time.sleep(0.5)
-                result_path = os.path.join(STATUS_DIR, "model-change-result.json")
-                if os.path.exists(result_path):
-                    with open(result_path, "r") as f:
-                        result = json.load(f)
-                    os.remove(result_path)
-                    return result
-            return {"ok": False, "error": "Timeout waiting for change to apply"}
+            req_type = request.get("type", "")
+
+            if req_type == "set-model":
+                return self._handle_set_model(request)
+            elif req_type == "save-key":
+                return self._handle_save_key(request)
+            elif req_type == "delete-key":
+                return self._handle_delete_key(request)
+            elif req_type == "save-custom-provider":
+                return self._handle_save_custom_provider(request)
+            else:
+                return {"ok": False, "error": f"Unknown request type: {req_type}"}
         except Exception as e:
-            return {"ok": False, "error": f"Failed: {e}"}
+            return {"ok": False, "error": str(e)}
+
+    def _handle_set_model(self, req):
+        """Set an agent's model in openclaw.json and signal the gateway."""
+        agent_id = req["agent_id"]
+        model_id = req.get("model", "")
+
+        with open(CONFIG_PATH) as f:
+            cfg = json.load(f)
+
+        found = False
+        for a in cfg.get("agents", {}).get("list", []):
+            if a["id"] == agent_id:
+                if model_id:
+                    a["model"] = model_id
+                elif "model" in a:
+                    del a["model"]
+                found = True
+                break
+
+        if not found:
+            return {"ok": False, "error": f"Agent {agent_id} not found in config"}
+
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(cfg, f, indent=2)
+
+        self._signal_gateway(restart=True)
+        return {"ok": True, "agent": agent_id, "model": model_id or "(default)"}
+
+    def _handle_save_key(self, req):
+        """Save an API key to auth-profiles and openclaw.json."""
+        provider = req["provider"]
+        key = req["key"]
+
+        # Update auth-profiles.json
+        try:
+            with open(AUTH_PROFILES_PATH) as f:
+                ap = json.load(f)
+        except Exception:
+            ap = {"version": 1, "profiles": {}, "lastGood": {}}
+
+        profile_id = f"{provider}:default"
+        ap["profiles"][profile_id] = {"type": "api_key", "provider": provider, "key": key}
+        ap["lastGood"][provider] = profile_id
+
+        with open(AUTH_PROFILES_PATH, "w") as f:
+            json.dump(ap, f, indent=2)
+
+        # Mirror in openclaw.json
+        with open(CONFIG_PATH) as f:
+            cfg = json.load(f)
+        cfg.setdefault("auth", {}).setdefault("profiles", {})[profile_id] = {"provider": provider, "mode": "api_key"}
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(cfg, f, indent=2)
+
+        self._signal_gateway(restart=False)
+        masked = key[:4] + "••••••••" if len(key) > 4 else "****"
+        return {"ok": True, "provider": provider, "maskedKey": masked}
+
+    def _handle_delete_key(self, req):
+        """Delete an API key from auth-profiles and openclaw.json."""
+        provider = req["provider"]
+        profile_id = req.get("profileId")
+        deleted = []
+
+        try:
+            with open(AUTH_PROFILES_PATH) as f:
+                ap = json.load(f)
+            if profile_id:
+                to_delete = [profile_id] if profile_id in ap.get("profiles", {}) else []
+            else:
+                candidates = [f"{provider}:default", f"{provider}:api"]
+                to_delete = [k for k in candidates if k in ap.get("profiles", {})]
+
+            for k in to_delete:
+                del ap["profiles"][k]
+                deleted.append(k)
+                if k in ap.get("usageStats", {}):
+                    del ap["usageStats"][k]
+            if ap.get("lastGood", {}).get(provider) in deleted:
+                del ap["lastGood"][provider]
+
+            with open(AUTH_PROFILES_PATH, "w") as f:
+                json.dump(ap, f, indent=2)
+        except Exception:
+            pass
+
+        # Mirror in openclaw.json
+        try:
+            with open(CONFIG_PATH) as f:
+                cfg = json.load(f)
+            for k in deleted:
+                cfg.get("auth", {}).get("profiles", {}).pop(k, None)
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(cfg, f, indent=2)
+        except Exception:
+            pass
+
+        self._signal_gateway(restart=False)
+        return {"ok": True, "provider": provider, "deletedProfiles": deleted}
+
+    def _handle_save_custom_provider(self, req):
+        """Save a custom provider (ollama, lmstudio, etc.) to openclaw.json."""
+        provider = req["provider"]
+        base_url = req.get("baseUrl", "")
+        models = req.get("models", [])
+
+        with open(CONFIG_PATH) as f:
+            cfg = json.load(f)
+
+        cfg.setdefault("models", {}).setdefault("providers", {})
+        existing = cfg["models"]["providers"].get(provider, {})
+        existing["baseUrl"] = base_url
+        if not existing.get("api"):
+            existing["api"] = "openai-completions"
+
+        old_models = {m["id"]: m for m in existing.get("models", [])}
+        new_models = []
+        for m in models:
+            if m["id"] in old_models:
+                updated = old_models[m["id"]]
+                updated["name"] = m.get("name", updated.get("name", m["id"]))
+                if "contextWindow" in m:
+                    updated["contextWindow"] = m["contextWindow"]
+                if "maxTokens" in m:
+                    updated["maxTokens"] = m["maxTokens"]
+                new_models.append(updated)
+            else:
+                new_models.append({
+                    "id": m["id"],
+                    "name": m.get("name", m["id"]),
+                    "reasoning": False,
+                    "input": ["text"],
+                    "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
+                    "contextWindow": m.get("contextWindow", 100000),
+                    "maxTokens": m.get("maxTokens", 8192),
+                })
+        existing["models"] = new_models
+        cfg["models"]["providers"][provider] = existing
+
+        # Save inference params
+        params = req.get("params", {})
+        if params:
+            defaults_models = cfg.setdefault("agents", {}).setdefault("defaults", {}).setdefault("models", {})
+            for model_id, model_params in params.items():
+                defaults_models.setdefault(model_id, {})["params"] = model_params
+
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(cfg, f, indent=2)
+
+        self._signal_gateway(restart=False)
+        return {"ok": True, "provider": provider, "modelCount": len(new_models)}
+
+    @staticmethod
+    def _signal_gateway(restart=False):
+        """Signal the OpenClaw gateway to reload config.
+
+        Tries multiple approaches in order:
+        1. systemctl --user (Linux service — works when running on host)
+        2. Signal via /proc scan (works with --pid host in Docker)
+        3. Signal file (gateway watches for restart trigger)
+
+        Config changes are persisted to disk regardless — gateway picks them up
+        on next restart/heartbeat even if signaling fails.
+        """
+        import subprocess
+        import signal as _signal
+
+        # Method 1: systemctl (works on host or with systemd access)
+        try:
+            if restart:
+                r = subprocess.run(["systemctl", "--user", "restart", "openclaw-gateway.service"],
+                                   capture_output=True, timeout=10)
+            else:
+                r = subprocess.run(["systemctl", "--user", "kill", "-s", "USR1", "openclaw-gateway.service"],
+                                   capture_output=True, timeout=5)
+            if r.returncode == 0:
+                return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        # Method 2: scan /proc for gateway process (works with --pid host)
+        try:
+            for pid_dir in os.listdir("/proc"):
+                if not pid_dir.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{pid_dir}/cmdline", "rb") as f:
+                        cmdline = f.read().decode("utf-8", errors="ignore")
+                    if "openclaw" in cmdline and ("gateway" in cmdline or "serve" in cmdline):
+                        os.kill(int(pid_dir), _signal.SIGUSR2 if restart else _signal.SIGUSR1)
+                        return True
+                except (PermissionError, ProcessLookupError, FileNotFoundError):
+                    continue
+        except Exception:
+            pass
+
+        # Method 3: pgrep fallback
+        try:
+            result = subprocess.run(["pgrep", "-f", "openclaw"],
+                                    capture_output=True, text=True, timeout=5)
+            for pid in result.stdout.strip().split("\n"):
+                if pid.strip():
+                    os.kill(int(pid.strip()), _signal.SIGUSR1)
+                    return True
+        except Exception:
+            pass
+
+        # Config saved to disk — gateway will pick up changes on next restart
+        return False
 
     def _get_models(self):
         """Read available models from openclaw.json."""
@@ -1053,9 +1574,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 elif profile.get("type") == "oauth" or profile.get("access"):
                     oauth_providers[base_prov] = f"{base_prov}-oauth"
             
-            # DEBUG
-            import sys
-            print(f"DEBUG oauth_providers: {oauth_providers}", file=sys.stderr)
+            pass  # oauth_providers built
             
             # Add subscription versions of configured models for providers with both API+token
             subscription_models = []
@@ -1074,7 +1593,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             models.extend(subscription_models)
         except Exception as e:
             import sys, traceback
-            print(f"DEBUG error: {e}", file=sys.stderr)
+            pass  # silently ignore subscription model errors
             traceback.print_exc(file=sys.stderr)
 
         # Ollama models from config
@@ -1330,7 +1849,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == "/config/providers/delete-key":
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
-            result = self._delete_provider_key(body.get("provider", ""))
+            result = self._delete_provider_key(body.get("provider", ""), body.get("profileId", ""))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -1339,7 +1858,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == "/config/providers/save-custom":
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
-            result = self._save_custom_provider(body.get("provider", ""), body.get("baseUrl", ""), body.get("models", []))
+            result = self._save_custom_provider(body.get("provider", ""), body.get("baseUrl", ""), body.get("models", []), body.get("params"))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -1367,7 +1886,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == "/clear-notify":
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
-            agent_key = body.get("agent", "")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -1574,7 +2092,7 @@ def start_http_server():
     if gw_token:
         gateway_presence.start(gw_url, gw_token, port=PORT)
     else:
-        print("\u26a0\ufe0f  No gateway token found \u2014 gateway presence disabled")
+        print("⚠️  No gateway token found — gateway presence disabled")
 
     # Start periodic snapshot saver (every 30s)
     def snapshot_loop():
@@ -1586,16 +2104,19 @@ def start_http_server():
     snap_thread.start()
 
     _oname = VO_CONFIG["office"]["name"]
-    print(f"\U0001f3e2 {_oname} \u2192 http://localhost:{PORT}")
+    print(f"🏢 {_oname} → http://localhost:{PORT}")
     server = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), OfficeHandler)
     server.serve_forever()
 
+
 if __name__ == "__main__":
+    # Start API usage collector background thread
+    _api_usage_collector.start()
+    print("📊 API usage collector started (polls every 60s)")
+
     # Start WS proxy in a background thread
     ws_thread = threading.Thread(target=start_ws_server, daemon=True)
     ws_thread.start()
 
     # Start HTTP server in main thread
-    start_http_server()
- # Start HTTP server in main thread
     start_http_server()
