@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Virtual Office — Setup</title>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #0a0a0f;
+            color: #e8e8f0;
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .setup-card {
+            background: #1a1a2e;
+            border: 2px solid #ffd700;
+            border-radius: 16px;
+            padding: 40px;
+            max-width: 600px;
+            width: 100%;
+            box-shadow: 0 0 40px rgba(255, 215, 0, 0.15);
+        }
+        h1 { font-family: 'Press Start 2P', cursive; font-size: 16px; color: #ffd700; text-align: center; margin-bottom: 8px; }
+        .subtitle { text-align: center; color: #888; font-size: 15px; margin-bottom: 32px; }
+        .step { display: none; }
+        .step.active { display: block; }
+        .step-title { font-family: 'Press Start 2P', cursive; font-size: 10px; color: #ffd700; margin-bottom: 16px; }
+        .step-desc { color: #aaa; font-size: 15px; margin-bottom: 20px; line-height: 1.6; }
+        label { display: block; font-size: 14px; color: #ccc; margin-bottom: 6px; margin-top: 16px; }
+        input[type=text] { width: 100%; padding: 12px 16px; background: #0d0d1e; border: 1px solid #2a2a4e; border-radius: 8px; color: #e8e8f0; font-size: 15px; outline: none; }
+        input:focus { border-color: #ffd700; }
+        .btn-row { display: flex; justify-content: space-between; margin-top: 28px; gap: 12px; }
+        button { padding: 12px 28px; border: 2px solid #ffd700; background: #1a1a2e; color: #ffd700; font-family: 'Press Start 2P', cursive; font-size: 10px; border-radius: 8px; cursor: pointer; transition: all 0.2s; }
+        button:hover { background: #ffd700; color: #0a0a0f; }
+        button.secondary { border-color: #555; color: #888; }
+        button.secondary:hover { background: #333; color: #fff; }
+        .status-box { margin-top: 16px; padding: 14px; border-radius: 8px; font-size: 15px; }
+        .status-box.success { background: rgba(76,175,80,0.15); border: 1px solid #4caf50; color: #81c784; }
+        .status-box.error { background: rgba(244,67,54,0.15); border: 1px solid #f44336; color: #ef9a9a; }
+        .status-box.info { background: rgba(33,150,243,0.15); border: 1px solid #2196f3; color: #90caf9; }
+        .agent-list-preview { max-height: 200px; overflow-y: auto; margin-top: 12px; }
+        .agent-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #1a1a2e; font-size: 15px; }
+        .agent-row .emoji { font-size: 18px; }
+        .agent-row .name { color: #e8e8f0; }
+        .agent-row .role { color: #888; font-size: 13px; }
+        .progress-dots { display: flex; justify-content: center; gap: 8px; margin-bottom: 24px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; background: #2a2a4e; transition: background 0.3s; }
+        .dot.active { background: #ffd700; }
+        .dot.done { background: #4caf50; }
+        .note { background: #0d0d1e; border: 1px solid #2a2a4e; border-radius: 8px; padding: 16px; margin-top: 12px; font-size: 13px; color: #999; line-height: 1.6; }
+        .note b { color: #ffd700; }
+    </style>
+</head>
+<body>
+    <div class="setup-card">
+        <h1>⚡ MY VIRTUAL OFFICE</h1>
+        <p class="subtitle">First-time setup</p>
+
+        <div class="progress-dots">
+            <div class="dot active" id="dot-0"></div>
+            <div class="dot" id="dot-1"></div>
+            <div class="dot" id="dot-2"></div>
+            <div class="dot" id="dot-3"></div>
+            <div class="dot" id="dot-4"></div>
+            <div class="dot" id="dot-5"></div>
+            <div class="dot" id="dot-6"></div>
+        </div>
+
+        <!-- Step 0: License Key -->
+        <div class="step active" id="step-0">
+            <div class="step-title">LICENSE KEY</div>
+            <div class="step-desc">Enter your license key to unlock all features, or continue with the free demo.</div>
+            <label>License Key</label>
+            <input type="text" id="s-license-key" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" style="font-family:monospace;letter-spacing:1px;">
+            <div id="license-status" style="margin-top:12px;"></div>
+            <div class="btn-row" style="margin-top:12px;">
+                <button onclick="activateLicense()" style="font-size:9px;padding:8px 16px;">🔑 ACTIVATE</button>
+            </div>
+            <div class="note" style="margin-top:20px;">
+                <b>Demo mode:</b> Free to use with up to 3 agents. Browser panel, SMS panel, model manager, cron manager, and whisper are locked.<br><br>
+                <b>Full license ($35.99):</b> Unlimited agents, all features unlocked.<br>
+                <b>Early bird ($9.99):</b> Same as full — limited-time launch price.<br><br>
+                Get your key at <a href="https://myvirtualoffice.ai" style="color:#90caf9;" target="_blank">myvirtualoffice.ai</a>
+            </div>
+            <div class="btn-row">
+                <span></span>
+                <button onclick="nextStep(1)">SKIP / CONTINUE →</button>
+            </div>
+        </div>
+
+        <!-- Step 1: Office Name -->
+        <div class="step" id="step-1">
+            <div class="step-title">1. NAME YOUR OFFICE</div>
+            <div class="step-desc">Give your virtual office a name. This appears in the sidebar and page title.</div>
+            <label>Office Name</label>
+            <input type="text" id="s-name" value="My Virtual Office" placeholder="e.g. Acme Corp HQ">
+            <label>Weather Location <span style="color:#666;font-size:12px">(optional)</span></label>
+            <input type="text" id="s-weather" value="" placeholder="e.g. New+York,NY or London,UK">
+            <div class="btn-row">
+                <button class="secondary" onclick="nextStep(0)">← BACK</button>
+                <button onclick="nextStep(2)">NEXT →</button>
+            </div>
+        </div>
+
+        <!-- Step 2: Connect to OpenClaw -->
+        <div class="step" id="step-2">
+            <div class="step-title">2. CONNECT TO OPENCLAW</div>
+            <div class="step-desc">Tell the Virtual Office where your OpenClaw installation lives so it can find your agents.</div>
+
+            <label>OpenClaw Home Directory</label>
+            <input type="text" id="s-ocpath" value="" placeholder="/home/youruser/.openclaw">
+            <div style="font-size:13px;color:#999;margin:6px 0 4px;line-height:1.5;">
+                This is the folder that contains your <code style="color:#90caf9;">openclaw.json</code> and <code style="color:#90caf9;">agents/</code> directory.
+            </div>
+
+            <div class="note" style="margin:12px 0;">
+                <b>📁 Where to find it:</b><br><br>
+                <b>Linux/Mac (most common):</b><br>
+                <code style="color:#90caf9;">/home/youruser/.openclaw</code><br><br>
+                <b>Running Virtual Office in Docker?</b><br>
+                Use the path you mounted with <code>-v</code>. For example:<br>
+                <code style="color:#90caf9;font-size:13px;">docker run -v /home/eli/.openclaw:/openclaw ...</code><br>
+                → enter <code style="color:#90caf9;">/openclaw</code><br><br>
+                <b>Not sure?</b> Run this in your terminal:<br>
+                <code style="color:#90caf9;font-size:13px;">ls ~/.openclaw/openclaw.json</code><br>
+                If it prints a path, use the folder part (e.g. <code style="color:#90caf9;">/home/youruser/.openclaw</code>).
+            </div>
+
+            <button onclick="savePathAndDetect()" style="margin:8px 0 16px;padding:8px 16px;font-size:9px;">🔍 DETECT AGENTS</button>
+
+            <div id="agent-status"></div>
+            <div class="agent-list-preview" id="agent-preview"></div>
+
+            <div id="no-agents-help" style="display:none;">
+                <div class="note" style="border-color:#f4a236;">
+                    <b>🔧 No agents found? Here's what to check:</b><br><br>
+                    <b>1. Is the path correct?</b><br>
+                    The folder should contain <code>openclaw.json</code> and an <code>agents/</code> directory.<br><br>
+                    <b>2. Do you have agents configured?</b><br>
+                    Open your <code>openclaw.json</code> and look for <code>"agents"</code> → <code>"list"</code>. Each agent needs a workspace directory.<br><br>
+                    <b>3. Running in Docker?</b><br>
+                    Make sure you mounted your OpenClaw directory into the container:<br>
+                    <code style="color:#90caf9;font-size:13px;">docker run -v /path/to/.openclaw:/openclaw ...</code><br><br>
+                    <b>4. Permissions?</b><br>
+                    The Virtual Office server needs read access to the agents/ folder.<br><br>
+                    <b>Still stuck?</b> You can skip this step and set the path later from ☰ Menu. The office will work — agents just won't appear until connected.
+                </div>
+            </div>
+
+            <div class="btn-row">
+                <button class="secondary" onclick="nextStep(1)">← BACK</button>
+                <button onclick="nextStep(3)">NEXT →</button>
+            </div>
+        </div>
+
+        <!-- Step 3: Browser -->
+        <div class="step" id="step-3">
+            <div class="step-title">3. AGENT BROWSER (OPTIONAL)</div>
+            <div class="step-desc">Connect a browser so your agents can browse the web and you can watch live. You can skip this and set it up later.</div>
+
+            <label style="display:flex;align-items:center;gap:8px;margin-top:12px;">
+                <input type="checkbox" id="s-browser-enable"> Enable Agent Browser
+            </label>
+
+            <div id="browser-fields" style="display:none;margin-top:16px;">
+                <label>CDP URL <span style="color:#666;font-size:12px">(Chrome DevTools Protocol)</span></label>
+                <input type="text" id="s-cdp-url" placeholder="http://127.0.0.1:9222">
+                <div style="font-size:12px;color:#666;margin:4px 0 12px;">The address where Chrome/Chromium remote debugging is running.</div>
+
+                <label>Browser Viewer URL <span style="color:#666;font-size:12px">(VNC / live view)</span></label>
+                <input type="text" id="s-viewer-url" placeholder="http://127.0.0.1:6901">
+                <div style="font-size:12px;color:#666;margin:4px 0 12px;">URL for the live browser view (KasmVNC, noVNC, etc.). This is what shows in the floating browser window so you can watch your agents browse in real time.</div>
+
+                <button onclick="testBrowserConnection()" style="margin:8px 0 16px;padding:8px 16px;font-size:9px;">🔍 TEST CONNECTION</button>
+                <div id="browser-test-status"></div>
+            </div>
+
+            <div class="note">
+                <b>What is this?</b> The Agent Browser gives your AI agents a real web browser you can watch live. You need two things:<br><br>
+                <b>1. CDP (Chrome DevTools Protocol)</b> — how agents control the browser<br>
+                <b>2. VNC Viewer</b> — how you watch the browser live in the office<br><br>
+                <b>Easiest setup — one Docker command:</b><br>
+                <code style="color:#90caf9;font-size:13px;">docker run -d --name vo-browser \<br>&nbsp;&nbsp;-p 9222:9222 -p 6901:6901 \<br>&nbsp;&nbsp;kasmweb/chromium:1.17.0</code><br><br>
+                This gives you both:<br>
+                • CDP URL: <code style="color:#90caf9;">http://127.0.0.1:9222</code><br>
+                • Viewer URL: <code style="color:#90caf9;">http://127.0.0.1:6901</code><br><br>
+                <b>Or use your own Chrome + VNC:</b><br>
+                <code style="color:#90caf9;font-size:13px;">google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/vo-browser</code><br>
+                Then point Viewer URL to your VNC/noVNC server.<br><br>
+                <b>Not sure?</b> Skip this step — everything else works without it. You can set it up later from ☰ Menu.
+            </div>
+
+            <div class="btn-row">
+                <button class="secondary" onclick="nextStep(2)">← BACK</button>
+                <button onclick="nextStep(4)">NEXT →</button>
+            </div>
+        </div>
+
+        <!-- Step 4: SMS -->
+        <div class="step" id="step-4">
+            <div class="step-title">4. SMS PANEL (OPTIONAL)</div>
+            <div class="step-desc">Let an AI agent send and receive SMS messages through your office. You can skip this and set it up later.</div>
+
+            <label style="display:flex;align-items:center;gap:8px;margin-top:12px;">
+                <input type="checkbox" id="s-sms-enable"> Enable SMS Panel
+            </label>
+
+            <div id="sms-fields" style="display:none;margin-top:16px;">
+                <label>SMS Agent <span style="color:#666;font-size:12px">(which agent handles SMS)</span></label>
+                <select id="s-sms-agent" style="width:100%;padding:10px 14px;background:#0d0d1e;border:1px solid #2a2a4e;border-radius:8px;color:#e8e8f0;font-size:14px;">
+                    <option value="">Select an agent...</option>
+                </select>
+                <div style="font-size:12px;color:#666;margin:4px 0 12px;">This agent will be shown as the sender/receiver in the SMS panel.</div>
+
+                <label>Twilio Account SID</label>
+                <input type="text" id="s-twilio-sid" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx">
+
+                <label>Twilio Auth Token</label>
+                <input type="text" id="s-twilio-token" placeholder="Your Twilio auth token">
+
+                <label>Twilio Phone Number <span style="color:#666;font-size:12px">(your Twilio number)</span></label>
+                <input type="text" id="s-twilio-from" placeholder="+1XXXXXXXXXX">
+
+                <div style="font-size:12px;color:#666;margin:8px 0 4px;">All three Twilio fields are required for sending SMS.</div>
+            </div>
+
+            <div class="note">
+                <b>What is this?</b> The SMS Panel lets you send and receive text messages through an AI agent in your office.<br><br>
+                <b>What you need:</b><br>
+                <b>1.</b> A <a href="https://www.twilio.com/try-twilio" style="color:#90caf9;" target="_blank">Twilio account</a> (free trial works)<br>
+                <b>2.</b> A Twilio phone number (you get one free with trial)<br>
+                <b>3.</b> Your Account SID and Auth Token from the <a href="https://console.twilio.com/" style="color:#90caf9;" target="_blank">Twilio Console</a> dashboard<br><br>
+                <b>How to get started:</b><br>
+                • Sign up at <code style="color:#90caf9;">twilio.com/try-twilio</code><br>
+                • Copy your Account SID and Auth Token from the dashboard<br>
+                • Get a phone number from Console → Phone Numbers → Buy a Number<br>
+                • Paste all three values above<br><br>
+                <b>Not sure?</b> Skip this step — everything else works without it. You can enable it later from ☰ Menu.
+            </div>
+
+            <div class="btn-row">
+                <button class="secondary" onclick="nextStep(3)">← BACK</button>
+                <button onclick="nextStep(5)">NEXT →</button>
+            </div>
+        </div>
+
+        
+        <!-- Step 5: PC Performance -->
+        <div class="step" id="step-5">
+            <div class="step-title">5. PC PERFORMANCE (OPTIONAL)</div>
+            <div class="step-desc">Monitor a PC's CPU, RAM, and GPU stats live in your office dashboard. You can skip this and set it up later.</div>
+
+            <label style="display:flex;align-items:center;gap:8px;margin-top:12px;">
+                <input type="checkbox" id="s-pcmetrics-enable"> Enable PC Performance Monitor
+            </label>
+
+            <div id="pcmetrics-fields" style="display:none;margin-top:16px;">
+                <label>Metrics Server URL</label>
+                <input type="text" id="s-pcmetrics-url" placeholder="http://192.168.1.100:8099">
+                <div style="font-size:12px;color:#666;margin:4px 0 12px;">The address where the PC Metrics Server is running. This can be a local or remote machine.</div>
+
+                <button onclick="testPcMetrics()" style="margin:8px 0 16px;padding:8px 16px;font-size:9px;">🔍 TEST CONNECTION</button>
+                <div id="pcmetrics-test-status"></div>
+            </div>
+
+            <div class="note">
+                <b>What is this?</b> The PC Performance panel shows live CPU, RAM, and GPU usage graphs in your office sidebar.<br><br>
+                <b>How it works:</b><br>
+                You run a small Python script on the PC you want to monitor. It exposes metrics on a port, and the Virtual Office reads from it.<br><br>
+                <b>Quick setup (on the target PC):</b><br>
+                <code style="color:#90caf9;font-size:13px;">pip install psutil</code><br>
+                <code style="color:#90caf9;font-size:13px;">python pc-metrics-server.py 8099</code><br><br>
+                The script is included with the Virtual Office at <code style="color:#90caf9;">/app/pc-metrics-server.py</code>. Copy it to any PC you want to monitor.<br><br>
+                <b>For GPU monitoring</b> (NVIDIA only):<br>
+                <code style="color:#90caf9;font-size:13px;">pip install pynvml</code><br><br>
+                <b>URL examples:</b><br>
+                • Same machine: <code style="color:#90caf9;">http://127.0.0.1:8099</code><br>
+                • LAN PC: <code style="color:#90caf9;">http://192.168.1.100:8099</code><br>
+                • Tailscale: <code style="color:#90caf9;">http://100.x.x.x:8099</code><br><br>
+                <b>Not sure?</b> Skip this step — you can enable it later from ☰ Menu → Settings.
+            </div>
+
+            <div class="btn-row">
+                <button class="secondary" onclick="nextStep(4)">← BACK</button>
+                <button onclick="nextStep(6)">NEXT →</button>
+            </div>
+        </div>
+
+        <!-- Step 6: Done -->
+        <div class="step" id="step-6">
+            <div class="step-title">6. YOU'RE ALL SET!</div>
+            <div class="step-desc">Your Virtual Office is ready. You can always change settings later from the ☰ Menu button in the toolbar.</div>
+            <div class="note">
+                <b>What you can do:</b>
+                <br>• <b>✏️ Edit Office</b> — Place furniture, resize canvas, paint walls & floors
+                <br>• <b>👤 Agents</b> — Customize agent appearance, assign desks, set branches
+                <br>• <b>💬 Chat</b> — Talk to any agent through the chat panel
+                <br>• <b>☰ Menu</b> — Change office name, connection settings, export/import config
+                <br><br>
+                <b>Want accurate presence?</b> Install the optional Virtual Office skill so agents report their working/idle status. See <code>/setup</code> docs for details.
+                <br><br>
+                <b>☁️ API Usage:</b> The sidebar automatically detects your AI providers (Anthropic, OpenAI, Google, etc.) from your OpenClaw config and shows live usage, quotas, and API key health. No extra setup needed — just connect to OpenClaw above.
+            </div>
+            <div id="save-status"></div>
+            <div class="btn-row">
+                <button class="secondary" onclick="nextStep(5)">← BACK</button>
+                <button onclick="finishSetup()">🚀 LAUNCH OFFICE</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        var currentStep = 0;
+
+        function nextStep(n) {
+            document.getElementById('step-' + currentStep).classList.remove('active');
+            document.getElementById('step-' + n).classList.add('active');
+            for (var i = 0; i <= 6; i++) {
+                var dot = document.getElementById('dot-' + i);
+                dot.className = 'dot';
+                if (i < n) dot.className = 'dot done';
+                if (i === n) dot.className = 'dot active';
+            }
+            currentStep = n;
+            if (n === 0) checkExistingLicense();
+            if (n === 2) discoverAgents();
+        }
+
+        function activateLicense() {
+            var key = document.getElementById('s-license-key').value.trim();
+            var statusEl = document.getElementById('license-status');
+            if (!key) {
+                statusEl.innerHTML = '<div class="status-box error">Please enter a license key</div>';
+                return;
+            }
+            statusEl.innerHTML = '<div class="status-box info">Validating...</div>';
+            fetch('/api/license/activate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ key: key })
+            }).then(function(r) { return r.json(); }).then(function(d) {
+                if (d.ok) {
+                    statusEl.innerHTML = '<div class="status-box success">✅ ' + d.tierName + ' license activated! All features unlocked.</div>';
+                } else {
+                    statusEl.innerHTML = '<div class="status-box error">❌ ' + (d.error || 'Invalid key') + '</div>';
+                }
+            }).catch(function(e) {
+                statusEl.innerHTML = '<div class="status-box error">Error: ' + e.message + '</div>';
+            });
+        }
+
+        function checkExistingLicense() {
+            fetch('/api/license').then(function(r) { return r.json(); }).then(function(d) {
+                if (d.licensed) {
+                    document.getElementById('license-status').innerHTML =
+                        '<div class="status-box success">✅ ' + d.tierName + ' license active</div>';
+                }
+            }).catch(function(){});
+        }
+        checkExistingLicense();
+
+        // Browser enable toggle
+        document.getElementById('s-browser-enable').addEventListener('change', function() {
+            document.getElementById('browser-fields').style.display = this.checked ? 'block' : 'none';
+        });
+
+        // SMS enable toggle
+        document.getElementById('s-sms-enable').addEventListener('change', function() {
+            document.getElementById('sms-fields').style.display = this.checked ? 'block' : 'none';
+            if (this.checked) populateSmsAgentSelect();
+        });
+
+        // PC Metrics enable toggle
+        document.getElementById('s-pcmetrics-enable').addEventListener('change', function() {
+            document.getElementById('pcmetrics-fields').style.display = this.checked ? 'block' : 'none';
+        });
+
+        function testPcMetrics() {
+            var url = document.getElementById('s-pcmetrics-url').value.trim();
+            var statusEl = document.getElementById('pcmetrics-test-status');
+            if (!url) {
+                statusEl.innerHTML = '<div class="status-box error">Please enter a Metrics Server URL</div>';
+                return;
+            }
+            statusEl.innerHTML = '<div class="status-box info">Saving and testing...</div>';
+            // Save config so server can proxy
+            fetch('/setup/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ features: { pcMetrics: true }, pcMetrics: { url: url } })
+            }).then(function() {
+                return fetch('/pc-metrics');
+            }).then(function(r) { return r.json(); }).then(function(data) {
+                if (data.error) {
+                    statusEl.innerHTML = '<div class="status-box error">❌ ' + data.error + '<br>Make sure pc-metrics-server.py is running on the target PC.</div>';
+                } else if (data.cpu) {
+                    var info = 'CPU: ' + (data.cpu.percent || 0).toFixed(0) + '% (' + (data.cpu.threads || '?') + ' threads)';
+                    info += ' · RAM: ' + (data.memory.percent || 0).toFixed(0) + '%';
+                    if (data.gpus && data.gpus.length > 0) info += ' · GPU: ' + data.gpus[0].name;
+                    statusEl.innerHTML = '<div class="status-box success">✅ Connected!<br>' + info + '</div>';
+                } else {
+                    statusEl.innerHTML = '<div class="status-box error">❌ Unexpected response. Make sure pc-metrics-server.py is running.</div>';
+                }
+            }).catch(function(e) {
+                statusEl.innerHTML = '<div class="status-box error">Error: ' + e.message + '</div>';
+            });
+        }
+
+        function populateSmsAgentSelect() {
+            var sel = document.getElementById('s-sms-agent');
+            if (sel.options.length > 1) return; // already populated
+            fetch('/api/agents').then(function(r) { return r.json(); }).then(function(d) {
+                (d.agents || []).forEach(function(a) {
+                    var opt = document.createElement('option');
+                    opt.value = a.key || a.agentId;
+                    opt.textContent = (a.emoji || '🤖') + ' ' + a.name;
+                    sel.appendChild(opt);
+                });
+            }).catch(function() {});
+        }
+
+        function testBrowserConnection() {
+            var cdpUrl = document.getElementById('s-cdp-url').value.trim();
+            var viewerUrl = document.getElementById('s-viewer-url').value.trim();
+            var statusEl = document.getElementById('browser-test-status');
+            if (!cdpUrl) {
+                statusEl.innerHTML = '<div class="status-box error">Please enter a CDP URL</div>';
+                return;
+            }
+            if (!viewerUrl) {
+                statusEl.innerHTML = '<div class="status-box error">Please enter a Browser Viewer URL — this is needed so you can watch the browser live</div>';
+                return;
+            }
+            statusEl.innerHTML = '<div class="status-box info">Saving and testing...</div>';
+            // Save browser config first so server can test it
+            fetch('/setup/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    features: { browserPanel: true },
+                    browser: { cdpUrl: cdpUrl, viewerUrl: viewerUrl || null }
+                })
+            }).then(function() {
+                return fetch('/browser-status');
+            }).then(function(r) { return r.json(); }).then(function(data) {
+                if (data.cdpAvailable) {
+                    statusEl.innerHTML = '<div class="status-box success">✅ Connected! CDP is reachable' + (viewerUrl ? ' and viewer URL is set.' : '.') + '</div>';
+                } else {
+                    statusEl.innerHTML = '<div class="status-box error">❌ Could not reach CDP at ' + cdpUrl + '<br>Make sure the browser is running with remote debugging enabled.</div>';
+                }
+            }).catch(function(e) {
+                statusEl.innerHTML = '<div class="status-box error">Error: ' + e.message + '</div>';
+            });
+        }
+
+        function savePathAndDetect() {
+            var path = document.getElementById('s-ocpath').value.trim();
+            if (!path) {
+                document.getElementById('agent-status').innerHTML = '<div class="status-box error">Please enter a path</div>';
+                return;
+            }
+            document.getElementById('agent-status').innerHTML = '<div class="status-box info">Saving path and detecting...</div>';
+            fetch('/setup/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ openclaw: { homePath: path } })
+            }).then(function(r) { return r.json(); }).then(function() {
+                // Now re-detect with the new path
+                discoverAgents();
+            }).catch(function(e) {
+                document.getElementById('agent-status').innerHTML = '<div class="status-box error">Failed: ' + e.message + '</div>';
+            });
+        }
+
+        function discoverAgents() {
+            var statusEl = document.getElementById('agent-status');
+            var previewEl = document.getElementById('agent-preview');
+            var helpEl = document.getElementById('no-agents-help');
+
+            // Pre-populate path field from current config
+            fetch('/vo-config').then(function(r) { return r.json(); }).then(function(cfg) {
+                var pathInput = document.getElementById('s-ocpath');
+                if (pathInput && !pathInput.value && cfg.openclaw && cfg.openclaw.homePath) {
+                    pathInput.value = cfg.openclaw.homePath;
+                }
+            }).catch(function(){});
+
+            statusEl.innerHTML = '<div class="status-box info">🔍 Looking for agents...</div>';
+            helpEl.style.display = 'none';
+
+            fetch('/api/agents').then(function(r) { return r.json(); }).then(function(d) {
+                var agents = d.agents || [];
+                if (agents.length > 0) {
+                    statusEl.innerHTML = '<div class="status-box success">✅ Found ' + agents.length + ' agent' + (agents.length === 1 ? '' : 's') + '!</div>';
+                    helpEl.style.display = 'none';
+                } else {
+                    statusEl.innerHTML = '<div class="status-box error" style="border-color:#f4a236;background:rgba(244,162,54,0.1);color:#f4c36a;">⚠️ No agents found at this path. Check the troubleshooting tips below, or enter a different path and try again.</div>';
+                    helpEl.style.display = 'block';
+                }
+                previewEl.innerHTML = '';
+                agents.forEach(function(a) {
+                    var row = document.createElement('div');
+                    row.className = 'agent-row';
+                    row.innerHTML = '<span class="emoji">' + (a.emoji || '🤖') + '</span>' +
+                        '<span class="name">' + a.name + '</span>' +
+                        '<span class="role">' + (a.role || a.id) + '</span>';
+                    previewEl.appendChild(row);
+                });
+            }).catch(function(e) {
+                statusEl.innerHTML = '<div class="status-box error">Could not reach the server: ' + e.message + '</div>';
+                helpEl.style.display = 'block';
+            });
+        }
+
+        function finishSetup() {
+            var browserEnabled = document.getElementById('s-browser-enable').checked;
+            var smsEnabled = document.getElementById('s-sms-enable').checked;
+            var pcMetricsEnabled = document.getElementById('s-pcmetrics-enable').checked;
+            var config = {
+                office: { name: document.getElementById('s-name').value || 'Virtual Office' },
+                weather: { location: document.getElementById('s-weather').value || null },
+                features: {
+                    browserPanel: browserEnabled,
+                    smsPanel: smsEnabled,
+                    pcMetrics: pcMetricsEnabled,
+                    apiUsage: true
+                },
+                browser: browserEnabled ? {
+                    cdpUrl: document.getElementById('s-cdp-url').value.trim() || null,
+                    viewerUrl: document.getElementById('s-viewer-url').value.trim() || null
+                } : { cdpUrl: null, viewerUrl: null },
+                sms: smsEnabled ? {
+                    agentId: document.getElementById('s-sms-agent').value || null,
+                    twilioAccountSid: document.getElementById('s-twilio-sid').value.trim() || null,
+                    twilioAuthToken: document.getElementById('s-twilio-token').value.trim() || null,
+                    fromNumber: document.getElementById('s-twilio-from').value.trim() || null
+                } : {},
+                pcMetrics: pcMetricsEnabled ? {
+                    url: document.getElementById('s-pcmetrics-url').value.trim() || null
+                } : {},
+                _setupComplete: true
+            };
+
+            var statusEl = document.getElementById('save-status');
+            statusEl.innerHTML = '<div class="status-box info">Saving...</div>';
+
+            fetch('/setup/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            }).then(function(r) { return r.json(); }).then(function(d) {
+                if (d.ok) {
+                    statusEl.innerHTML = '<div class="status-box success">✅ Launching your office...</div>';
+                    setTimeout(function() { window.location.href = '/'; }, 1000);
+                } else {
+                    statusEl.innerHTML = '<div class="status-box error">Save failed</div>';
+                }
+            }).catch(function(e) {
+                statusEl.innerHTML = '<div class="status-box error">Error: ' + e.message + '</div>';
+            });
+        }
+    </script>
+</body>
+</html>

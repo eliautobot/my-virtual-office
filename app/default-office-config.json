@@ -1,0 +1,609 @@
+{
+    "canvasWidth": 1000,
+    "canvasHeight": 740,
+    "walls": {
+        "sections": [
+            {
+                "x": 0,
+                "w": 380,
+                "color": "#546e7a",
+                "accentColor": "#37474f"
+            },
+            {
+                "x": 380,
+                "w": 240,
+                "color": "#0000ff",
+                "accentColor": "#263238"
+            },
+            {
+                "x": 620,
+                "w": 380,
+                "color": "#e65100",
+                "accentColor": "#bf360c"
+            }
+        ],
+        "height": 90,
+        "trimColor": "#37474f",
+        "interior": [
+            {
+                "x1": 9,
+                "y1": 0,
+                "x2": 9,
+                "y2": 4,
+                "color": "#ffd600",
+                "accentColor": "#ffd600",
+                "trimColor": "#d2d4da",
+                "trim2Color": "#989ca8"
+            },
+            {
+                "x1": 16,
+                "y1": 0,
+                "x2": 16,
+                "y2": 4,
+                "color": "#ffd600",
+                "accentColor": "#ffd600",
+                "trimColor": "#d2d4da",
+                "trim2Color": "#989ca8"
+            },
+            {
+                "x1": 1,
+                "y1": 13,
+                "x2": 8,
+                "y2": 13,
+                "color": "#4061c8",
+                "accentColor": "#4061c8",
+                "trimColor": "#d2d4da",
+                "trim2Color": "#112563"
+            },
+            {
+                "x1": 1,
+                "y1": 5,
+                "x2": 8,
+                "y2": 5,
+                "color": "#4d79ff",
+                "accentColor": "#4d79ff",
+                "trimColor": "#d2d4da",
+                "trim2Color": "#112c7e"
+            },
+            {
+                "x1": 17,
+                "y1": 5,
+                "x2": 24,
+                "y2": 5,
+                "color": "#ff7300",
+                "accentColor": "#ff7300",
+                "trimColor": "#d2d4da",
+                "trim2Color": "#c04b0c"
+            },
+            {
+                "x1": 17,
+                "y1": 13,
+                "x2": 24,
+                "y2": 13,
+                "color": "#cb5c00",
+                "accentColor": "#cb5c00",
+                "trimColor": "#d2d4da",
+                "trim2Color": "#9a3c09"
+            },
+            {
+                "x1": 8,
+                "y1": 4,
+                "x2": 8,
+                "y2": 6,
+                "color": "#4061c8",
+                "accentColor": "#4061c8",
+                "trimColor": "#d2d4da",
+                "trim2Color": "#112563"
+            },
+            {
+                "x1": 8,
+                "y1": 7,
+                "x2": 8,
+                "y2": 13,
+                "color": "#4061c8",
+                "accentColor": "#4061c8",
+                "trimColor": "#d2d4da",
+                "trim2Color": "#112563"
+            },
+            {
+                "x1": 17,
+                "y1": 4,
+                "x2": 17,
+                "y2": 6,
+                "color": "#cb5c00",
+                "accentColor": "#cb5c00",
+                "trimColor": "#d2d4da",
+                "trim2Color": "#853408"
+            },
+            {
+                "x1": 17,
+                "y1": 7,
+                "x2": 17,
+                "y2": 13,
+                "color": "#cb5c00",
+                "accentColor": "#cb5c00",
+                "trimColor": "#d2d4da",
+                "trim2Color": "#9a3c09"
+            },
+            {
+                "x1": 10,
+                "y1": 6,
+                "x2": 15,
+                "y2": 6,
+                "color": "#ffd600",
+                "accentColor": "#ffd600",
+                "trimColor": "#d2d4da",
+                "trim2Color": "#98a300"
+            }
+        ],
+        "topWall": {
+            "color": "#546e7a",
+            "accentColor": "#37474f",
+            "trimColor": "#37474f"
+        }
+    },
+    "floor": {
+        "color1": "#c0c0c0",
+        "color2": "#b0b0b0"
+    },
+    "furniture": [
+        {
+            "id": "f_1773951840919_325",
+            "type": "desk",
+            "x": 120,
+            "y": 320
+        },
+        {
+            "id": "f_1773951847972_3727",
+            "type": "desk",
+            "x": 240,
+            "y": 320
+        },
+        {
+            "id": "f_1773951861290_7181",
+            "type": "desk",
+            "x": 240,
+            "y": 440
+        },
+        {
+            "id": "f_1773951870486_8255",
+            "type": "desk",
+            "x": 120,
+            "y": 440
+        },
+        {
+            "id": "f_1773951901321_304",
+            "type": "desk",
+            "x": 760,
+            "y": 320
+        },
+        {
+            "id": "f_1773951917577_9011",
+            "type": "desk",
+            "x": 760,
+            "y": 440
+        },
+        {
+            "id": "f_1773951926779_5849",
+            "type": "desk",
+            "x": 880,
+            "y": 440
+        },
+        {
+            "id": "f_1773951938826_2639",
+            "type": "desk",
+            "x": 880,
+            "y": 320
+        },
+        {
+            "id": "f_1773952010454_3614",
+            "type": "meetingTable",
+            "x": 380,
+            "y": 320
+        },
+        {
+            "id": "f_1773952101921_6114",
+            "type": "vendingMachine",
+            "x": 900,
+            "y": 40
+        },
+        {
+            "id": "f_1773952132943_4101",
+            "type": "engLounge",
+            "x": 140,
+            "y": 60
+        },
+        {
+            "id": "f_1773952176895_8768",
+            "type": "kitchenCounter",
+            "x": 800,
+            "y": 80
+        },
+        {
+            "id": "f_1773952181525_8904",
+            "type": "kitchenCounter",
+            "x": 720,
+            "y": 80
+        },
+        {
+            "id": "f_1773952237764_6753",
+            "type": "waterCooler",
+            "x": 960,
+            "y": 60
+        },
+        {
+            "id": "f_1773952327625_4568",
+            "type": "plant",
+            "x": 880,
+            "y": 80
+        },
+        {
+            "id": "f_1773952331762_6141",
+            "type": "plant",
+            "x": 700,
+            "y": 80
+        },
+        {
+            "id": "f_1774020194777_1028",
+            "type": "endTable",
+            "x": 320,
+            "y": 80
+        },
+        {
+            "id": "f_1774020409834_8566",
+            "type": "bookshelf",
+            "x": 80,
+            "y": 20
+        },
+        {
+            "id": "iw-hq-left",
+            "type": "interactiveWindow",
+            "x": 380,
+            "y": 20,
+            "weather": true,
+            "showSun": true
+        },
+        {
+            "id": "iw-hq-right",
+            "type": "interactiveWindow",
+            "x": 680,
+            "y": 20,
+            "weather": true,
+            "showSun": false
+        },
+        {
+            "id": "f_1774039774420_696",
+            "type": "bossDesk",
+            "x": 500,
+            "y": 140
+        },
+        {
+            "id": "f_1774041752779_6211",
+            "type": "clock",
+            "x": 500,
+            "y": 20
+        },
+        {
+            "id": "f_1774041808546_2675",
+            "type": "whiteboard",
+            "x": 700,
+            "y": 160
+        },
+        {
+            "id": "f_1774041851347_6922",
+            "type": "tallPlant",
+            "x": 571,
+            "y": 201
+        },
+        {
+            "id": "f_1774041852954_5606",
+            "type": "tallPlant",
+            "x": 411,
+            "y": 201
+        },
+        {
+            "id": "f_1774041875615_1973",
+            "type": "tv",
+            "x": 475,
+            "y": 203
+        },
+        {
+            "id": "f_1774041880671_2478",
+            "type": "coffeeTable",
+            "x": 468,
+            "y": 243
+        },
+        {
+            "id": "f_1774041892081_3789",
+            "type": "plant",
+            "x": 651,
+            "y": 493
+        },
+        {
+            "id": "f_1774041893500_1223",
+            "type": "plant",
+            "x": 331,
+            "y": 493
+        },
+        {
+            "id": "f_1774041944242_9699",
+            "type": "trashCan",
+            "x": 750,
+            "y": 203
+        },
+        {
+            "id": "f_1774041962914_1896",
+            "type": "trashCan",
+            "x": 310,
+            "y": 203
+        },
+        {
+            "id": "f_1774041977140_6251",
+            "type": "trashCan",
+            "x": 550,
+            "y": 183
+        },
+        {
+            "id": "f_1774041987248_4059",
+            "type": "trashCan",
+            "x": 660,
+            "y": 80
+        },
+        {
+            "id": "f_1774041995116_341",
+            "type": "filingCabinet",
+            "x": 256,
+            "y": 163
+        },
+        {
+            "id": "f_1774041999102_4234",
+            "type": "filingCabinet",
+            "x": 936,
+            "y": 163
+        },
+        {
+            "id": "f_1774041999852_3121",
+            "type": "filingCabinet",
+            "x": 896,
+            "y": 163
+        },
+        {
+            "id": "f_1774042003928_3767",
+            "type": "filingCabinet",
+            "x": 56,
+            "y": 163
+        },
+        {
+            "id": "f_1774042023081_2461",
+            "type": "plant",
+            "x": 221,
+            "y": 183
+        },
+        {
+            "id": "f_1774042031853_1718",
+            "type": "plant",
+            "x": 861,
+            "y": 183
+        },
+        {
+            "id": "f_1774042050761_2733",
+            "type": "pingPongTable",
+            "x": 500,
+            "y": 500
+        },
+        {
+            "id": "f_1774042070565_9684",
+            "type": "dartBoard",
+            "x": 700,
+            "y": 474
+        },
+        {
+            "id": "f_1774042105307_4370",
+            "type": "vendingMachine",
+            "x": 168,
+            "y": 473
+        },
+        {
+            "id": "f_1774042162665_5092",
+            "type": "bookshelf",
+            "x": 805,
+            "y": 470
+        },
+        {
+            "id": "f_1774042271991_7051",
+            "type": "trashCan",
+            "x": 240,
+            "y": 520
+        },
+        {
+            "id": "f_1774042277772_7686",
+            "type": "trashCan",
+            "x": 780,
+            "y": 520
+        },
+        {
+            "id": "f_1774042430809_6320",
+            "type": "tallPlant",
+            "x": 131,
+            "y": 481
+        },
+        {
+            "id": "f_1774042440661_8982",
+            "type": "endTable",
+            "x": 860,
+            "y": 520
+        },
+        {
+            "id": "f_1774042477363_380",
+            "type": "textLabel",
+            "x": 820,
+            "y": 20,
+            "text": "KITCHEN",
+            "labelColor": "#ff0000",
+            "fontSize": 16
+        },
+        {
+            "id": "f_1774042691482_4383",
+            "type": "textLabel",
+            "x": 200,
+            "y": 20,
+            "text": "LOUNGE",
+            "labelColor": "#00d5ff",
+            "fontSize": 16
+        },
+        {
+            "id": "f_1774043354632_2342",
+            "type": "whiteboard",
+            "x": 166,
+            "y": 159
+        },
+        {
+            "id": "f_1774043371152_7177",
+            "type": "whiteboard",
+            "x": 526,
+            "y": 39
+        },
+        {
+            "id": "f_1774043890837_2814",
+            "type": "tallPlant",
+            "x": 360,
+            "y": 600
+        },
+        {
+            "id": "f_1774043917430_9952",
+            "type": "endTable",
+            "x": 560,
+            "y": 640
+        },
+        {
+            "id": "f_1774282595479_352",
+            "type": "couch",
+            "x": 560,
+            "y": 660,
+            "rotation": 180,
+            "couchColor": "#263238"
+        },
+        {
+            "id": "f_1774295255101_4417",
+            "type": "coffeeMaker",
+            "x": 732,
+            "y": 60
+        },
+        {
+            "id": "f_1774295263430_1463",
+            "type": "microwave",
+            "x": 812,
+            "y": 58
+        },
+        {
+            "id": "f_1774295283202_3799",
+            "type": "toaster",
+            "x": 768,
+            "y": 66
+        },
+        {
+            "id": "f_1774296506673_5237",
+            "type": "interactiveWindow",
+            "x": 20,
+            "y": 20
+        },
+        {
+            "id": "f_1774296631802_4918",
+            "type": "filingCabinet",
+            "x": 596,
+            "y": 43
+        },
+        {
+            "id": "f_1774304743293_9696",
+            "type": "desk",
+            "x": 80,
+            "y": 680
+        },
+        {
+            "id": "f_1774304747367_8681",
+            "type": "desk",
+            "x": 180,
+            "y": 680
+        },
+        {
+            "id": "f_1774304804951_4577",
+            "type": "desk",
+            "x": 280,
+            "y": 680
+        },
+        {
+            "id": "f_1774304813756_8330",
+            "type": "desk",
+            "x": 820,
+            "y": 680
+        },
+        {
+            "id": "f_1774304816350_1173",
+            "type": "desk",
+            "x": 920,
+            "y": 680
+        },
+        {
+            "id": "f_1774304907609_2894",
+            "type": "desk",
+            "x": 720,
+            "y": 680
+        }
+    ],
+    "branches": [
+        {
+            "id": "BRANCH_1",
+            "name": "Branch #1",
+            "emoji": "\ud83c\udfe2",
+            "theme": "branch-gold",
+            "color": "#427bff"
+        },
+        {
+            "id": "BRANCH_2",
+            "name": "Branch #2",
+            "emoji": "\ud83c\udfe2",
+            "theme": "branch-blue",
+            "color": "#ff6600"
+        },
+        {
+            "id": "CEO",
+            "name": "CEO",
+            "emoji": "\ud83c\udfe2",
+            "theme": "branch-orange"
+        }
+    ],
+    "agents": [
+        {
+            "id": "main",
+            "name": "Elix",
+            "role": "AI assistant",
+            "emoji": "\u26a1",
+            "color": "#ffd700",
+            "gender": "M",
+            "branch": "UNASSIGNED",
+            "statusKey": "main",
+            "appearance": {
+                "skinTone": "#d4a574",
+                "hairStyle": "buzz",
+                "hairColor": "#dcc282",
+                "hairHighlight": null,
+                "eyebrowStyle": "thick",
+                "eyeColor": "#212121",
+                "facialHair": null,
+                "facialHairColor": null,
+                "headwear": null,
+                "headwearColor": null,
+                "glasses": null,
+                "glassesColor": null,
+                "costume": "lobster",
+                "heldItem": null,
+                "deskItem": "envelope"
+            }
+        }
+    ],
+    "pet": {
+        "enabled": true,
+        "species": "lobster",
+        "name": "Clawy"
+    }
+}

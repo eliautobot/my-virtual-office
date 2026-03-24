@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.bak
+*.bak2
+vo-config.eli.json
+.env
+vo-data/
+*.zip

@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  virtual-office:
+    build: ./app
+    container_name: virtual-office
+    ports:
+      - "${VO_PORT:-8090}:${VO_PORT:-8090}"
+      - "${VO_WS_PORT:-8091}:${VO_WS_PORT:-8091}"
+    volumes:
+      # Mount OpenClaw home directory (read-only for discovery + session reading)
+      - ${VO_OPENCLAW_PATH:-~/.openclaw}:/openclaw:ro
+      # Persistent office data (layout, presence, config overrides)
+      - vo-data:/data
+    environment:
+      - VO_OPENCLAW_PATH=/openclaw
+      - VO_STATUS_DIR=/data
+      - VO_GATEWAY_URL=${VO_GATEWAY_URL:-ws://host.docker.internal:18789}
+      - VO_GATEWAY_HTTP=${VO_GATEWAY_HTTP:-http://host.docker.internal:18789}
+      - VO_PORT=${VO_PORT:-8090}
+      - VO_WS_PORT=${VO_WS_PORT:-8091}
+      - VO_OFFICE_NAME=${VO_OFFICE_NAME:-Virtual Office}
+      - VO_WEATHER_LOCATION=${VO_WEATHER_LOCATION:-}
+    restart: unless-stopped
+
+volumes:
+  vo-data:

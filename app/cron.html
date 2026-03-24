@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cron Manager — Virtual Office</title>
+<script>fetch('/vo-config').then(r=>r.json()).then(d=>{if(d.office&&d.office.name)document.title='Cron Manager — '+d.office.name;}).catch(()=>{});</script>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #0a0a1a; --surface: #141428; --surface2: #1c1c3a;
+  --border: #2a2a5a; --text: #e0e0ff; --dim: #8888bb;
+  --accent: #ffd700; --green: #44ff88; --red: #ff4466;
+  --blue: #4488ff; --orange: #ffaa33;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; min-height: 100vh; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.header { background: var(--surface); border-bottom: 2px solid var(--accent); padding: 16px 24px; display: flex; align-items: center; gap: 16px; }
+.header h1 { font-family: 'Press Start 2P', monospace; font-size: 14px; color: var(--accent); }
+.header .back { font-size: 13px; }
+.header .status { margin-left: auto; font-size: 12px; padding: 4px 10px; border-radius: 12px; }
+.header .status.online { background: #1a3a2a; color: var(--green); }
+.header .status.offline { background: #3a1a1a; color: var(--red); }
+.header .status.connecting { background: #3a3a1a; color: var(--orange); }
+
+.toolbar { background: var(--surface); padding: 12px 24px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--border); }
+.toolbar button { background: var(--accent); color: #000; border: none; padding: 8px 16px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px; }
+.toolbar button:hover { opacity: 0.85; }
+.toolbar .filter { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.toolbar select { background: var(--surface2); color: var(--text); border: 1px solid var(--border); padding: 6px 10px; border-radius: 6px; font-size: 13px; }
+
+.jobs { padding: 16px 24px; display: flex; flex-direction: column; gap: 12px; }
+.job-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; transition: border-color 0.2s; }
+.job-card:hover { border-color: var(--accent); }
+.job-card.disabled { opacity: 0.5; }
+.job-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.job-name { font-weight: 700; font-size: 15px; color: var(--accent); min-width: 200px; }
+.job-agent { background: var(--surface2); padding: 3px 10px; border-radius: 12px; font-size: 12px; color: var(--blue); }
+.job-schedule { font-size: 13px; color: var(--dim); font-family: monospace; }
+.job-status { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+.job-status .badge { padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+.badge.ok { background: #1a3a2a; color: var(--green); }
+.badge.error { background: #3a1a1a; color: var(--red); }
+.badge.disabled { background: #2a2a3a; color: var(--dim); }
+.badge.pending { background: #3a3a1a; color: var(--orange); }
+.job-meta { display: flex; gap: 16px; margin-top: 8px; font-size: 12px; color: var(--dim); flex-wrap: wrap; }
+.job-actions { display: flex; gap: 6px; margin-top: 10px; }
+.job-actions button { padding: 5px 12px; border-radius: 5px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; font-size: 12px; }
+.job-actions button:hover { border-color: var(--accent); color: var(--accent); }
+.job-actions button.run { border-color: var(--green); color: var(--green); }
+.job-actions button.run:hover { background: #1a3a2a; }
+.job-actions button.delete { border-color: var(--red); color: var(--red); }
+.job-actions button.delete:hover { background: #3a1a1a; }
+.job-actions button.toggle { border-color: var(--orange); color: var(--orange); }
+
+/* Modal */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; justify-content: center; align-items: flex-start; padding-top: 60px; }
+.modal-overlay.open { display: flex; }
+.modal { background: var(--surface); border: 2px solid var(--accent); border-radius: 12px; width: 600px; max-width: 95vw; max-height: 80vh; overflow-y: auto; padding: 24px; }
+.modal h2 { font-family: 'Press Start 2P', monospace; font-size: 12px; color: var(--accent); margin-bottom: 16px; }
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 4px; font-weight: 600; text-transform: uppercase; }
+.form-group input, .form-group select, .form-group textarea {
+  width: 100%; background: var(--surface2); color: var(--text); border: 1px solid var(--border);
+  padding: 8px 12px; border-radius: 6px; font-size: 14px; font-family: inherit;
+}
+.form-group textarea { min-height: 80px; resize: vertical; }
+.form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color: var(--accent); outline: none; }
+.form-row { display: flex; gap: 12px; }
+.form-row .form-group { flex: 1; }
+.form-hint { font-size: 11px; color: var(--dim); margin-top: 2px; }
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+.modal-actions button { padding: 8px 20px; border-radius: 6px; font-weight: 600; cursor: pointer; font-size: 13px; border: none; }
+.modal-actions .save { background: var(--accent); color: #000; }
+.modal-actions .cancel { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
+.modal-actions .save:hover { opacity: 0.85; }
+.modal-actions .cancel:hover { border-color: var(--accent); }
+.toast { position: fixed; bottom: 24px; right: 24px; padding: 12px 20px; border-radius: 8px; font-size: 13px; z-index: 2000; animation: fadeIn 0.3s; }
+.toast.success { background: #1a3a2a; color: var(--green); border: 1px solid var(--green); }
+.toast.error { background: #3a1a1a; color: var(--red); border: 1px solid var(--red); }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.empty { text-align: center; padding: 60px; color: var(--dim); font-size: 14px; }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--dim); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.6s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <a href="/" class="back">← Office</a>
+  <h1>⏰ CRON MANAGER</h1>
+  <span id="ws-status" class="status connecting">Connecting...</span>
+</div>
+
+<div class="toolbar">
+  <button onclick="openCreateModal()">+ New Job</button>
+  <button onclick="loadJobs()" style="background:var(--surface2);color:var(--text);border:1px solid var(--border)">↻ Refresh</button>
+  <div class="filter">
+    <label style="font-size:12px;color:var(--dim)">Agent:</label>
+    <select id="filter-agent" onchange="renderJobs()">
+      <option value="">All Agents</option>
+    </select>
+    <label style="font-size:12px;color:var(--dim);margin-left:8px">
+      <input type="checkbox" id="filter-disabled" onchange="renderJobs()"> Show Disabled
+    </label>
+  </div>
+</div>
+
+<div id="jobs-container" class="jobs">
+  <div class="empty"><span class="spinner"></span> Loading jobs...</div>
+</div>
+
+<!-- Create/Edit Modal -->
+<div id="modal" class="modal-overlay">
+  <div class="modal">
+    <h2 id="modal-title">NEW CRON JOB</h2>
+
+    <div class="form-group">
+      <label>Job Name</label>
+      <input id="f-name" placeholder="e.g. Morning Standup">
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Agent</label>
+        <select id="f-agent"></select>
+      </div>
+      <div class="form-group">
+        <label>Session Target</label>
+        <select id="f-target">
+          <option value="isolated">Isolated (agentTurn)</option>
+          <option value="main">Main (systemEvent)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Schedule Type</label>
+      <select id="f-sched-type" onchange="toggleScheduleFields()">
+        <option value="cron">Cron Expression</option>
+        <option value="every">Recurring Interval</option>
+        <option value="at">One-shot (at time)</option>
+      </select>
+    </div>
+
+    <div id="sched-cron">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Time</label>
+          <input id="f-cron-time" type="time" value="09:00">
+        </div>
+        <div class="form-group">
+          <label>Timezone</label>
+          <input id="f-cron-tz" placeholder="America/New_York" value="America/New_York">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Days</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px">
+          <button type="button" class="day-preset" onclick="setDays('weekdays')" style="padding:4px 10px;border-radius:5px;border:1px solid var(--border);background:var(--surface2);color:var(--accent);cursor:pointer;font-size:12px">Weekdays</button>
+          <button type="button" class="day-preset" onclick="setDays('weekends')" style="padding:4px 10px;border-radius:5px;border:1px solid var(--border);background:var(--surface2);color:var(--accent);cursor:pointer;font-size:12px">Weekends</button>
+          <button type="button" class="day-preset" onclick="setDays('everyday')" style="padding:4px 10px;border-radius:5px;border:1px solid var(--border);background:var(--surface2);color:var(--accent);cursor:pointer;font-size:12px">Every Day</button>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:8px;flex-wrap:wrap">
+          <label style="font-size:13px;color:var(--text);cursor:pointer"><input type="checkbox" class="day-cb" value="1"> Mon</label>
+          <label style="font-size:13px;color:var(--text);cursor:pointer"><input type="checkbox" class="day-cb" value="2"> Tue</label>
+          <label style="font-size:13px;color:var(--text);cursor:pointer"><input type="checkbox" class="day-cb" value="3"> Wed</label>
+          <label style="font-size:13px;color:var(--text);cursor:pointer"><input type="checkbox" class="day-cb" value="4"> Thu</label>
+          <label style="font-size:13px;color:var(--text);cursor:pointer"><input type="checkbox" class="day-cb" value="5"> Fri</label>
+          <label style="font-size:13px;color:var(--text);cursor:pointer"><input type="checkbox" class="day-cb" value="6"> Sat</label>
+          <label style="font-size:13px;color:var(--text);cursor:pointer"><input type="checkbox" class="day-cb" value="0"> Sun</label>
+        </div>
+      </div>
+      <input type="hidden" id="f-cron-expr">
+    </div>
+
+    <div id="sched-every" class="form-row" style="display:none">
+      <div class="form-group">
+        <label>Interval (minutes)</label>
+        <input id="f-every-min" type="number" min="1" placeholder="30">
+      </div>
+    </div>
+
+    <div id="sched-at" style="display:none">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Date</label>
+          <input id="f-at-date" type="date">
+        </div>
+        <div class="form-group">
+          <label>Time</label>
+          <input id="f-at-time" type="time">
+        </div>
+      </div>
+      <div class="form-hint">One-shot — runs once at this date/time (your timezone)</div>
+    </div>
+
+    <div class="form-group">
+      <label>Message / Prompt</label>
+      <textarea id="f-message" placeholder="What should the agent do?"></textarea>
+    </div>
+
+    <div class="form-group">
+      <label>Timeout (seconds)</label>
+      <input id="f-timeout" type="number" value="300" min="10" style="width:120px">
+    </div>
+
+    <div style="border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;background:var(--surface2)">
+      <label style="display:block;font-size:12px;color:var(--accent);margin-bottom:10px;font-weight:600;text-transform:uppercase">📬 Delivery Settings</label>
+      <div class="form-group">
+        <label>Delivery Mode</label>
+        <select id="f-delivery" onchange="toggleDeliveryFields()">
+          <option value="none">Silent (no delivery)</option>
+          <option value="announce">Announce result to chat</option>
+        </select>
+      </div>
+      <div id="delivery-fields" style="display:none">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Channel</label>
+            <select id="f-del-channel">
+              <option value="telegram">Telegram</option>
+              <option value="webchat">Webchat</option>
+              <option value="discord">Discord</option>
+              <option value="whatsapp">WhatsApp</option>
+              <option value="signal">Signal</option>
+              <option value="slack">Slack</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Account</label>
+            <select id="f-del-account">
+              <option value="">Default</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Send To (Chat ID / User ID)</label>
+          <input id="f-del-to" placeholder="e.g. 8332596095">
+          <div class="form-hint">Telegram chat ID, Discord channel/user ID, or phone number</div>
+        </div>
+        <div class="form-group" style="margin-top:8px">
+          <div style="display:flex;gap:12px;flex-wrap:wrap">
+            <span style="font-size:10px;color:#666;">Enter your Telegram/Discord/SMS chat ID</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label><input type="checkbox" id="f-enabled" checked> Enabled</label>
+    </div>
+
+    <div class="modal-actions">
+      <button class="cancel" onclick="closeModal()">Cancel</button>
+      <button class="save" id="modal-save" onclick="saveJob()">Create Job</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let GATEWAY_TOKEN = '';
+let AGENTS = [];
+
+// Load gateway token and agents dynamically
+(async function() {
+  try {
+    const infoRes = await fetch('/session-info');
+    const info = await infoRes.json();
+    if (info.token) GATEWAY_TOKEN = info.token;
+  } catch(e) {}
+  try {
+    const agentsRes = await fetch('/api/agents');
+    const data = await agentsRes.json();
+    AGENTS = (data.agents || []).map(function(a) {
+      return { id: a.agentId, label: (a.emoji || '🤖') + ' ' + a.name + (a.role ? ' (' + a.role + ')' : '') };
+    });
+  } catch(e) {
+    AGENTS = [{ id: 'main', label: '🤖 Main Agent' }];
+  }
+  // Rebuild agent selects
+  populateAgentSelects();
+})();
+
+let ws = null, reqId = 0, connected = false, pendingCB = {};
+let allJobs = [];
+let editingJobId = null;
+
+// --- WS Connection ---
+function getWsUrl() {
+  const host = window.location.hostname || '127.0.0.1';
+  return `ws://${host}:8086`;
+}
+function nextId() { return `cron-${++reqId}-${Date.now()}`; }
+
+function connectGateway() {
+  const statusEl = document.getElementById('ws-status');
+  statusEl.textContent = 'Connecting...';
+  statusEl.className = 'status connecting';
+  ws = new WebSocket(getWsUrl());
+  ws.onmessage = (e) => {
+    let msg; try { msg = JSON.parse(e.data); } catch { return; }
+    if (msg.type === 'event' && msg.event === 'connect.challenge') { sendConnect(); return; }
+    if (msg.type === 'res' && pendingCB[msg.id]) { pendingCB[msg.id](msg); delete pendingCB[msg.id]; }
+    // cron.run returns event instead of res — treat cron events as success for pending run calls
+    if (msg.type === 'event' && msg.event === 'cron' && msg.payload?.action === 'started') {
+      Object.keys(pendingCB).forEach(k => { if (k.startsWith('cron-')) { pendingCB[k]({ok:true, payload:msg.payload}); delete pendingCB[k]; } });
+    }
+  };
+  ws.onclose = () => {
+    connected = false; ws = null;
+    statusEl.textContent = 'Disconnected';
+    statusEl.className = 'status offline';
+    setTimeout(connectGateway, 3000);
+  };
+  ws.onerror = () => { statusEl.textContent = 'Error'; statusEl.className = 'status offline'; };
+}
+
+function sendConnect() {
+  const id = nextId();
+  ws.send(JSON.stringify({
+    type:'req', id, method:'connect',
+    params: {
+      minProtocol:3, maxProtocol:3,
+      client:{id:'openclaw-control-ui',version:'2026.2.15',platform:'web',mode:'webchat'},
+      role:'operator', scopes:['operator.read','operator.write','operator.admin'],
+      caps:[], commands:[], permissions:{},
+      auth:{token:GATEWAY_TOKEN}, locale:'en-US', userAgent:'cron-manager/1.0'
+    }
+  }));
+  pendingCB[id] = (res) => {
+    if (res.ok || res.payload?.ok) {
+      connected = true;
+      const el = document.getElementById('ws-status');
+      el.textContent = 'Connected'; el.className = 'status online';
+      loadJobs();
+    }
+  };
+}
+
+function rpc(method, params) {
+  return new Promise((resolve, reject) => {
+    if (!connected || !ws) { reject(new Error('Not connected')); return; }
+    const id = nextId();
+    ws.send(JSON.stringify({type:'req', id, method, params}));
+    const timeout = setTimeout(() => { delete pendingCB[id]; reject(new Error('Timeout')); }, 30000);
+    pendingCB[id] = (res) => { clearTimeout(timeout); resolve(res); };
+  });
+}
+
+// --- Init agent dropdowns ---
+function initAgentDropdowns() {
+  populateAgentSelects();
+}
+
+function populateAgentSelects() {
+  const filterSel = document.getElementById('filter-agent');
+  const formSel = document.getElementById('f-agent');
+  const delAcctSel = document.getElementById('f-del-account');
+  // Clear existing options (keep first "All"/"Default" option)
+  while (filterSel.options.length > 1) filterSel.remove(1);
+  while (formSel.options.length > 0) formSel.remove(0);
+  if (delAcctSel) while (delAcctSel.options.length > 1) delAcctSel.remove(1);
+  AGENTS.forEach(a => {
+    filterSel.add(new Option(a.label, a.id));
+    formSel.add(new Option(a.label, a.id));
+    if (delAcctSel) delAcctSel.add(new Option(a.label, a.id));
+  });
+}
+
+// --- Load Jobs ---
+async function loadJobs() {
+  try {
+    const res = await rpc('cron.list', {includeDisabled: true});
+    allJobs = res.payload?.jobs || res.jobs || [];
+    renderJobs();
+  } catch (e) {
+    document.getElementById('jobs-container').innerHTML = `<div class="empty" style="color:var(--red)">Failed to load: ${e.message}</div>`;
+  }
+}
+
+// --- Render ---
+function renderJobs() {
+  const container = document.getElementById('jobs-container');
+  const agentFilter = document.getElementById('filter-agent').value;
+  const showDisabled = document.getElementById('filter-disabled').checked;
+
+  let jobs = allJobs;
+  if (agentFilter) jobs = jobs.filter(j => j.agentId === agentFilter);
+  if (!showDisabled) jobs = jobs.filter(j => j.enabled !== false);
+
+  if (!jobs.length) {
+    container.innerHTML = '<div class="empty">No cron jobs found</div>';
+    return;
+  }
+
+  container.innerHTML = jobs.map(j => {
+    const state = j.state || {};
+    const lastStatus = state.lastStatus || 'pending';
+    const schedText = formatSchedule(j.schedule);
+    const nextRun = state.nextRunAtMs ? new Date(state.nextRunAtMs).toLocaleString() : '—';
+    const lastRun = state.lastRunAtMs ? timeAgo(state.lastRunAtMs) : 'Never';
+    const duration = state.lastDurationMs ? (state.lastDurationMs/1000).toFixed(1)+'s' : '—';
+    const payload = j.payload || {};
+    const msgPreview = (payload.message || payload.text || '').slice(0,100);
+
+    return `<div class="job-card ${j.enabled === false ? 'disabled' : ''}" id="job-${j.id}">
+      <div class="job-row">
+        <span class="job-name">${esc(j.name || j.id)}</span>
+        <span class="job-agent">${esc(j.agentId)}</span>
+        <span class="job-schedule">${esc(schedText)}</span>
+        <div class="job-status">
+          <span class="badge ${lastStatus}">${lastStatus}</span>
+          ${j.enabled === false ? '<span class="badge disabled">disabled</span>' : ''}
+        </div>
+      </div>
+      <div class="job-meta">
+        <span>📅 Next: ${esc(nextRun)}</span>
+        <span>🕐 Last: ${esc(lastRun)}</span>
+        <span>⏱ Duration: ${duration}</span>
+        <span>🎯 ${payload.kind || '?'}</span>
+        ${j.delivery?.mode === 'announce' ? `<span style="color:var(--blue)">📬 ${esc(j.delivery.channel||'')}${j.delivery.to ? ' → '+esc(j.delivery.to) : ''}</span>` : '<span>🔇 Silent</span>'}
+        ${state.lastError ? `<span style="color:var(--red)" title="${esc(state.lastError)}">⚠ ${esc(state.lastError.slice(0,50))}</span>` : ''}
+      </div>
+      ${msgPreview ? `<div style="margin-top:6px;font-size:12px;color:var(--dim);font-style:italic">"${esc(msgPreview)}${msgPreview.length>=100?'...':''}"</div>` : ''}
+      <div class="job-actions">
+        <button class="run" onclick="runJob('${j.id}')">▶ Run Now</button>
+        <button onclick="openEditModal('${j.id}')">✏️ Edit</button>
+        <button class="toggle" onclick="toggleJob('${j.id}', ${j.enabled !== false})">${j.enabled !== false ? '⏸ Disable' : '▶ Enable'}</button>
+        <button class="delete" onclick="deleteJob('${j.id}', '${esc(j.name||j.id)}')">🗑 Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function formatSchedule(s) {
+  if (!s) return '?';
+  if (s.kind === 'cron') {
+    const parts = (s.expr||'').split(/\s+/);
+    if (parts.length >= 5) {
+      const dayNames = {0:'Sun',1:'Mon',2:'Tue',3:'Wed',4:'Thu',5:'Fri',6:'Sat'};
+      const h = parseInt(parts[1]); const m = parts[0].padStart(2,'0');
+      const ampm = h >= 12 ? 'PM' : 'AM'; const h12 = h === 0 ? 12 : h > 12 ? h-12 : h;
+      const timeStr = `${h12}:${m} ${ampm}`;
+      let dayStr = 'Every day';
+      if (parts[4] !== '*') {
+        const days = parts[4].split(',').map(d => dayNames[parseInt(d)] || d);
+        if (days.length === 5 && !days.includes('Sat') && !days.includes('Sun')) dayStr = 'Weekdays';
+        else if (days.length === 2 && days.includes('Sat') && days.includes('Sun')) dayStr = 'Weekends';
+        else dayStr = days.join(', ');
+      }
+      return `${timeStr} · ${dayStr}`;
+    }
+    return s.expr;
+  }
+  if (s.kind === 'every') return `Every ${(s.everyMs/60000).toFixed(0)} min`;
+  if (s.kind === 'at') return `Once: ${new Date(s.at).toLocaleString()}`;
+  return JSON.stringify(s);
+}
+
+function timeAgo(ms) {
+  const diff = Date.now() - ms;
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return Math.floor(diff/60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff/3600000) + 'h ago';
+  return Math.floor(diff/86400000) + 'd ago';
+}
+
+function esc(s) { const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; }
+
+function toggleDeliveryFields() {
+  const mode = document.getElementById('f-delivery').value;
+  document.getElementById('delivery-fields').style.display = mode === 'announce' ? 'block' : 'none';
+}
+
+// --- Day helpers ---
+function setDays(preset) {
+  const cbs = document.querySelectorAll('.day-cb');
+  cbs.forEach(cb => {
+    const v = parseInt(cb.value);
+    if (preset === 'weekdays') cb.checked = v >= 1 && v <= 5;
+    else if (preset === 'weekends') cb.checked = v === 0 || v === 6;
+    else if (preset === 'everyday') cb.checked = true;
+  });
+}
+
+function getSelectedDays() {
+  return Array.from(document.querySelectorAll('.day-cb:checked')).map(cb => parseInt(cb.value));
+}
+
+function buildCronExpr() {
+  const time = document.getElementById('f-cron-time').value || '09:00';
+  const [h, m] = time.split(':').map(Number);
+  const days = getSelectedDays();
+  let dow = '*';
+  if (days.length > 0 && days.length < 7) {
+    dow = days.sort((a,b) => a-b).join(',');
+  }
+  return `${m} ${h} * * ${dow}`;
+}
+
+function parseCronToFields(expr) {
+  // Parse "min hour * * dow" back to time + day checkboxes
+  const parts = expr.split(/\s+/);
+  if (parts.length < 5) return;
+  const min = parts[0].padStart(2,'0');
+  const hour = parts[1].padStart(2,'0');
+  document.getElementById('f-cron-time').value = `${hour}:${min}`;
+  const dow = parts[4];
+  const cbs = document.querySelectorAll('.day-cb');
+  if (dow === '*') {
+    cbs.forEach(cb => cb.checked = true);
+  } else {
+    const selected = dow.replace(/0-6|1-5|6-7/g, m => {
+      // Expand ranges
+      const [s,e] = m.split('-').map(Number);
+      return Array.from({length:e-s+1}, (_,i) => s+i).join(',');
+    }).split(',').map(Number);
+    cbs.forEach(cb => cb.checked = selected.includes(parseInt(cb.value)));
+  }
+}
+
+// --- Actions ---
+async function runJob(id) {
+  const btn = event.target;
+  btn.disabled = true; btn.textContent = '⏳ Running...';
+  try {
+    await rpc('cron.run', {id});
+    toast('Job triggered!', 'success');
+  } catch (e) {
+    toast('Run failed: '+e.message, 'error');
+  }
+  btn.disabled = false; btn.textContent = '▶ Run Now';
+  setTimeout(loadJobs, 2000);
+}
+
+async function toggleJob(id, currentlyEnabled) {
+  try {
+    await rpc('cron.update', {id, patch:{enabled: !currentlyEnabled}});
+    toast(currentlyEnabled ? 'Job disabled' : 'Job enabled', 'success');
+    loadJobs();
+  } catch (e) { toast('Toggle failed: '+e.message, 'error'); }
+}
+
+async function deleteJob(id, name) {
+  if (!confirm(`Delete job "${name}"? This cannot be undone.`)) return;
+  try {
+    await rpc('cron.remove', {id});
+    toast('Job deleted', 'success');
+    loadJobs();
+  } catch (e) { toast('Delete failed: '+e.message, 'error'); }
+}
+
+// --- Modal ---
+function openCreateModal() {
+  editingJobId = null;
+  document.getElementById('modal-title').textContent = 'NEW CRON JOB';
+  document.getElementById('modal-save').textContent = 'Create Job';
+  clearForm();
+  document.getElementById('modal').classList.add('open');
+}
+
+function openEditModal(id) {
+  const job = allJobs.find(j => j.id === id);
+  if (!job) return;
+  editingJobId = id;
+  document.getElementById('modal-title').textContent = 'EDIT CRON JOB';
+  document.getElementById('modal-save').textContent = 'Save Changes';
+  populateForm(job);
+  document.getElementById('modal').classList.add('open');
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+  editingJobId = null;
+}
+
+function clearForm() {
+  document.getElementById('f-name').value = '';
+  document.getElementById('f-agent').value = 'main';
+  document.getElementById('f-target').value = 'isolated';
+  document.getElementById('f-sched-type').value = 'cron';
+  document.getElementById('f-cron-time').value = '09:00';
+  document.getElementById('f-cron-tz').value = 'America/New_York';
+  document.querySelectorAll('.day-cb').forEach(cb => cb.checked = false);
+  document.getElementById('f-every-min').value = '';
+  document.getElementById('f-at-date').value = '';
+  document.getElementById('f-at-time').value = '';
+  document.getElementById('f-message').value = '';
+  document.getElementById('f-timeout').value = '300';
+  document.getElementById('f-delivery').value = 'none';
+  document.getElementById('f-del-channel').value = 'telegram';
+  document.getElementById('f-del-account').value = '';
+  document.getElementById('f-del-to').value = '';
+  document.getElementById('f-enabled').checked = true;
+  toggleScheduleFields();
+  toggleDeliveryFields();
+}
+
+function populateForm(job) {
+  document.getElementById('f-name').value = job.name || '';
+  document.getElementById('f-agent').value = job.agentId || 'main';
+  document.getElementById('f-target').value = job.sessionTarget || 'isolated';
+  document.getElementById('f-enabled').checked = job.enabled !== false;
+
+  const s = job.schedule || {};
+  document.getElementById('f-sched-type').value = s.kind || 'cron';
+  if (s.kind === 'cron') {
+    parseCronToFields(s.expr || '0 9 * * *');
+    document.getElementById('f-cron-tz').value = s.tz || 'America/New_York';
+  } else if (s.kind === 'every') {
+    document.getElementById('f-every-min').value = s.everyMs ? Math.round(s.everyMs/60000) : '';
+  } else if (s.kind === 'at') {
+    if (s.at) {
+      const d = new Date(s.at);
+      document.getElementById('f-at-date').value = d.toISOString().slice(0,10);
+      document.getElementById('f-at-time').value = d.toTimeString().slice(0,5);
+    }
+  }
+  toggleScheduleFields();
+
+  const p = job.payload || {};
+  document.getElementById('f-message').value = p.message || p.text || '';
+  document.getElementById('f-timeout').value = p.timeoutSeconds || 300;
+  const del = job.delivery || {};
+  document.getElementById('f-delivery').value = del.mode || 'none';
+  document.getElementById('f-del-channel').value = del.channel || 'telegram';
+  document.getElementById('f-del-account').value = del.accountId || '';
+  document.getElementById('f-del-to').value = del.to || '';
+  toggleDeliveryFields();
+}
+
+function toggleScheduleFields() {
+  const type = document.getElementById('f-sched-type').value;
+  document.getElementById('sched-cron').style.display = type === 'cron' ? 'flex' : 'none';
+  document.getElementById('sched-every').style.display = type === 'every' ? 'flex' : 'none';
+  document.getElementById('sched-at').style.display = type === 'at' ? 'block' : 'none';
+}
+
+async function saveJob() {
+  const name = document.getElementById('f-name').value.trim();
+  const agentId = document.getElementById('f-agent').value;
+  const sessionTarget = document.getElementById('f-target').value;
+  const enabled = document.getElementById('f-enabled').checked;
+  const message = document.getElementById('f-message').value.trim();
+  const timeout = parseInt(document.getElementById('f-timeout').value) || 300;
+  const deliveryMode = document.getElementById('f-delivery').value;
+
+  if (!message) { toast('Message/prompt is required', 'error'); return; }
+
+  // Build schedule
+  const schedType = document.getElementById('f-sched-type').value;
+  let schedule;
+  if (schedType === 'cron') {
+    const days = getSelectedDays();
+    if (!days.length) { toast('Select at least one day', 'error'); return; }
+    const expr = buildCronExpr();
+    schedule = {kind:'cron', expr, tz: document.getElementById('f-cron-tz').value.trim() || undefined};
+  } else if (schedType === 'every') {
+    const min = parseInt(document.getElementById('f-every-min').value);
+    if (!min || min < 1) { toast('Interval must be ≥1 minute', 'error'); return; }
+    schedule = {kind:'every', everyMs: min * 60000};
+  } else if (schedType === 'at') {
+    const d = document.getElementById('f-at-date').value;
+    const t = document.getElementById('f-at-time').value;
+    if (!d || !t) { toast('Date and time required', 'error'); return; }
+    schedule = {kind:'at', at: new Date(`${d}T${t}`).toISOString()};
+  }
+
+  // Build payload
+  let payload;
+  if (sessionTarget === 'main') {
+    payload = {kind:'systemEvent', text: message};
+  } else {
+    payload = {kind:'agentTurn', message, timeoutSeconds: timeout};
+  }
+
+  const job = {name, schedule, payload, sessionTarget, enabled};
+  if (deliveryMode === 'announce') {
+    const delChannel = document.getElementById('f-del-channel').value;
+    const delAccount = document.getElementById('f-del-account').value;
+    const delTo = document.getElementById('f-del-to').value.trim();
+    if (!delTo) { toast('Delivery "Send To" is required when announcing', 'error'); return; }
+    job.delivery = {mode: 'announce', channel: delChannel, to: delTo};
+    if (delAccount) job.delivery.accountId = delAccount;
+  } else {
+    job.delivery = {mode: 'none'};
+  }
+
+  const btn = document.getElementById('modal-save');
+  btn.disabled = true; btn.textContent = 'Saving...';
+
+  try {
+    if (editingJobId) {
+      await rpc('cron.update', {id: editingJobId, patch: {...job, agentId}});
+      toast('Job updated!', 'success');
+    } else {
+      job.agentId = agentId;
+      await rpc('cron.add', {job});
+      toast('Job created!', 'success');
+    }
+    closeModal();
+    loadJobs();
+  } catch (e) {
+    toast('Save failed: '+e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = editingJobId ? 'Save Changes' : 'Create Job';
+}
+
+// --- Toast ---
+function toast(msg, type) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+// --- Init ---
+initAgentDropdowns();
+connectGateway();
+</script>
+</body>
+</html>
