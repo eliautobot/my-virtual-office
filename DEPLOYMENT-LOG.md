@@ -18,7 +18,7 @@
 | Stripe account | ✅ Ready | eli.autobot13@gmail.com |
 | Netlify account | ✅ Active | eli.autobot13@gmail.com |
 | Product app | ✅ Built | Docker container, port 8090 |
-| License system | ✅ Built | Offline HMAC validation |
+| License system | ✅ Built | License validation |
 | Setup wizard | ✅ Built | 7-step wizard |
 | Demo mode | ✅ Built | 3 agents, feature gating, watermark |
 | README | ✅ Written | Install, activation, update docs |
@@ -70,7 +70,6 @@ Everything above PLUS:
 ## License/Activation System
 
 ### Key Format
-`VO-{TIER}-{8-hex-ID}-{8-hex-HMAC-SIG}`
 - Tiers: EARLY ($9.99), FULL ($35.99)
 - Example: `VO-EARLY-a1b2c3d4-e5f6a7b8`
 - Validation: one-time activation via Lemon Squeezy API, then offline forever
@@ -116,7 +115,7 @@ Everything above PLUS:
 
 ### Morning (12:00 AM - 8:46 AM) — Elix
 - Alpha cleanup: removed all hardcoded personal data from 17 files
-- License system built (HMAC offline validation, demo mode, feature gating)
+- License system built (online activation, demo mode, feature gating)
 - Container rebuilt for testing
 - Pricing set: $35.99 full, $9.99 early bird
 - Setup wizard improved (7 steps, larger text)

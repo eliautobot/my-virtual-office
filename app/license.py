@@ -126,7 +126,7 @@ def _verify_product(meta):
 
 
 def _is_internal():
-    """Internal build check."""
+    """Check build variant."""
     return os.environ.get("_VO_INT", "").strip() == "1"
 
 

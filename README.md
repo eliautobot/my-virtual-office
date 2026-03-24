@@ -1,5 +1,7 @@
 # My Virtual Office
 
+🌐 **[myvirtualoffice.ai](https://myvirtualoffice.ai/)**
+
 A self-hosted retro pixel-art AI workspace for [OpenClaw](https://openclaw.ai). Turn invisible agent work into a living, breathing office.
 
 ![My Virtual Office](screenshot.png)
