@@ -11,6 +11,7 @@ import websockets
 from websockets.asyncio.client import connect as ws_connect
 import glob
 import re as re_module
+import gateway_presence
 
 
 # ─── CONFIGURATION ───────────────────────────────────────────────
@@ -300,11 +301,8 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            try:
-                with open(STATUS_FILE, "r") as f:
-                    self.wfile.write(f.read().encode())
-            except FileNotFoundError:
-                self.wfile.write(b"{}")
+            state = gateway_presence.get_state()
+            self.wfile.write(json.dumps(state).encode())
         elif self.path == "/agents-list":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -527,17 +525,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 roster = roster[:agent_limit]
             self.wfile.write(json.dumps({"agents": roster}).encode())
         elif self.path == "/api/presence" or self.path.startswith("/api/presence/"):
-            # Presence API — read all or single agent state
-            try:
-                with open(STATUS_FILE, "r") as f:
-                    status = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                status = {}
+            # Presence API — read from gateway_presence in-memory state
             if self.path == "/api/presence":
-                result = status
+                result = gateway_presence.get_state()
             else:
                 agent_id = self.path.split("/api/presence/")[1].strip("/")
-                result = status.get(agent_id, {"state": "unknown"})
+                result = gateway_presence.get_agent_state(agent_id)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -1250,15 +1243,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "Invalid state"}).encode())
                 return
-            import time as _time
-            try:
-                with open(STATUS_FILE, "r") as f:
-                    status = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                status = {}
-            status[agent_id] = {"state": state, "task": task, "updated": int(_time.time())}
-            with open(STATUS_FILE, "w") as f:
-                json.dump(status, f, indent=2)
+            gateway_presence.set_manual_override(agent_id, state, task)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -1383,17 +1368,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
             agent_key = body.get("agent", "")
-            try:
-                with open(STATUS_FILE, "r") as f:
-                    data = json.load(f)
-                if agent_key in data and isinstance(data[agent_key], dict):
-                    data[agent_key]["notify"] = False
-                    with open(STATUS_FILE, "r+") as f:
-                        f.seek(0)
-                        json.dump(data, f, indent=2)
-                        f.truncate()
-            except (FileNotFoundError, json.JSONDecodeError, PermissionError) as e:
-                print(f"clear-notify error: {e}")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -1564,21 +1538,57 @@ def start_ws_server():
 
 
 def start_http_server():
-    # Create default status file from discovered agents
-    if not os.path.exists(STATUS_FILE):
-        default = {}
-        for a in get_roster():
-            default[a["statusKey"]] = {"state": "idle", "task": "", "updated": 0}
-        with open(STATUS_FILE, "w") as f:
-            json.dump(default, f, indent=2)
-        os.chmod(STATUS_FILE, 0o666)
-        print(f"Created default status for {len(default)} agents: {STATUS_FILE}")
+    # Initialize gateway presence with discovered agents
+    agent_ids = [a["statusKey"] for a in get_roster()]
+    gateway_presence.init_agents(agent_ids)
+
+    # Set the meetings file path (office.py still writes meetings here)
+    gateway_presence.set_meetings_file(STATUS_FILE)
+
+    # Load disk snapshot for crash recovery
+    snapshot_path = os.path.join(STATUS_DIR, "presence-snapshot.json")
+    gateway_presence.load_snapshot(snapshot_path)
+
+    # Also load meetings from old status file if it exists (migration)
+    try:
+        with open(STATUS_FILE, "r") as f:
+            old_status = json.load(f)
+        meetings = old_status.get("_meetings", [])
+        if meetings:
+            gateway_presence.set_meetings(meetings)
+            print(f"Migrated {len(meetings)} meetings from old status file")
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    # Read gateway token from openclaw.json
+    gw_token = ""
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            cfg = json.load(f)
+        gw_token = cfg.get("gateway", {}).get("auth", {}).get("token", "")
+    except Exception:
+        pass
+
+    # Start gateway presence listener
+    gw_url = VO_CONFIG["openclaw"]["gatewayUrl"]
+    if gw_token:
+        gateway_presence.start(gw_url, gw_token, port=PORT)
+    else:
+        print("\u26a0\ufe0f  No gateway token found \u2014 gateway presence disabled")
+
+    # Start periodic snapshot saver (every 30s)
+    def snapshot_loop():
+        import time
+        while True:
+            time.sleep(30)
+            gateway_presence.save_snapshot(snapshot_path)
+    snap_thread = threading.Thread(target=snapshot_loop, daemon=True, name="presence-snapshot")
+    snap_thread.start()
 
     _oname = VO_CONFIG["office"]["name"]
-    print(f"🏢 {_oname} → http://localhost:{PORT}")
+    print(f"\U0001f3e2 {_oname} \u2192 http://localhost:{PORT}")
     server = http.server.ThreadingHTTPServer(("0.0.0.0", PORT), OfficeHandler)
     server.serve_forever()
-
 
 if __name__ == "__main__":
     # Start WS proxy in a background thread

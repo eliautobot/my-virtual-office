@@ -441,8 +441,8 @@ button:active { transform: translateY(3px); box-shadow: none; }
     width: 6px; height: 6px; border-radius: 50%;
     flex-shrink: 0;
 }
-.agent-entry .dot.working { background: #4caf50; box-shadow: 0 0 4px #4caf50; }
-.agent-entry .dot.idle { background: #ffc107; box-shadow: 0 0 4px #ffc107; }
+.agent-entry .dot.working { background: #e53935; box-shadow: 0 0 4px #e53935; }
+.agent-entry .dot.idle { background: #4caf50; box-shadow: 0 0 4px #4caf50; }
 .agent-entry .dot.meeting { background: #2196f3; box-shadow: 0 0 4px #2196f3; }
 .agent-entry .dot.break, .agent-entry .dot.lounge { background: #ff9800; box-shadow: 0 0 4px #ff9800; }
 .agent-entry .dot.moving { background: #9c27b0; box-shadow: 0 0 4px #9c27b0; }
