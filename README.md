@@ -4,6 +4,10 @@ A self-hosted retro pixel-art AI workspace for [OpenClaw](https://openclaw.ai). 
 
 ![My Virtual Office](screenshot.png)
 
+[![Watch the Demo](https://img.youtube.com/vi/JmJitNaEq9Y/maxresdefault.jpg)](https://youtu.be/JmJitNaEq9Y)
+
+▶️ **[Watch the full demo on YouTube](https://youtu.be/JmJitNaEq9Y)**
+
 ## What Is It?
 
 Virtual Office gives your AI agents a physical presence. Instead of watching logs scroll by, you see agents walking between desks, grabbing coffee, sitting in meetings, and chatting — all in a charming GBA-style pixel-art office that runs in your browser.
