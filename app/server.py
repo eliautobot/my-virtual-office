@@ -966,6 +966,13 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(safe_config).encode())
+        elif self.path == "/api/gateway/test":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result = self._test_gateway_connection()
+            self.wfile.write(json.dumps(result).encode())
         elif self.path == "/weather-proxy":
             _wloc = VO_CONFIG["weather"].get("location")
             if not _wloc:
@@ -1888,6 +1895,16 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
             return
+        elif self.path == "/api/gateway/configure":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = self._configure_gateway_origin(body.get("origin", ""))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+            return
         elif self.path == "/clear-notify":
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
@@ -1922,6 +1939,125 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+    def _configure_gateway_origin(self, origin):
+        """Configure gateway to allow the given origin, and set insecure auth flags for Docker."""
+        if not origin:
+            return {"ok": False, "error": "No origin provided"}
+        try:
+            try:
+                with open(CONFIG_PATH, "r") as f:
+                    cfg = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                cfg = {}
+
+            gateway_cfg = cfg.setdefault("gateway", {})
+            control_ui = gateway_cfg.setdefault("controlUi", {})
+
+            # Get current allowed origins
+            origins = control_ui.get("allowedOrigins", [])
+            if not isinstance(origins, list):
+                origins = []
+
+            added = origin not in origins
+            if added:
+                origins.append(origin)
+            control_ui["allowedOrigins"] = origins
+
+            # Ensure insecure auth flags for Docker
+            control_ui["allowInsecureAuth"] = True
+            control_ui["dangerouslyDisableDeviceAuth"] = True
+
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(cfg, f, indent=2)
+
+            # Signal gateway to reload
+            self._signal_gateway(restart=False)
+
+            return {"ok": True, "added": added, "origins": origins}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _test_gateway_connection(self):
+        """Test server-side connectivity to the OpenClaw gateway."""
+        import asyncio as _asyncio
+        import concurrent.futures
+
+        async def _do_test():
+            try:
+                gw_url = VO_CONFIG["openclaw"]["gatewayUrl"]
+                origin = f"http://127.0.0.1:{PORT}"
+
+                # Read token from config
+                token = ""
+                try:
+                    with open(CONFIG_PATH, "r") as f:
+                        cfg = json.load(f)
+                    token = cfg.get("gateway", {}).get("auth", {}).get("token", "")
+                except Exception:
+                    pass
+
+                import websockets as _ws
+                from websockets.asyncio.client import connect as _ws_connect
+
+                async with _asyncio.timeout(5):
+                    ws = await _ws_connect(
+                        gw_url,
+                        max_size=1024 * 1024,
+                        additional_headers={"Origin": origin},
+                        close_timeout=3,
+                    )
+                    async with ws:
+                        # Wait for challenge
+                        raw = await _asyncio.wait_for(ws.recv(), timeout=5)
+                        msg = json.loads(raw)
+                        if msg.get("event") != "connect.challenge":
+                            return {"ok": False, "gateway": "unexpected_response"}
+
+                        # Send connect
+                        connect_msg = {
+                            "type": "req",
+                            "id": "gw-test-1",
+                            "method": "connect",
+                            "params": {
+                                "minProtocol": 3, "maxProtocol": 3,
+                                "client": {"id": "openclaw-control-ui", "version": "2026.2.9", "platform": "server", "mode": "webchat"},
+                                "role": "operator",
+                                "scopes": ["operator.read"],
+                                "caps": [], "commands": [], "permissions": {},
+                                "auth": {"token": token}
+                            }
+                        }
+                        await ws.send(json.dumps(connect_msg))
+
+                        raw2 = await _asyncio.wait_for(ws.recv(), timeout=5)
+                        res = json.loads(raw2)
+                        if not res.get("ok"):
+                            err = res.get("error", {}).get("message", "unknown")
+                            return {"ok": True, "gateway": "reachable", "token": False, "error": err, "agents": 0}
+
+                        # Connected — query sessions
+                        req = {"type": "req", "id": "gw-test-2", "method": "sessions.list", "params": {}}
+                        await ws.send(json.dumps(req))
+                        raw3 = await _asyncio.wait_for(ws.recv(), timeout=5)
+                        res3 = json.loads(raw3)
+                        sessions = res3.get("payload", {}).get("sessions", []) if res3.get("ok") else []
+                        agent_count = sum(1 for s in sessions if isinstance(s, dict) and s.get("key", "").startswith("agent:"))
+
+                        return {"ok": True, "gateway": "reachable", "token": True, "agents": agent_count}
+
+            except (ConnectionRefusedError, ConnectionResetError, OSError):
+                return {"ok": False, "gateway": "unreachable", "token": False, "agents": 0}
+            except Exception as e:
+                return {"ok": False, "gateway": "error", "error": str(e)[:200], "token": False, "agents": 0}
+
+        # Run async test in a thread pool to avoid blocking the HTTP server
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(lambda: _asyncio.run(_do_test()))
+            try:
+                return future.result(timeout=10)
+            except Exception as e:
+                return {"ok": False, "gateway": "error", "error": str(e)[:200]}
 
     def _sms_data_dir(self):
         return STATUS_DIR
@@ -1997,44 +2133,65 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+# ─── WS PROXY QUIET MODE ─────────────────────────────────────────
+_ws_proxy_connected_logged = False
+_ws_proxy_failed_logged = False
+
+
 async def try_connect_gateway():
     """Try connecting to gateway, with fallback URLs."""
+    global _ws_proxy_connected_logged, _ws_proxy_failed_logged
     for url in [GATEWAY_URL, GATEWAY_URL_FALLBACK]:
         try:
             gw = await asyncio.wait_for(
                 ws_connect(url, max_size=10 * 1024 * 1024, additional_headers={"Origin": f"http://127.0.0.1:{PORT}"}),
                 timeout=3
             )
-            print(f"✅ Connected to gateway: {url}")
+            if not _ws_proxy_connected_logged:
+                print(f"✅ Connected to gateway (WS proxy): {url}")
+                _ws_proxy_connected_logged = True
+            _ws_proxy_failed_logged = False
             return gw
-        except Exception as e:
-            print(f"⚠️  Gateway {url} failed: {e}")
+        except Exception:
+            pass
+    if not _ws_proxy_failed_logged:
+        print(f"⚠️  WS proxy: gateway not reachable — will retry silently")
+        _ws_proxy_failed_logged = True
     return None
 
 
 async def ws_proxy(client_ws):
     """Proxy a browser WebSocket connection to the OpenClaw gateway."""
+    global _ws_proxy_connected_logged, _ws_proxy_failed_logged
     gw = await try_connect_gateway()
     if not gw:
         await client_ws.close(1011, "Cannot reach gateway")
         return
 
     async def client_to_gw():
+        global _ws_proxy_connected_logged
         try:
             async for msg in client_ws:
                 await gw.send(msg)
         except websockets.exceptions.ConnectionClosed:
             pass
+        except Exception:
+            pass
         finally:
+            _ws_proxy_connected_logged = False  # allow re-log on next connect
             await gw.close()
 
     async def gw_to_client():
+        global _ws_proxy_connected_logged
         try:
             async for msg in gw:
                 await client_ws.send(msg)
         except websockets.exceptions.ConnectionClosed:
             pass
+        except Exception:
+            pass
         finally:
+            _ws_proxy_connected_logged = False  # allow re-log on next connect
             await client_ws.close()
 
     async def ping_loop():

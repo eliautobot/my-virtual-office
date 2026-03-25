@@ -392,10 +392,12 @@ async def _gateway_loop(gateway_url, gateway_token, origin):
     """
     global _gw_connected, _gw_error
 
+    _consecutive_failures = 0
+    _origin_tip_shown = False
+
     while True:
         try:
             _gw_error = None
-            print(f"🔌 Gateway presence: connecting to {gateway_url}")
 
             async with ws_connect(
                 gateway_url,
@@ -441,11 +443,21 @@ async def _gateway_loop(gateway_url, gateway_token, origin):
                 res = json.loads(raw)
                 if not res.get("ok"):
                     err = res.get("error", {}).get("message", "unknown error")
-                    print(f"❌ Gateway presence: connect failed: {err}")
                     _gw_error = err
-                    await asyncio.sleep(10)
+                    _consecutive_failures += 1
+                    should_log = (_consecutive_failures == 1 or _consecutive_failures % 10 == 0)
+                    if should_log:
+                        print(f"❌ Gateway presence: connect failed: {err} (attempt {_consecutive_failures})")
+                    # Show one-time tip for origin not allowed
+                    if not _origin_tip_shown and ("origin" in err.lower() or "not allowed" in err.lower()):
+                        print("💡 Tip: Run the setup wizard or add your origin to gateway.controlUi.allowedOrigins in openclaw.json")
+                        _origin_tip_shown = True
+                    sleep_sec = min(60, 5 * (2 ** min(_consecutive_failures - 1, 4)))
+                    await asyncio.sleep(sleep_sec)
                     continue
 
+                # Successful connection — reset failure counter
+                _consecutive_failures = 0
                 _gw_connected = True
                 print("✅ Gateway presence: connected")
 
@@ -465,17 +477,25 @@ async def _gateway_loop(gateway_url, gateway_token, origin):
             # Gateway not available — quiet retry, no traceback spam
             _gw_connected = False
             _gw_error = str(e)
-            if "Connect call failed" in str(e) or "Connection refused" in str(e):
-                print(f"⚠️  Gateway presence: gateway not reachable at {gateway_url} — retrying in 15s")
-            else:
-                print(f"⚠️  Gateway presence: connection error: {e}")
-            await asyncio.sleep(15)
+            _consecutive_failures += 1
+            should_log = (_consecutive_failures == 1 or _consecutive_failures % 10 == 0)
+            if should_log:
+                if "Connect call failed" in str(e) or "Connection refused" in str(e):
+                    print(f"⚠️  Gateway presence: gateway not reachable at {gateway_url} (attempt {_consecutive_failures})")
+                else:
+                    print(f"⚠️  Gateway presence: connection error: {e} (attempt {_consecutive_failures})")
+            sleep_sec = min(60, 5 * (2 ** min(_consecutive_failures - 1, 4)))
+            await asyncio.sleep(sleep_sec)
         except Exception as e:
             _gw_connected = False
             _gw_error = str(e)
-            print(f"⚠️  Gateway presence: error: {e}")
-            traceback.print_exc()
-            await asyncio.sleep(10)
+            _consecutive_failures += 1
+            should_log = (_consecutive_failures == 1 or _consecutive_failures % 10 == 0)
+            if should_log:
+                print(f"⚠️  Gateway presence: error: {e} (attempt {_consecutive_failures})")
+                traceback.print_exc()
+            sleep_sec = min(60, 5 * (2 ** min(_consecutive_failures - 1, 4)))
+            await asyncio.sleep(sleep_sec)
 
 
 async def _message_reader(ws, response_queue):

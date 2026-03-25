@@ -217,7 +217,7 @@ function renderCloudProviders() {
                 <span class="key-status ${hasKey ? 'has-key' : 'no-key'}">${hasKey ? authLabel + masked : '❌ No credential'}</span>
             </div>
             <div class="row">
-                <input id="key-${prov}" type="password" placeholder="${placeholder}" value="" ${isOAuth ? 'disabled' : ''}>
+                <input id="key-${prov}" type="password" placeholder="${placeholder}" value="" autocomplete="off" ${isOAuth ? 'disabled' : ''}>
                 ${isOAuth ? '' : `<button class="btn btn-green" onclick="saveKey('${prov}')">Save</button>`}
                 ${hasKey ? `<button class="btn btn-red" onclick="deleteKey('${prov}', '${info.profileId || ''}')">Delete</button>` : ''}
             </div>

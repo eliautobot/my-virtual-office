@@ -210,6 +210,13 @@
         ctx.stroke();
     }
 
-    // Auto-start polling since panel is expanded by default
-    if (_open) startPolling();
+    // Auto-start polling only if pcMetrics feature is enabled
+    fetch('/vo-config').then(function(r) { return r.json(); }).then(function(cfg) {
+        if (cfg && cfg.features && cfg.features.pcMetrics === true) {
+            if (_open) startPolling();
+        }
+        // If pcMetrics is not enabled, don't start polling — avoids 404 spam
+    }).catch(function() {
+        // If vo-config fetch fails, don't start polling to avoid 404s
+    });
 })();
