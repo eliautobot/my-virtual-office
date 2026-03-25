@@ -166,11 +166,12 @@ All settings live in `vo-config.json`. Environment variables override config val
 ## Updating
 
 ```bash
+docker compose down
 docker compose pull
 docker compose up -d
 ```
 
-Your license key and office config persist across updates.
+Your license key, office layout, and all settings persist across updates — they're stored in the `vo-data` volume.
 
 ## Roadmap
 
