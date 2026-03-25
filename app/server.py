@@ -617,6 +617,11 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(b"Setup page not found")
             return
+        elif self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "status": "running"}).encode())
         elif self.path == "/status":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

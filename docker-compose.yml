@@ -4,24 +4,49 @@ services:
   virtual-office:
     build: ./app
     container_name: virtual-office
-    ports:
-      - "${VO_PORT:-8090}:${VO_PORT:-8090}"
-      - "${VO_WS_PORT:-8091}:${VO_WS_PORT:-8091}"
+    network_mode: host
+    pid: host  # Allows signaling OpenClaw gateway for config reload
     volumes:
-      # Mount OpenClaw home directory (read-only for discovery + session reading)
-      - ${VO_OPENCLAW_PATH:-~/.openclaw}:/openclaw:ro
-      # Persistent office data (layout, presence, config overrides)
+      # Mount OpenClaw home directory (read-write for model/key management)
+      - ${VO_OPENCLAW_PATH:-~/.openclaw}:/openclaw
+      # Persistent office data (layout, presence snapshots, config)
       - vo-data:/data
     environment:
       - VO_OPENCLAW_PATH=/openclaw
       - VO_STATUS_DIR=/data
-      - VO_GATEWAY_URL=${VO_GATEWAY_URL:-ws://host.docker.internal:18789}
-      - VO_GATEWAY_HTTP=${VO_GATEWAY_HTTP:-http://host.docker.internal:18789}
+      - VO_GATEWAY_URL=${VO_GATEWAY_URL:-ws://127.0.0.1:18789}
+      - VO_GATEWAY_HTTP=${VO_GATEWAY_HTTP:-http://127.0.0.1:18789}
       - VO_PORT=${VO_PORT:-8090}
       - VO_WS_PORT=${VO_WS_PORT:-8091}
       - VO_OFFICE_NAME=${VO_OFFICE_NAME:-Virtual Office}
       - VO_WEATHER_LOCATION=${VO_WEATHER_LOCATION:-}
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${VO_PORT:-8090}/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Optional: Agent Browser (uncomment to enable)
+  # Gives AI agents a real Chromium browser they can control via CDP.
+  # You can watch them browse live through the Virtual Office browser panel.
+  #
+  # agent-browser:
+  #   image: kasmweb/chromium:1.17.0
+  #   container_name: agent-browser
+  #   network_mode: host
+  #   environment:
+  #     - VNC_PW=${BROWSER_VNC_PASSWORD:-changeme}
+  #     - DISPLAY=:10
+  #   volumes:
+  #     - browser-data:/home/kasm-user
+  #   restart: unless-stopped
+  #   # KasmVNC on port 6901, CDP on port 9222
+  #   # Configure in Virtual Office Settings → Agent Browser:
+  #   #   CDP URL: http://127.0.0.1:9222
+  #   #   Viewer URL: https://127.0.0.1:6901
 
 volumes:
   vo-data:
+  # browser-data:  # Uncomment if using agent-browser
