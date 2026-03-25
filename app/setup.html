@@ -101,7 +101,10 @@
             <label>Office Name</label>
             <input type="text" id="s-name" value="My Virtual Office" placeholder="e.g. Acme Corp HQ">
             <label>Weather Location <span style="color:#666;font-size:12px">(optional)</span></label>
-            <input type="text" id="s-weather" value="" placeholder="e.g. New+York,NY or London,UK">
+            <div style="display:flex;gap:8px">
+                <input type="text" id="s-weather-city" value="" placeholder="City" style="flex:2">
+                <input type="text" id="s-weather-state" value="" placeholder="State / Country" style="flex:1">
+            </div>
             <div class="btn-row">
                 <button class="secondary" onclick="nextStep(0)">← BACK</button>
                 <button onclick="nextStep(2)">NEXT →</button>
@@ -581,6 +584,14 @@
             });
         }
 
+        function _buildWeatherLocation(city, state) {
+            city = (city || '').trim();
+            state = (state || '').trim();
+            if (!city) return null;
+            // Format: City,State (no spaces — wttr.in friendly)
+            return state ? city.replace(/ /g, '+') + ',' + state.replace(/ /g, '+') : city.replace(/ /g, '+');
+        }
+
         function finishSetup() {
             var browserEnabled = document.getElementById('s-browser-enable').checked;
             var smsEnabled = document.getElementById('s-sms-enable').checked;
@@ -588,7 +599,7 @@
             var gwToken = (document.getElementById('s-gateway-token') || {}).value || '';
             var config = {
                 office: { name: document.getElementById('s-name').value || 'Virtual Office' },
-                weather: { location: document.getElementById('s-weather').value || null },
+                weather: { location: _buildWeatherLocation(document.getElementById('s-weather-city').value, document.getElementById('s-weather-state').value) },
                 features: {
                     browserPanel: browserEnabled,
                     smsPanel: smsEnabled,

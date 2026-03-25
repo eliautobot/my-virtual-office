@@ -11183,12 +11183,17 @@ function _mmLoadCurrentSettings() {
     fetch('/vo-config').then(function(r){ return r.json(); }).then(function(cfg) {
         var gwInput = document.getElementById('mm-gateway-url');
         var nameInput = document.getElementById('mm-office-name');
-        var weatherInput = document.getElementById('mm-weather');
+        var weatherCityInput = document.getElementById('mm-weather-city');
+        var weatherStateInput = document.getElementById('mm-weather-state');
         var pathInput = document.getElementById('mm-oc-path');
         var tokenInput = document.getElementById('mm-gateway-token');
         if (gwInput) gwInput.value = (cfg.openclaw || {}).gatewayUrl || '';
         if (nameInput) nameInput.value = (cfg.office || {}).name || '';
-        if (weatherInput) weatherInput.value = (cfg.weather || {}).location || '';
+        // Parse "City,State" or "City+Name,State" back into separate fields
+        var _wloc = (cfg.weather || {}).location || '';
+        var _wparts = _wloc.split(',');
+        if (weatherCityInput) weatherCityInput.value = (_wparts[0] || '').replace(/\+/g, ' ');
+        if (weatherStateInput) weatherStateInput.value = (_wparts[1] || '').replace(/\+/g, ' ');
         if (pathInput) pathInput.value = (cfg.openclaw || {}).homePath || '';
         // Auto-populate token from /gateway-info (shows current effective token)
         if (tokenInput) {
@@ -11376,10 +11381,20 @@ function mmTestConnection() {
     });
 }
 
+function _buildWeatherLocation(city, state) {
+    city = (city || '').trim();
+    state = (state || '').trim();
+    if (!city) return null;
+    return state ? city.replace(/ /g, '+') + ',' + state.replace(/ /g, '+') : city.replace(/ /g, '+');
+}
+
 function mmSaveSettings() {
     var gwUrl = document.getElementById('mm-gateway-url').value;
     var officeName = document.getElementById('mm-office-name').value;
-    var weather = document.getElementById('mm-weather').value;
+    var weather = _buildWeatherLocation(
+        document.getElementById('mm-weather-city').value,
+        document.getElementById('mm-weather-state').value
+    );
 
     // Save display prefs locally
     var _elBubbles = document.getElementById('mm-show-bubbles');
