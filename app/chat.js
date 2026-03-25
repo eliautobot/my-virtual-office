@@ -1,6 +1,6 @@
 // Virtual Office Chat — Gateway WebSocket Client (Multi-Agent)
 (() => {
-  const GATEWAY_TOKEN = 'f2d0bb2d27ee0498a33999a9d14cc7286c82e893e92f9a32';
+  let GATEWAY_TOKEN = ''; // fetched dynamically from /gateway-info
   let SESSION_KEY = 'agent:main:main';
   let currentAgentKey = 'main'; // default to main agent (auto-populated from discovery)
   let agentList = []; // populated from /agents-list
@@ -633,8 +633,11 @@
     }, 30000);
   }
 
-  var _chatWsPort = 8086; // default, updated from /gateway-info
-  fetch('/gateway-info').then(r => r.json()).then(d => { if (d.wsPort) _chatWsPort = d.wsPort; }).catch(() => {});
+  var _chatWsPort = 8091; // default, updated from /gateway-info
+  fetch('/gateway-info').then(r => r.json()).then(d => {
+    if (d.wsPort) _chatWsPort = d.wsPort;
+    if (d.token) GATEWAY_TOKEN = d.token;
+  }).catch(() => {});
 
   function getGatewayUrl() {
     // Connect to the WS proxy on the same host

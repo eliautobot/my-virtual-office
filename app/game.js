@@ -11185,10 +11185,17 @@ function _mmLoadCurrentSettings() {
         var nameInput = document.getElementById('mm-office-name');
         var weatherInput = document.getElementById('mm-weather');
         var pathInput = document.getElementById('mm-oc-path');
+        var tokenInput = document.getElementById('mm-gateway-token');
         if (gwInput) gwInput.value = (cfg.openclaw || {}).gatewayUrl || '';
         if (nameInput) nameInput.value = (cfg.office || {}).name || '';
         if (weatherInput) weatherInput.value = (cfg.weather || {}).location || '';
         if (pathInput) pathInput.value = (cfg.openclaw || {}).homePath || '';
+        // Auto-populate token from /gateway-info (shows current effective token)
+        if (tokenInput) {
+            fetch('/gateway-info').then(function(r) { return r.json(); }).then(function(gi) {
+                if (gi.token && !tokenInput.value) tokenInput.value = gi.token;
+            }).catch(function(){});
+        }
         // PC Metrics
         var pcmEnabled = ((cfg.features || {}).pcMetrics) || false;
         var pcmUrl = ((cfg.pcMetrics || {}).url) || "";
@@ -11332,12 +11339,14 @@ function mmTestConnection() {
     // Save current settings first so the server tests with the new values
     var gwUrl = document.getElementById('mm-gateway-url').value;
     var ocPath = document.getElementById('mm-oc-path').value;
+    var gwToken = (document.getElementById('mm-gateway-token') || {}).value || '';
     var saveBody = { openclaw: {} };
     if (gwUrl) {
         saveBody.openclaw.gatewayUrl = gwUrl;
         saveBody.openclaw.gatewayHttp = gwUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace(/\/ws.*$/, '');
     }
     if (ocPath) saveBody.openclaw.homePath = ocPath;
+    if (gwToken) saveBody.openclaw.gatewayToken = gwToken;
 
     fetch('/setup/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(saveBody) })
     .then(function() {
@@ -11386,12 +11395,14 @@ function mmSaveSettings() {
 
     // Build server config
     var ocPath = document.getElementById('mm-oc-path').value;
+    var gwToken = (document.getElementById('mm-gateway-token') || {}).value || '';
     var config = {};
     config.openclaw = { gatewayUrl: gwUrl || 'ws://127.0.0.1:18789' };
     if (gwUrl) {
         config.openclaw.gatewayHttp = gwUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace(/\/ws.*$/, '');
     }
     if (ocPath) config.openclaw.homePath = ocPath;
+    if (gwToken) config.openclaw.gatewayToken = gwToken;
     config.office = { name: officeName || 'Virtual Office' };
     config.weather = { location: weather || null };
     // PC Metrics

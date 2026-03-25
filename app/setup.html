@@ -143,6 +143,9 @@
                     <div style="font-size:13px;color:#aaa;margin-bottom:12px;line-height:1.5;">
                         Configure the gateway to allow this browser to connect for live agent status and chat.
                     </div>
+                    <label style="font-size:11px;color:#999;display:block;margin-bottom:4px;">Gateway Token <span style="color:#666;font-size:9px">(auto-detected)</span></label>
+                    <input type="text" id="s-gateway-token" placeholder="Auto-detected from openclaw.json" style="width:100%;padding:8px;background:#1a1a2e;color:#ccc;border:1px solid #333;border-radius:4px;font-family:monospace;font-size:11px;margin-bottom:4px;box-sizing:border-box;">
+                    <div style="font-size:10px;color:#666;margin-bottom:12px;">Auth token for chat & live status. Auto-read from OpenClaw config. Override to connect to a different instance.</div>
                     <button onclick="configureGateway()" style="margin:0 0 12px;padding:8px 16px;font-size:9px;">🔌 CONFIGURE GATEWAY CONNECTION</button>
                     <div id="gateway-config-status"></div>
                 </div>
@@ -181,11 +184,11 @@
 
             <div id="browser-fields" style="display:none;margin-top:16px;">
                 <label>CDP URL <span style="color:#666;font-size:12px">(Chrome DevTools Protocol)</span></label>
-                <input type="text" id="s-cdp-url" placeholder="http://127.0.0.1:9222">
+                <input type="text" id="s-cdp-url" placeholder="e.g. http://your-host:9222">
                 <div style="font-size:12px;color:#666;margin:4px 0 12px;">The address where Chrome/Chromium remote debugging is running.</div>
 
                 <label>Browser Viewer URL <span style="color:#666;font-size:12px">(VNC / live view)</span></label>
-                <input type="text" id="s-viewer-url" placeholder="http://127.0.0.1:6901">
+                <input type="text" id="s-viewer-url" placeholder="e.g. http://your-host:6902">
                 <div style="font-size:12px;color:#666;margin:4px 0 12px;">URL for the live browser view (KasmVNC, noVNC, etc.). This is what shows in the floating browser window so you can watch your agents browse in real time.</div>
 
                 <button onclick="testBrowserConnection()" style="margin:8px 0 16px;padding:8px 16px;font-size:9px;">🔍 TEST CONNECTION</button>
@@ -197,10 +200,10 @@
                 <b>1. CDP (Chrome DevTools Protocol)</b> — how agents control the browser<br>
                 <b>2. VNC Viewer</b> — how you watch the browser live in the office<br><br>
                 <b>Easiest setup — one Docker command:</b><br>
-                <code style="color:#90caf9;font-size:13px;">docker run -d --name vo-browser \<br>&nbsp;&nbsp;-p 9222:9222 -p 6901:6901 \<br>&nbsp;&nbsp;kasmweb/chromium:1.17.0</code><br><br>
+                <code style="color:#90caf9;font-size:13px;">docker run -d --name vo-browser \<br>&nbsp;&nbsp;-p 9222:9222 -p 6902:6902 -p 6901:6901 \<br>&nbsp;&nbsp;kasmweb/chromium:1.17.0</code><br><br>
                 This gives you both:<br>
                 • CDP URL: <code style="color:#90caf9;">http://127.0.0.1:9222</code><br>
-                • Viewer URL: <code style="color:#90caf9;">http://127.0.0.1:6901</code><br><br>
+                • Viewer URL: <code style="color:#90caf9;">http://127.0.0.1:6902</code> (HTTP, no cert needed)<br><br>
                 <b>Or use your own Chrome + VNC:</b><br>
                 <code style="color:#90caf9;font-size:13px;">google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/vo-browser</code><br>
                 Then point Viewer URL to your VNC/noVNC server.<br><br>
@@ -513,6 +516,11 @@
                     statusEl.innerHTML = '<div class="status-box success">✅ Found ' + agents.length + ' agent' + (agents.length === 1 ? '' : 's') + '!</div>';
                     helpEl.style.display = 'none';
                     if (gwSection) gwSection.style.display = 'block';
+                    // Auto-populate gateway token
+                    fetch('/gateway-info').then(function(r) { return r.json(); }).then(function(gi) {
+                        var tokenInput = document.getElementById('s-gateway-token');
+                        if (tokenInput && !tokenInput.value && gi.token) tokenInput.value = gi.token;
+                    }).catch(function(){});
                 } else {
                     statusEl.innerHTML = '<div class="status-box error" style="border-color:#f4a236;background:rgba(244,162,54,0.1);color:#f4c36a;">⚠️ No agents found at this path. Check the troubleshooting tips below, or enter a different path and try again.</div>';
                     helpEl.style.display = 'block';
@@ -577,6 +585,7 @@
             var browserEnabled = document.getElementById('s-browser-enable').checked;
             var smsEnabled = document.getElementById('s-sms-enable').checked;
             var pcMetricsEnabled = document.getElementById('s-pcmetrics-enable').checked;
+            var gwToken = (document.getElementById('s-gateway-token') || {}).value || '';
             var config = {
                 office: { name: document.getElementById('s-name').value || 'Virtual Office' },
                 weather: { location: document.getElementById('s-weather').value || null },

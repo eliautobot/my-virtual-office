@@ -340,6 +340,21 @@ def _compute_local_host_header(gw_url):
 _GW_LOCAL_HOST = _compute_local_host_header(GATEWAY_URL)
 
 
+def _get_gateway_token():
+    """Get the gateway auth token. Checks vo-config override first, then openclaw.json."""
+    # Check for user override in vo-config.json
+    vo_token = (VO_CONFIG.get("openclaw") or {}).get("gatewayToken", "")
+    if vo_token:
+        return vo_token
+    # Fall back to openclaw.json
+    try:
+        with open(CONFIG_PATH, "r") as f:
+            cfg = json.load(f)
+        return cfg.get("gateway", {}).get("auth", {}).get("token", "")
+    except Exception:
+        return ""
+
+
 def _auto_configure_gateway_origin():
     """Auto-configure the OpenClaw gateway to accept connections from this VO instance.
 
@@ -809,12 +824,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 agents = agents[:agent_limit]
             self.wfile.write(json.dumps({"agents": agents}).encode())
         elif self.path == "/gateway-info":
-            # Tell the browser what WS port to use for the proxy
+            # Tell the browser WS port + gateway token for chat connection
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            self.wfile.write(json.dumps({"wsPort": WS_PORT}).encode())
+            self.wfile.write(json.dumps({"wsPort": WS_PORT, "token": _get_gateway_token()}).encode())
         elif self.path == "/agent-chat":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -1882,18 +1897,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     _discovered_roster = discover_agents(WORKSPACE_BASE)
                     _discovered_at = _time_mod.time()
                     refresh_agent_maps()
-                # Restart gateway presence listener if URL changed
-                if GATEWAY_URL != old_gw:
-                    gw_token = ""
-                    try:
-                        with open(CONFIG_PATH, "r") as f:
-                            _cfg = json.load(f)
-                        gw_token = _cfg.get("gateway", {}).get("auth", {}).get("token", "")
-                    except Exception:
-                        pass
-                    if gw_token:
+                # Restart gateway presence listener if URL or token changed
+                new_token = _get_gateway_token()
+                if GATEWAY_URL != old_gw or new_token:
+                    if new_token:
                         gateway_presence.stop()
-                        gateway_presence.start(GATEWAY_URL, gw_token, port=PORT)
+                        gateway_presence.start(GATEWAY_URL, new_token, port=PORT)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
@@ -2153,15 +2162,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 gw_url = VO_CONFIG["openclaw"]["gatewayUrl"]
                 origin = f"http://127.0.0.1:{PORT}"
-
-                # Read token from config
-                token = ""
-                try:
-                    with open(CONFIG_PATH, "r") as f:
-                        cfg = json.load(f)
-                    token = cfg.get("gateway", {}).get("auth", {}).get("token", "")
-                except Exception:
-                    pass
+                token = _get_gateway_token()
 
                 import websockets as _ws
                 from websockets.asyncio.client import connect as _ws_connect
@@ -2406,17 +2407,11 @@ def start_http_server():
     except (FileNotFoundError, json.JSONDecodeError):
         pass
 
-    # Read gateway token from openclaw.json
-    gw_token = ""
-    try:
-        with open(CONFIG_PATH, "r") as f:
-            cfg = json.load(f)
-        gw_token = cfg.get("gateway", {}).get("auth", {}).get("token", "")
-    except Exception:
-        pass
-
     # Auto-configure gateway to accept our origin (plug and play for Docker bridge)
     _auto_configure_gateway_origin()
+
+    # Read gateway token (vo-config override, then openclaw.json)
+    gw_token = _get_gateway_token()
 
     # Start gateway presence listener
     gw_url = VO_CONFIG["openclaw"]["gatewayUrl"]

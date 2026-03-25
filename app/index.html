@@ -33,6 +33,9 @@
                             <label class="mm-label">Gateway URL <span style="color:#666;font-size:9px">(server-side)</span></label>
                             <input type="text" id="mm-gateway-url" class="mm-input" placeholder="ws://127.0.0.1:18789">
                             <div style="font-size:9px;color:#666;margin:4px 0 8px;">How the server reaches OpenClaw. Default works for local installs.</div>
+                            <label class="mm-label">Gateway Token <span style="color:#666;font-size:9px">(auto-detected)</span></label>
+                            <input type="text" id="mm-gateway-token" class="mm-input" placeholder="Auto-detected from openclaw.json" style="font-family:monospace;font-size:11px;">
+                            <div style="font-size:9px;color:#666;margin:4px 0 8px;">Auth token for chat & live status. Auto-read from OpenClaw config. Override to connect to a different instance.</div>
                             <button class="mm-btn mm-btn-primary" onclick="mmTestConnection()">🔍 Test Connection</button>
                             <div id="mm-conn-status"></div>
                         </div>
@@ -45,6 +48,15 @@
                             <input type="text" id="mm-weather" class="mm-input" placeholder="e.g. New+York,NY">
                         </div>
                         <!-- Display -->
+                        <div class="mm-section">
+                            <div class="mm-section-title">🖥️ Display</div>
+                            <label class="mm-label" style="display:flex;align-items:center;gap:6px;">
+                                <input type="checkbox" id="mm-show-bubbles" checked> Show chat bubbles
+                            </label>
+                            <label class="mm-label" style="display:flex;align-items:center;gap:6px;">
+                                <input type="checkbox" id="mm-show-names" checked> Show agent names
+                            </label>
+                        </div>
                         <!-- API Usage -->
                         <div class="mm-section">
                             <div class="mm-section-title">☁️ API Usage</div>
@@ -72,15 +84,33 @@
                             </div>
                         </div>
                         <div class="mm-section">
-                            <div class="mm-section-title">🎨 Display</div>
-                            <label class="mm-label">
-                                <input type="checkbox" id="mm-show-bubbles" checked> Show chat bubbles
+                            <div class="mm-section-title">&#x1F310; Agent Browser</div>
+                            <div style="font-size:11px;color:#888;margin-bottom:8px;line-height:1.4;">
+                                Give your AI agents a real web browser they can control. You can watch them browse in real time through a live viewer panel.<br><br>
+                                <b>How it works:</b> Your agents use <b>CDP</b> (Chrome DevTools Protocol) to navigate, click, and read pages. The <b>Viewer</b> is a live screen you see in the office — like watching over their shoulder.<br><br>
+                                <b>Compatible with:</b> KasmVNC, headless Chromium, browserless.io, Playwright, or any setup that exposes CDP. The viewer can be any VNC/noVNC/web viewer.
+                            </div>
+                            <label class="mm-label" style="display:flex;align-items:center;gap:6px;">
+                                <input type="checkbox" id="mm-browser-enable"> Enable Agent Browser
                             </label>
+                            <div id="mm-browser-fields" style="display:none;margin-top:8px;">
+                                <label class="mm-label">CDP URL <span style="color:#666;font-size:9px">(how agents control the browser)</span></label>
+                                <input type="text" id="mm-cdp-url" class="mm-input" placeholder="e.g. http://127.0.0.1:9222">
+                                <div style="font-size:10px;color:#666;margin:2px 0 6px;">The Chrome DevTools Protocol endpoint. Usually runs on the same machine as Virtual Office. Use 127.0.0.1 if the browser container is local.</div>
+                                <button class="mm-btn" onclick="mmTestCdp()" style="font-size:9px;padding:4px 10px;">&#x1F50D; Test CDP</button>
+                                <div id="mm-cdp-status" style="margin:4px 0 10px;"></div>
+                                
+                                <label class="mm-label">Browser Viewer URL <span style="color:#666;font-size:9px">(live view you watch)</span></label>
+                                <input type="text" id="mm-viewer-url" class="mm-input" placeholder="e.g. http://192.168.1.100:6902">
+                                <div style="font-size:10px;color:#666;margin:2px 0 6px;">The URL that loads in the floating browser window. Must be reachable from your browser (not localhost if you're accessing remotely). Use HTTP to avoid certificate issues.</div>
+                                <button class="mm-btn" onclick="mmTestViewer()" style="font-size:9px;padding:4px 10px;">&#x1F50D; Test Viewer</button>
+                                <div id="mm-viewer-status" style="margin:4px 0;"></div>
+                            </div>
+                        </div>
+                        <div class="mm-section">
+                            <div class="mm-section-title">🌤️ Weather</div>
                             <label class="mm-label">
                                 <input type="checkbox" id="mm-show-weather" checked> Show weather effects
-                            </label>
-                            <label class="mm-label">
-                                <input type="checkbox" id="mm-show-names" checked> Show agent names
                             </label>
                         </div>
                         <!-- Actions -->
@@ -196,8 +226,8 @@
             </div>
 
             <div class="status-panel">
-                <p>🟢 Working: <span id="count-working">0</span></p>
-                <p>🟡 Idle: <span id="count-idle">0</span></p>
+                <p>🔴 Working: <span id="count-working">0</span></p>
+                <p>🟢 Idle: <span id="count-idle">0</span></p>
                 <p>🔵 Meeting: <span id="count-meeting">0</span></p>
                 <p>☕ Break: <span id="count-break">0</span></p>
             </div>
@@ -441,7 +471,7 @@
         setTimeout(resizeCanvas, 320);
     }
     </script>
-    <script src="game.js?v=1774674001"></script>
+    <script src="game.js?v=1774674000"></script>
     <script src="browser-panel.js?v=1773812451"></script>
     <script>
     // Bio sections for agent modal
@@ -688,7 +718,7 @@
     <script src="chat.js?v=1774025500"></script>
     <script src="sms-panel.js?v=6"></script>
     <script src="pc-monitor.js?v=4"></script>
-    <script src="api-usage.js?v=1774674003"></script>
+    <script src="api-usage.js?v=1774026900"></script>
     <script>
     // License check — demo watermark + feature gates
     (function() {
