@@ -84,7 +84,8 @@ def _load_vo_config():
             "url": os.environ.get("VO_WHISPER_URL", whisper_cfg.get("url", "http://127.0.0.1:8087")),
         },
         "browser": {
-            "cdpUrl": os.environ.get("VO_CDP_URL", browser_cfg.get("cdpUrl", "http://127.0.0.1:9222")),
+            "cdpUrl": os.environ.get("VO_CDP_URL", browser_cfg.get("cdpUrl")),
+            "viewerUrl": os.environ.get("VO_VIEWER_URL", browser_cfg.get("viewerUrl")),
         },
         "weather": {
             "location": os.environ.get("VO_WEATHER_LOCATION", weather_cfg.get("location")),
@@ -146,6 +147,59 @@ def _agent_info_prop(self):
 AGENT_INFO = _build_agent_info()
 AGENT_WORKSPACES = _build_agent_workspaces()
 AGENT_SESSION_IDS = _build_agent_session_ids()
+
+def _patch_default_config_agents(config_str):
+    """Replace hardcoded agents in default config with actual roster agents.
+    Returns JSON string with agents patched from the live discovery roster."""
+    try:
+        cfg = json.loads(config_str)
+    except Exception:
+        return config_str
+    roster = get_roster()
+    if not roster:
+        return config_str
+    # Build agent entries from roster with random/seeded appearances
+    import hashlib
+    patched_agents = []
+    for a in roster:
+        agent_id = a.get("statusKey") or a.get("id", "main")
+        name = a.get("name") or agent_id
+        # Seed a deterministic hash for random appearance
+        h = int(hashlib.md5(agent_id.encode()).hexdigest(), 16)
+        skin_tones = ['#ffcc80','#d4a574','#c68642','#e8b88a','#fddcb5','#f5d0b0','#8d5524']
+        hair_styles = ['short','medium','long','curly','spiky','buzz','wavy']
+        hair_colors = ['#1a1a1a','#333333','#5d4037','#616161','#bf360c','#dcc282','#ffd700','#263238']
+        desk_items = ['trophy','envelope','calendar','chart','plans','checklist','files','ruler','money','marker']
+        gender = 'F' if (h >> 2) % 2 == 0 else 'M'
+        patched_agents.append({
+            "id": agent_id,
+            "name": name,
+            "role": a.get("role", "AI assistant"),
+            "emoji": a.get("emoji", "🤖"),
+            "color": _AGENT_COLORS_LIST[len(patched_agents) % len(_AGENT_COLORS_LIST)] if len(patched_agents) < len(_AGENT_COLORS_LIST) else '#607d8b',
+            "gender": gender,
+            "branch": "UNASSIGNED",
+            "statusKey": agent_id,
+            "appearance": {
+                "skinTone": skin_tones[h % len(skin_tones)],
+                "hairStyle": hair_styles[(h >> 3) % len(hair_styles)] if gender == 'M' else hair_styles[(h >> 3) % 3 + 2],
+                "hairColor": hair_colors[(h >> 5) % len(hair_colors)],
+                "hairHighlight": None,
+                "eyebrowStyle": "thin" if gender == 'F' else "thick",
+                "eyeColor": "#212121",
+                "facialHair": None, "facialHairColor": None,
+                "headwear": None, "headwearColor": None,
+                "glasses": None, "glassesColor": None,
+                "costume": None,
+                "heldItem": None,
+                "deskItem": desk_items[(h >> 8) % len(desk_items)]
+            }
+        })
+    cfg["agents"] = patched_agents
+    return json.dumps(cfg)
+
+# Color palette used for default config agent patching
+_AGENT_COLORS_LIST = ['#ffd700','#d32f2f','#1976d2','#388e3c','#f9a825','#e65100','#00897b','#7b1fa2','#6d4c41','#5c6bc0','#78909c','#4caf50','#00bcd4','#e91e90','#ff6d00','#795548','#607d8b','#9c27b0','#009688','#ff5722']
 
 def refresh_agent_maps():
     """Call after discovery refresh to update compatibility maps."""
@@ -885,15 +939,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     ))
                 )
                 if not meaningful:
-                    self.send_response(404)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Access-Control-Allow-Origin", "*")
-                    self.end_headers()
-                    # Try bundled default
+                    # No saved config — serve bundled default with live agent roster
                     _default_oc2 = os.path.join(os.path.dirname(__file__) or '.', 'default-office-config.json')
                     try:
                         with open(_default_oc2, 'r') as df:
                             ddata = df.read()
+                        ddata = _patch_default_config_agents(ddata)
                         self.send_response(200)
                         self.send_header('Content-Type', 'application/json')
                         self.send_header('Access-Control-Allow-Origin', '*')
@@ -912,11 +963,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(data.encode())
             except FileNotFoundError:
-                # Try bundled default config
+                # Try bundled default config with live agent roster
                 _default_oc = os.path.join(os.path.dirname(__file__) or '.', 'default-office-config.json')
                 try:
                     with open(_default_oc, 'r') as f:
                         data = f.read()
+                    data = _patch_default_config_agents(data)
                     self.send_response(200)
                     self.send_header('Content-Type', 'application/json')
                     self.send_header('Access-Control-Allow-Origin', '*')
