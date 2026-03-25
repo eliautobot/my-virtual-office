@@ -413,6 +413,8 @@ function getQueueOffset(x, y, excludeId) {
 // REAL WEATHER SYSTEM — fetches weather for configured location, renders on windows
 // ============================================================
 var weatherData = { condition: 'clear', code: 113, temp: 0, wind: 0, humidity: 0, feelsLike: 0, uvIndex: 0, visibility: 0, precipMM: 0, cloudcover: 0 };
+var _displayPrefs = { showWeather: true };
+try { var _dp = JSON.parse(localStorage.getItem("vo-display-prefs") || "{}"); if (_dp.showWeather !== undefined) _displayPrefs.showWeather = _dp.showWeather; } catch(e) {}
 var lastWeatherPoll = 0;
 var weatherParticles = []; // rain/snow particles
 var _weatherTick = 0;
@@ -4736,7 +4738,7 @@ function drawEnvironment() {
             ctx.fillRect(wx + ww - 12, wy + 8, 4, 2);
         }
         // Weather effects on glass (isLeft=true for left window only — sun/moon)
-        drawWeatherOnWindow(wx, wy, ww, wh, wx < 500);
+        if (_displayPrefs.showWeather !== false) drawWeatherOnWindow(wx, wy, ww, wh, wx < 500);
         // Cross panes (thicker) — always on top
         ctx.fillStyle = '#fff';
         ctx.fillRect(wx + Math.floor(ww / 2) - 1, wy, 3, wh);  // vertical
@@ -5819,7 +5821,7 @@ function _showTextLabelEditor(item) {
 // --- INTERACTIVE WINDOW (weather + sun configurable) ---
 function drawInteractiveWindow(item) {
     var wx = item.x, wy = item.y, ww = 36, wh = 44;
-    var showWeather = item.weather !== false; // default true
+    var showWeather = item.weather !== false && _displayPrefs.showWeather !== false; // per-item + global pref
     var showSun = item.showSun || false;      // default false
 
     // Outer sill / ledge
@@ -11199,6 +11201,18 @@ function _mmLoadCurrentSettings() {
         // API Usage
         var apiUsageCb = document.getElementById("mm-apiusage-enable");
         if (apiUsageCb) apiUsageCb.checked = (cfg.features || {}).apiUsage !== false;
+        // Browser
+        var brEnabled = ((cfg.features || {}).browserPanel) || false;
+        var brCdp = ((cfg.browser || {}).cdpUrl) || "";
+        var brViewer = ((cfg.browser || {}).viewerUrl) || "";
+        var brCb = document.getElementById("mm-browser-enable");
+        var brCdpEl = document.getElementById("mm-cdp-url");
+        var brViewerEl = document.getElementById("mm-viewer-url");
+        var brFields = document.getElementById("mm-browser-fields");
+        if (brCb) brCb.checked = brEnabled;
+        if (brCdpEl) brCdpEl.value = brCdp;
+        if (brViewerEl) brViewerEl.value = brViewer;
+        if (brFields) brFields.style.display = brEnabled ? "block" : "none";
     }).catch(function(){});
     // Load display prefs from localStorage
     var prefs = {};
@@ -11220,6 +11234,70 @@ function _mmLoadCurrentSettings() {
         if (f) f.style.display = this.checked ? 'block' : 'none';
     });
 })();
+
+// Browser toggle in settings
+(function() {
+    var _brCb = document.getElementById('mm-browser-enable');
+    if (_brCb) _brCb.addEventListener('change', function() {
+        var f = document.getElementById('mm-browser-fields');
+        if (f) f.style.display = this.checked ? 'block' : 'none';
+    });
+})();
+
+function mmTestCdp() {
+    var cdpUrl = document.getElementById('mm-cdp-url').value.trim();
+    var viewerUrl = document.getElementById('mm-viewer-url').value.trim();
+    var statusEl = document.getElementById('mm-cdp-status');
+    if (!cdpUrl) { statusEl.innerHTML = '<div class="mm-status err">Enter a CDP URL first</div>'; return; }
+    statusEl.innerHTML = '<div class="mm-status">Saving & testing...</div>';
+    // Save first, then test
+    fetch('/setup/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            features: { browserPanel: true },
+            browser: { cdpUrl: cdpUrl, viewerUrl: viewerUrl || null }
+        })
+    }).then(function() {
+        return fetch('/browser-status');
+    }).then(function(r) { return r.json(); }).then(function(status) {
+        if (status.cdpAvailable) {
+            fetch('/browser-tabs').then(function(r) { return r.json(); }).then(function(tabs) {
+                var count = Array.isArray(tabs) ? tabs.length : 0;
+                statusEl.innerHTML = '<div class="mm-status ok">\u2705 CDP connected! ' + count + ' tab(s) open</div>';
+            }).catch(function() {
+                statusEl.innerHTML = '<div class="mm-status ok">\u2705 CDP reachable</div>';
+            });
+        } else {
+            statusEl.innerHTML = '<div class="mm-status err">\u274c CDP not reachable. Check the URL and make sure the browser container is running.</div>';
+        }
+    }).catch(function(e) {
+        statusEl.innerHTML = '<div class="mm-status err">\u274c Error: ' + e.message + '</div>';
+    });
+}
+
+function mmTestViewer() {
+    var cdpUrl = document.getElementById('mm-cdp-url').value.trim();
+    var viewerUrl = document.getElementById('mm-viewer-url').value.trim();
+    var statusEl = document.getElementById('mm-viewer-status');
+    if (!viewerUrl) { statusEl.innerHTML = '<div class="mm-status err">Enter a Viewer URL first</div>'; return; }
+    statusEl.innerHTML = '<div class="mm-status">Saving & testing...</div>';
+    // Save first, then test
+    fetch('/setup/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            features: { browserPanel: true },
+            browser: { cdpUrl: cdpUrl || null, viewerUrl: viewerUrl }
+        })
+    }).then(function() {
+        return fetch(viewerUrl.replace(/\/$/, ''), { mode: 'no-cors', cache: 'no-store' });
+    }).then(function() {
+        statusEl.innerHTML = '<div class="mm-status ok">\u2705 Viewer reachable. Open the browser panel to see the live view.</div>';
+    }).catch(function(e) {
+        statusEl.innerHTML = '<div class="mm-status err">\u274c Viewer not reachable from your browser. Make sure the URL is accessible from this device. Error: ' + e.message + '</div>';
+    });
+}
 
 function mmTestPcMetrics() {
     var url = document.getElementById('mm-pcmetrics-url').value.trim();
@@ -11251,12 +11329,39 @@ function mmTestPcMetrics() {
 function mmTestConnection() {
     var statusEl = document.getElementById('mm-conn-status');
     statusEl.innerHTML = '<div class="mm-status info">Testing...</div>';
-    fetch('/api/agents').then(function(r){ return r.json(); }).then(function(d) {
+    // Save current settings first so the server tests with the new values
+    var gwUrl = document.getElementById('mm-gateway-url').value;
+    var ocPath = document.getElementById('mm-oc-path').value;
+    var saveBody = { openclaw: {} };
+    if (gwUrl) {
+        saveBody.openclaw.gatewayUrl = gwUrl;
+        saveBody.openclaw.gatewayHttp = gwUrl.replace('ws://', 'http://').replace('wss://', 'https://').replace(/\/ws.*$/, '');
+    }
+    if (ocPath) saveBody.openclaw.homePath = ocPath;
+
+    fetch('/setup/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(saveBody) })
+    .then(function() {
+        // Test agents (OpenClaw path)
+        return fetch('/api/agents').then(function(r){ return r.json(); });
+    }).then(function(d) {
+        var lines = [];
         if (d.agents && d.agents.length > 0) {
-            statusEl.innerHTML = '<div class="mm-status ok">✅ Connected — ' + d.agents.length + ' agents found</div>';
+            lines.push('✅ OpenClaw: ' + d.agents.length + ' agent' + (d.agents.length === 1 ? '' : 's') + ' found');
         } else {
-            statusEl.innerHTML = '<div class="mm-status err">Connected but no agents found</div>';
+            lines.push('⚠️ OpenClaw: connected but no agents found');
         }
+        // Test gateway WS
+        return fetch('/api/gateway/test').then(function(r){ return r.json(); }).then(function(t) {
+            if (t.gateway === 'reachable') {
+                lines.push('✅ Gateway: reachable');
+                if (t.token) lines.push('✅ Token: valid');
+                else lines.push('⚠️ Token: not found or invalid');
+            } else {
+                lines.push('❌ Gateway: ' + (t.error || 'unreachable'));
+            }
+            var allOk = lines.every(function(l){ return l.indexOf('✅') === 0; });
+            statusEl.innerHTML = '<div class="mm-status ' + (allOk ? 'ok' : 'err') + '">' + lines.join('<br>') + '</div>';
+        });
     }).catch(function(e) {
         statusEl.innerHTML = '<div class="mm-status err">❌ Failed: ' + e.message + '</div>';
     });
@@ -11277,6 +11382,7 @@ function mmSaveSettings() {
         showNames: _elNames ? _elNames.checked : true,
     };
     localStorage.setItem('vo-display-prefs', JSON.stringify(displayPrefs));
+    _displayPrefs = displayPrefs;
 
     // Build server config
     var ocPath = document.getElementById('mm-oc-path').value;
@@ -11295,12 +11401,24 @@ function mmSaveSettings() {
         if (!config.features) config.features = {};
         config.features.pcMetrics = _pcmCb.checked;
         config.pcMetrics = { url: (_pcmUrl ? _pcmUrl.value.trim() : "") || null };
+    }
     // API Usage
     var _apiCb = document.getElementById("mm-apiusage-enable");
     if (_apiCb) {
         if (!config.features) config.features = {};
         config.features.apiUsage = _apiCb.checked;
     }
+    // Browser
+    var _brCb = document.getElementById("mm-browser-enable");
+    var _brCdp = document.getElementById("mm-cdp-url");
+    var _brViewer = document.getElementById("mm-viewer-url");
+    if (_brCb) {
+        if (!config.features) config.features = {};
+        config.features.browserPanel = _brCb.checked;
+        config.browser = {
+            cdpUrl: (_brCdp ? _brCdp.value.trim() : "") || null,
+            viewerUrl: (_brViewer ? _brViewer.value.trim() : "") || null
+        };
     }
 
     fetch('/setup/save', {
@@ -11309,7 +11427,7 @@ function mmSaveSettings() {
         body: JSON.stringify(config)
     }).then(function(r){ return r.json(); }).then(function(d) {
         if (d.ok) {
-            _acpShowToast('💾 Settings saved!');
+            _acpShowToast('💾 Settings saved! Hard refresh (Ctrl+Shift+R) to apply all changes.');
             // Update brand title live
             var brandEl = document.getElementById('brand-title');
             if (brandEl && officeName) brandEl.textContent = officeName.toUpperCase();
@@ -12036,7 +12154,7 @@ function _acpShowToast(msg) {
     toast.textContent = msg;
     toast.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:#1e3a1e;border:1px solid #4caf50;color:#4caf50;padding:8px 20px;border-radius:4px;font-size:12px;z-index:9999;pointer-events:none';
     document.body.appendChild(toast);
-    setTimeout(function(){ if (toast.parentNode) toast.parentNode.removeChild(toast); }, 2000);
+    setTimeout(function(){ if (toast.parentNode) toast.parentNode.removeChild(toast); }, 4000);
 }
 
 function _isCustomAgent(agentId) {

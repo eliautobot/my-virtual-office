@@ -331,16 +331,29 @@ GATEWAY_URL_FALLBACK = GATEWAY_URL.replace("127.0.0.1", "localhost") if "127.0.0
 # Host: host.docker.internal:PORT which the gateway treats as non-local,
 # triggering origin allowlist checks. By overriding Host to 127.0.0.1:PORT,
 # the gateway correctly recognizes the connection as local and skips the check.
-def _gateway_local_host_header():
+def _compute_local_host_header(gw_url):
     from urllib.parse import urlparse
-    parsed = urlparse(GATEWAY_URL)
+    parsed = urlparse(gw_url)
     port = parsed.port or 18789
     return f"127.0.0.1:{port}"
 
-_GW_LOCAL_HOST = _gateway_local_host_header()
+_GW_LOCAL_HOST = _compute_local_host_header(GATEWAY_URL)
 GATEWAY_HTTP = VO_CONFIG["openclaw"]["gatewayHttp"]
 CONFIG_PATH = os.path.join(WORKSPACE_BASE, "openclaw.json")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _reload_gateway_globals():
+    """Reload all gateway-related globals from current VO_CONFIG.
+    Call after VO_CONFIG has been refreshed (e.g. after /setup/save)."""
+    global GATEWAY_URL, GATEWAY_URL_FALLBACK, _GW_LOCAL_HOST, GATEWAY_HTTP
+    global CONFIG_PATH, AUTH_PROFILES_PATH
+    GATEWAY_URL = VO_CONFIG["openclaw"]["gatewayUrl"]
+    GATEWAY_URL_FALLBACK = GATEWAY_URL.replace("127.0.0.1", "localhost") if "127.0.0.1" in GATEWAY_URL else GATEWAY_URL
+    _GW_LOCAL_HOST = _compute_local_host_header(GATEWAY_URL)
+    GATEWAY_HTTP = VO_CONFIG["openclaw"]["gatewayHttp"]
+    CONFIG_PATH = os.path.join(WORKSPACE_BASE, "openclaw.json")
+    AUTH_PROFILES_PATH = os.path.join(WORKSPACE_BASE, "agents/main/agent/auth-profiles.json")
 
 
 # ---------------------------------------------------------------------------
@@ -1784,15 +1797,30 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 existing["_setupComplete"] = True
                 with open(cfg_path, "w") as f:
                     json.dump(existing, f, indent=2)
-                # Reload config and re-discover if path changed
+                # Reload config and re-discover if path or gateway changed
                 global VO_CONFIG, WORKSPACE_BASE, _discovered_roster, _discovered_at
                 old_path = WORKSPACE_BASE
+                old_gw = GATEWAY_URL
                 VO_CONFIG = _load_vo_config()
                 WORKSPACE_BASE = VO_CONFIG["openclaw"]["homePath"]
+                # Always reload gateway globals (URL, host header, config path)
+                _reload_gateway_globals()
                 if WORKSPACE_BASE != old_path:
                     _discovered_roster = discover_agents(WORKSPACE_BASE)
                     _discovered_at = _time_mod.time()
                     refresh_agent_maps()
+                # Restart gateway presence listener if URL changed
+                if GATEWAY_URL != old_gw:
+                    gw_token = ""
+                    try:
+                        with open(CONFIG_PATH, "r") as f:
+                            _cfg = json.load(f)
+                        gw_token = _cfg.get("gateway", {}).get("auth", {}).get("token", "")
+                    except Exception:
+                        pass
+                    if gw_token:
+                        gateway_presence.stop()
+                        gateway_presence.start(GATEWAY_URL, gw_token, port=PORT)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Access-Control-Allow-Origin", "*")
