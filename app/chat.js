@@ -1128,6 +1128,52 @@
     chatMessages.scrollTop = chatMessages.scrollHeight;
   }
 
+  // Whitelist sanitizer — strips all HTML tags except those Marked legitimately produces.
+  // Prevents agent responses containing raw HTML from rendering as live DOM elements.
+  var _SAFE_TAGS = new Set([
+    'p','br','strong','b','em','i','u','s','del','mark',
+    'h1','h2','h3','h4','h5','h6',
+    'ul','ol','li','blockquote','hr',
+    'pre','code','span',
+    'a','img',
+    'table','thead','tbody','tr','th','td',
+    'sup','sub','small','details','summary'
+  ]);
+  // Allowed attributes per tag (everything else stripped)
+  var _SAFE_ATTRS = { 'a': ['href','title','target','rel'], 'img': ['src','alt','title','class','width','height'], 'code': ['class'], 'span': ['class'], 'pre': ['class'], 'td': ['align'], 'th': ['align'] };
+
+  function _sanitizeHtml(html) {
+    // Replace disallowed tags: keep whitelisted open/close tags, strip the rest
+    return html.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*\/?>/g, function(match, tag) {
+      var lower = tag.toLowerCase();
+      if (!_SAFE_TAGS.has(lower)) return ''; // strip entire tag
+      // For allowed tags, filter attributes
+      var allowed = _SAFE_ATTRS[lower];
+      if (!allowed) {
+        // No attributes allowed — return bare tag
+        if (match.charAt(1) === '/') return '</' + lower + '>';
+        if (match.slice(-2) === '/>') return '<' + lower + ' />';
+        return '<' + lower + '>';
+      }
+      // Keep only allowed attributes
+      var attrsStr = '';
+      var attrRe = /\s([a-zA-Z\-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+      var m;
+      while ((m = attrRe.exec(match)) !== null) {
+        var attrName = m[1].toLowerCase();
+        var attrVal = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]);
+        if (allowed.indexOf(attrName) !== -1) {
+          // Block javascript: URLs in href/src
+          if ((attrName === 'href' || attrName === 'src') && /^\s*javascript\s*:/i.test(attrVal)) continue;
+          attrsStr += ' ' + attrName + '="' + attrVal.replace(/"/g, '&quot;') + '"';
+        }
+      }
+      if (match.charAt(1) === '/') return '</' + lower + '>';
+      if (match.slice(-2) === '/>') return '<' + lower + attrsStr + ' />';
+      return '<' + lower + attrsStr + '>';
+    });
+  }
+
   function formatContent(text) {
     if (!text) return '';
     let html;
@@ -1142,6 +1188,8 @@
       html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
       html = html.replace(/\n/g, '<br>');
     }
+    // Sanitize: strip unsafe HTML tags/attributes from rendered output
+    html = _sanitizeHtml(html);
     // Make all rendered images clickable for lightbox
     html = html.replace(/<img ([^>]*)>/g, '<img $1 class="chat-image-thumb chat-image-clickable">');
     return html;
