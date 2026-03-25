@@ -1177,7 +1177,9 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 return
             try:
                 import urllib.request
-                req = urllib.request.Request(f"https://wttr.in/{_wloc}?format=j1", headers={"User-Agent": "curl/7.68"})
+                import urllib.parse
+                _wloc_encoded = urllib.parse.quote(_wloc, safe='')
+                req = urllib.request.Request(f"https://wttr.in/{_wloc_encoded}?format=j1", headers={"User-Agent": "curl/7.68"})
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     data = resp.read()
                 self.send_response(200)
