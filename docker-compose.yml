@@ -1,6 +1,6 @@
 services:
   virtual-office:
-    build: ./app
+    image: ghcr.io/eliautobot/my-virtual-office:latest
     container_name: virtual-office
     ports:
       - "${VO_PORT:-8090}:${VO_PORT:-8090}"
