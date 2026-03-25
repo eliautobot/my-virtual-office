@@ -15,9 +15,38 @@ import gateway_presence
 
 
 # ─── CONFIGURATION ───────────────────────────────────────────────
+def _env_or(key, fallback):
+    """Return env var value if set and non-empty, else fallback."""
+    val = os.environ.get(key)
+    return val if val else fallback
+
+def _resolve_config_path():
+    """Return path to vo-config.json — prefers /data/ (persistent volume) over /app/ (container layer)."""
+    if os.environ.get("VO_CONFIG"):
+        return os.environ["VO_CONFIG"]
+    data_cfg = os.path.join(os.environ.get("VO_STATUS_DIR", "/data"), "vo-config.json")
+    app_cfg = os.path.join(os.path.dirname(__file__), "vo-config.json")
+    # Prefer data volume config (survives container recreation)
+    if os.path.isfile(data_cfg):
+        return data_cfg
+    # Migrate: if app config exists and has been customized, copy to data volume
+    if os.path.isfile(app_cfg):
+        try:
+            with open(app_cfg, "r") as f:
+                app_data = json.load(f)
+            if app_data.get("_setupComplete"):
+                os.makedirs(os.path.dirname(data_cfg), exist_ok=True)
+                with open(data_cfg, "w") as f:
+                    json.dump(app_data, f, indent=2)
+                return data_cfg
+        except (json.JSONDecodeError, OSError):
+            pass
+    # Fall back to app-bundled default
+    return app_cfg
+
 def _load_vo_config():
     """Load vo-config.json with env-var overrides. Returns merged dict."""
-    cfg_path = os.environ.get("VO_CONFIG", os.path.join(os.path.dirname(__file__), "vo-config.json"))
+    cfg_path = _resolve_config_path()
     cfg = {}
     try:
         with open(cfg_path, "r") as f:
@@ -56,17 +85,17 @@ def _load_vo_config():
 
     return {
         "office": {
-            "name": os.environ.get("VO_OFFICE_NAME", office.get("name", "Virtual Office")),
-            "port": int(os.environ.get("VO_PORT", office.get("port", 8090))),
-            "wsPort": int(os.environ.get("VO_WS_PORT", office.get("wsPort", 8091))),
+            "name": _env_or("VO_OFFICE_NAME", office.get("name", "Virtual Office")),
+            "port": int(_env_or("VO_PORT", office.get("port", 8090))),
+            "wsPort": int(_env_or("VO_WS_PORT", office.get("wsPort", 8091))),
         },
         "openclaw": {
             "homePath": oc_home,
-            "gatewayUrl": os.environ.get("VO_GATEWAY_URL", openclaw.get("gatewayUrl", "ws://127.0.0.1:18789")),
-            "gatewayHttp": os.environ.get("VO_GATEWAY_HTTP", openclaw.get("gatewayHttp", "http://127.0.0.1:18789")),
+            "gatewayUrl": _env_or("VO_GATEWAY_URL", openclaw.get("gatewayUrl", "ws://127.0.0.1:18789")),
+            "gatewayHttp": _env_or("VO_GATEWAY_HTTP", openclaw.get("gatewayHttp", "http://127.0.0.1:18789")),
         },
         "presence": {
-            "statusDir": os.environ.get("VO_STATUS_DIR", presence.get("statusDir", "/tmp/vo-data")),
+            "statusDir": _env_or("VO_STATUS_DIR", presence.get("statusDir", "/tmp/vo-data")),
             "inferenceEnabled": presence.get("inferenceEnabled", True),
             "inferenceIdleTimeoutSec": presence.get("inferenceIdleTimeoutSec", 300),
         },
@@ -78,23 +107,23 @@ def _load_vo_config():
             "apiUsage": features.get("apiUsage", True),
         },
         "pcMetrics": {
-            "url": os.environ.get("VO_PC_METRICS_URL", pc_metrics.get("url")),
+            "url": _env_or("VO_PC_METRICS_URL", pc_metrics.get("url")),
         },
         "whisper": {
-            "url": os.environ.get("VO_WHISPER_URL", whisper_cfg.get("url", "http://127.0.0.1:8087")),
+            "url": _env_or("VO_WHISPER_URL", whisper_cfg.get("url", "http://127.0.0.1:8087")),
         },
         "browser": {
-            "cdpUrl": os.environ.get("VO_CDP_URL", browser_cfg.get("cdpUrl")),
-            "viewerUrl": os.environ.get("VO_VIEWER_URL", browser_cfg.get("viewerUrl")),
+            "cdpUrl": _env_or("VO_CDP_URL", browser_cfg.get("cdpUrl")),
+            "viewerUrl": _env_or("VO_VIEWER_URL", browser_cfg.get("viewerUrl")),
         },
         "weather": {
-            "location": os.environ.get("VO_WEATHER_LOCATION", weather_cfg.get("location")),
+            "location": _env_or("VO_WEATHER_LOCATION", weather_cfg.get("location")),
         },
         "sms": {
-            "agentId": os.environ.get("VO_SMS_AGENT_ID", sms_cfg.get("agentId")),
-            "twilioAccountSid": os.environ.get("VO_TWILIO_ACCOUNT_SID", sms_cfg.get("twilioAccountSid")),
-            "twilioAuthToken": os.environ.get("VO_TWILIO_AUTH_TOKEN", sms_cfg.get("twilioAuthToken")),
-            "fromNumber": os.environ.get("VO_TWILIO_FROM_NUMBER", sms_cfg.get("fromNumber")),
+            "agentId": _env_or("VO_SMS_AGENT_ID", sms_cfg.get("agentId")),
+            "twilioAccountSid": _env_or("VO_TWILIO_ACCOUNT_SID", sms_cfg.get("twilioAccountSid")),
+            "twilioAuthToken": _env_or("VO_TWILIO_AUTH_TOKEN", sms_cfg.get("twilioAuthToken")),
+            "fromNumber": _env_or("VO_TWILIO_FROM_NUMBER", sms_cfg.get("fromNumber")),
         },
     }
 
@@ -1865,15 +1894,22 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/setup/save":
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
-            cfg_path = os.path.join(os.path.dirname(__file__), "vo-config.json")
+            cfg_path = _resolve_config_path()
+            # Always save to persistent volume if available (survives container recreation)
+            data_dir = os.environ.get("VO_STATUS_DIR", "/data")
+            persistent_path = os.path.join(data_dir, "vo-config.json")
+            if os.path.isdir(data_dir) and cfg_path != persistent_path:
+                cfg_path = persistent_path
             try:
-                # Merge with existing config
+                # Merge with existing config — read from resolved path first, fall back to app default
                 existing = {}
-                try:
-                    with open(cfg_path, "r") as f:
-                        existing = json.load(f)
-                except (FileNotFoundError, json.JSONDecodeError):
-                    pass
+                for try_path in [cfg_path, os.path.join(os.path.dirname(__file__), "vo-config.json")]:
+                    try:
+                        with open(try_path, "r") as f:
+                            existing = json.load(f)
+                        break
+                    except (FileNotFoundError, json.JSONDecodeError):
+                        continue
                 # Deep merge
                 for key in body:
                     if key.startswith("_"):
