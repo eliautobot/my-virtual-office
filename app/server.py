@@ -1513,6 +1513,22 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    @staticmethod
+    def _write_openclaw_config(cfg):
+        """Write openclaw.json — handles read-only Docker mounts gracefully."""
+        try:
+            with open(CONFIG_PATH, "w") as f:
+                json.dump(cfg, f, indent=2)
+            return True, None
+        except OSError as e:
+            if e.errno in (30, 13):  # EROFS, EACCES
+                return False, (
+                    "OpenClaw directory is mounted read-only. "
+                    "In docker-compose.yml, ensure the volume does NOT end with ':ro'. "
+                    "Example: '~/.openclaw:/openclaw' (not '~/.openclaw:/openclaw:ro')"
+                )
+            return False, str(e)
+
     def _handle_set_model(self, req):
         """Set an agent's model in openclaw.json and signal the gateway."""
         agent_id = req["agent_id"]
@@ -1534,8 +1550,9 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         if not found:
             return {"ok": False, "error": f"Agent {agent_id} not found in config"}
 
-        with open(CONFIG_PATH, "w") as f:
-            json.dump(cfg, f, indent=2)
+        ok, err = self._write_openclaw_config(cfg)
+        if not ok:
+            return {"ok": False, "error": err}
 
         self._signal_gateway(restart=True)
         return {"ok": True, "agent": agent_id, "model": model_id or "(default)"}
@@ -1556,15 +1573,19 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         ap["profiles"][profile_id] = {"type": "api_key", "provider": provider, "key": key}
         ap["lastGood"][provider] = profile_id
 
-        with open(AUTH_PROFILES_PATH, "w") as f:
-            json.dump(ap, f, indent=2)
+        try:
+            with open(AUTH_PROFILES_PATH, "w") as f:
+                json.dump(ap, f, indent=2)
+        except OSError as e:
+            return {"ok": False, "error": f"Cannot write auth-profiles.json: {e}"}
 
         # Mirror in openclaw.json
         with open(CONFIG_PATH) as f:
             cfg = json.load(f)
         cfg.setdefault("auth", {}).setdefault("profiles", {})[profile_id] = {"provider": provider, "mode": "api_key"}
-        with open(CONFIG_PATH, "w") as f:
-            json.dump(cfg, f, indent=2)
+        ok, err = self._write_openclaw_config(cfg)
+        if not ok:
+            return {"ok": False, "error": err}
 
         self._signal_gateway(restart=False)
         masked = key[:4] + "••••••••" if len(key) > 4 else "****"
@@ -1604,8 +1625,9 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 cfg = json.load(f)
             for k in deleted:
                 cfg.get("auth", {}).get("profiles", {}).pop(k, None)
-            with open(CONFIG_PATH, "w") as f:
-                json.dump(cfg, f, indent=2)
+            ok, err = self._write_openclaw_config(cfg)
+            if not ok:
+                return {"ok": False, "error": err}
         except Exception:
             pass
 
@@ -1658,8 +1680,9 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             for model_id, model_params in params.items():
                 defaults_models.setdefault(model_id, {})["params"] = model_params
 
-        with open(CONFIG_PATH, "w") as f:
-            json.dump(cfg, f, indent=2)
+        ok, err = self._write_openclaw_config(cfg)
+        if not ok:
+            return {"ok": False, "error": err}
 
         self._signal_gateway(restart=False)
         return {"ok": True, "provider": provider, "modelCount": len(new_models)}
