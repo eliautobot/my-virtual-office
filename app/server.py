@@ -325,6 +325,19 @@ def get_agent_messages(agent_key, max_messages=500):
 
 GATEWAY_URL = VO_CONFIG["openclaw"]["gatewayUrl"]
 GATEWAY_URL_FALLBACK = GATEWAY_URL.replace("127.0.0.1", "localhost") if "127.0.0.1" in GATEWAY_URL else GATEWAY_URL
+
+# Extract gateway port for local Host header override.
+# When connecting via Docker bridge (host.docker.internal), websockets sets
+# Host: host.docker.internal:PORT which the gateway treats as non-local,
+# triggering origin allowlist checks. By overriding Host to 127.0.0.1:PORT,
+# the gateway correctly recognizes the connection as local and skips the check.
+def _gateway_local_host_header():
+    from urllib.parse import urlparse
+    parsed = urlparse(GATEWAY_URL)
+    port = parsed.port or 18789
+    return f"127.0.0.1:{port}"
+
+_GW_LOCAL_HOST = _gateway_local_host_header()
 GATEWAY_HTTP = VO_CONFIG["openclaw"]["gatewayHttp"]
 CONFIG_PATH = os.path.join(WORKSPACE_BASE, "openclaw.json")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -2056,7 +2069,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     ws = await _ws_connect(
                         gw_url,
                         max_size=1024 * 1024,
-                        additional_headers={"Origin": origin},
+                        additional_headers={"Origin": origin, "Host": _GW_LOCAL_HOST},
                         close_timeout=3,
                     )
                     async with ws:
@@ -2196,7 +2209,7 @@ async def try_connect_gateway():
     for url in [GATEWAY_URL, GATEWAY_URL_FALLBACK]:
         try:
             gw = await asyncio.wait_for(
-                ws_connect(url, max_size=10 * 1024 * 1024, additional_headers={"Origin": f"http://127.0.0.1:{PORT}"}),
+                ws_connect(url, max_size=10 * 1024 * 1024, additional_headers={"Origin": f"http://127.0.0.1:{PORT}", "Host": _GW_LOCAL_HOST}),
                 timeout=3
             )
             if not _ws_proxy_connected_logged:

@@ -399,10 +399,16 @@ async def _gateway_loop(gateway_url, gateway_token, origin):
         try:
             _gw_error = None
 
+            # Override Host header to 127.0.0.1 so gateway treats connection
+            # as local (skips origin allowlist), even via Docker bridge hostnames
+            from urllib.parse import urlparse as _urlparse
+            _gw_parsed = _urlparse(gateway_url)
+            _gw_host_hdr = f"127.0.0.1:{_gw_parsed.port or 18789}"
+
             async with ws_connect(
                 gateway_url,
                 max_size=10 * 1024 * 1024,
-                additional_headers={"Origin": origin},
+                additional_headers={"Origin": origin, "Host": _gw_host_hdr},
                 close_timeout=5,
             ) as ws:
                 # Wait for challenge
