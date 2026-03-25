@@ -8,8 +8,9 @@ RUN pip install --no-cache-dir websockets
 # Copy application files
 COPY . .
 
-# Make scripts executable
-RUN chmod +x entrypoint.sh && \
+# Fix line endings (Windows git may add \r) and make scripts executable
+RUN sed -i 's/\r$//' entrypoint.sh && \
+    chmod +x entrypoint.sh && \
     mkdir -p /data /tmp/vo-data
 
 # Default environment
