@@ -540,15 +540,15 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
             ctx.save();
             ctx.beginPath(); ctx.rect(wx, wy, ww, wh); ctx.clip();
             // Warm golden wash
-            ctx.fillStyle = 'rgba(255,235,59,0.15)';
+            ctx.fillStyle = 'rgba(255,235,59,0.22)';
             ctx.fillRect(wx, wy, ww, wh);
             if (isLeft) {
                 var sunX = wx + 8, sunY = wy + 8;
                 var rayAngle = (_weatherTick * 0.003);
                 // Outer glow
                 var grad = ctx.createRadialGradient(sunX, sunY, 2, sunX, sunY, 32);
-                grad.addColorStop(0, 'rgba(255,245,157,0.5)');
-                grad.addColorStop(0.5, 'rgba(255,235,59,0.2)');
+                grad.addColorStop(0, 'rgba(255,245,157,0.65)');
+                grad.addColorStop(0.5, 'rgba(255,235,59,0.3)');
                 grad.addColorStop(1, 'rgba(255,235,59,0)');
                 ctx.fillStyle = grad;
                 ctx.fillRect(wx, wy, ww, wh);
@@ -566,9 +566,9 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
                 }
                 // Sun core with pulsing
                 var pulse = 6 + Math.sin(_weatherTick * 0.02) * 1.5;
-                ctx.fillStyle = 'rgba(255,235,59,0.5)';
+                ctx.fillStyle = 'rgba(255,235,59,0.65)';
                 ctx.beginPath(); ctx.arc(sunX, sunY, pulse, 0, Math.PI * 2); ctx.fill();
-                ctx.fillStyle = 'rgba(255,250,200,0.8)';
+                ctx.fillStyle = 'rgba(255,250,200,0.9)';
                 ctx.beginPath(); ctx.arc(sunX, sunY, 3.5, 0, Math.PI * 2); ctx.fill();
                 // Lens flare streak
                 var flareAlpha = 0.05 + Math.sin(_weatherTick * 0.01) * 0.03;
@@ -590,19 +590,19 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
         ctx.beginPath(); ctx.rect(wx, wy, ww, wh); ctx.clip();
         if (isDaytime) {
             // Soft sunlight filtering through
-            ctx.fillStyle = 'rgba(255,235,59,0.1)';
+            ctx.fillStyle = 'rgba(255,235,59,0.18)';
             ctx.fillRect(wx, wy, ww, wh);
             // Sun peeks through if left window
             if (isLeft) {
                 var pcSunX = wx + 6, pcSunY = wy + 6;
-                ctx.fillStyle = 'rgba(255,235,59,0.15)';
+                ctx.fillStyle = 'rgba(255,235,59,0.22)';
                 ctx.beginPath(); ctx.arc(pcSunX, pcSunY, 5, 0, Math.PI * 2); ctx.fill();
             }
         }
         // Drifting clouds
         var drift = (_weatherTick * 0.04);
-        _drawCloud(wx + (drift + 5) % (ww + 10) - 5, wy + 7, 14, 5, 0.42);
-        _drawCloud(wx + (drift * 0.7 + ww * 0.6) % (ww + 10) - 5, wy + 12, 10, 4, 0.36);
+        _drawCloud(wx + (drift + 5) % (ww + 10) - 5, wy + 7, 14, 5, 0.55);
+        _drawCloud(wx + (drift * 0.7 + ww * 0.6) % (ww + 10) - 5, wy + 12, 10, 4, 0.48);
         // Moving cloud shadows on floor area
         var shadowX = wx + (drift * 1.5) % ww;
         ctx.fillStyle = 'rgba(0,0,0,0.04)';
@@ -614,21 +614,21 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
         ctx.save();
         ctx.beginPath(); ctx.rect(wx, wy, ww, wh); ctx.clip();
         // Grey blanket
-        ctx.fillStyle = 'rgba(120,120,125,0.25)';
+        ctx.fillStyle = 'rgba(120,120,125,0.35)';
         ctx.fillRect(wx, wy, ww, wh);
         // Multiple cloud layers at different speeds
         var drift1 = (_weatherTick * 0.025);
         var drift2 = (_weatherTick * 0.015);
         // Upper layer — darker, slower
-        ctx.fillStyle = 'rgba(140,140,145,0.45)';
+        ctx.fillStyle = 'rgba(140,140,145,0.6)';
         ctx.fillRect(wx + (drift2) % ww - 5, wy + 3, 16, 5);
         ctx.fillRect(wx + (drift2 + 20) % ww - 5, wy + 5, 12, 4);
         // Lower layer — lighter, faster
-        _drawCloud(wx + (drift1 + 8) % (ww + 10) - 5, wy + 10, 14, 5, 0.35);
-        _drawCloud(wx + (drift1 * 0.8 + ww * 0.5) % (ww + 10) - 5, wy + 16, 11, 4, 0.32);
-        _drawCloud(wx + (drift1 * 1.2 + ww * 0.3) % (ww + 10) - 5, wy + 22, 9, 3, 0.28);
+        _drawCloud(wx + (drift1 + 8) % (ww + 10) - 5, wy + 10, 14, 5, 0.48);
+        _drawCloud(wx + (drift1 * 0.8 + ww * 0.5) % (ww + 10) - 5, wy + 16, 11, 4, 0.44);
+        _drawCloud(wx + (drift1 * 1.2 + ww * 0.3) % (ww + 10) - 5, wy + 22, 9, 3, 0.4);
         // Dim the whole window slightly
-        ctx.fillStyle = 'rgba(80,80,85,0.12)';
+        ctx.fillStyle = 'rgba(80,80,85,0.18)';
         ctx.fillRect(wx, wy, ww, wh);
         ctx.restore();
 
@@ -637,10 +637,10 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
         ctx.save();
         ctx.beginPath(); ctx.rect(wx, wy, ww, wh); ctx.clip();
         // Slight grey tint
-        ctx.fillStyle = 'rgba(130,130,135,0.18)';
+        ctx.fillStyle = 'rgba(130,130,135,0.26)';
         ctx.fillRect(wx, wy, ww, wh);
         // Tiny thin rain lines — sparse, slow
-        ctx.strokeStyle = 'rgba(160,195,220,0.65)';
+        ctx.strokeStyle = 'rgba(160,195,220,0.8)';
         ctx.lineWidth = 0.5;
         for (var dr = 0; dr < 5; dr++) {
             var dSeed = _wRand(dr * 7 + wx);
@@ -652,7 +652,7 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
             ctx.stroke();
         }
         // Water droplets slowly forming on glass
-        ctx.fillStyle = 'rgba(170,210,240,0.5)';
+        ctx.fillStyle = 'rgba(170,210,240,0.65)';
         for (var wd = 0; wd < 8; wd++) {
             var ws = _wRand(wd * 13 + wx + 99);
             var wdx = wx + 2 + ws * (ww - 4);
@@ -668,11 +668,11 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
     } else if (cond === 'light_rain') {
         ctx.save();
         ctx.beginPath(); ctx.rect(wx, wy, ww, wh); ctx.clip();
-        ctx.fillStyle = 'rgba(100,105,110,0.2)';
+        ctx.fillStyle = 'rgba(100,105,110,0.3)';
         ctx.fillRect(wx, wy, ww, wh);
         // Rain streaks — medium density, angled by wind
         var windAngle = Math.min(wind * 0.02, 0.4);
-        ctx.strokeStyle = 'rgba(140,185,220,0.7)';
+        ctx.strokeStyle = 'rgba(140,185,220,0.85)';
         ctx.lineWidth = 0.8;
         for (var lr = 0; lr < 10; lr++) {
             var lSeed = _wRand(lr * 11 + wx);
@@ -684,7 +684,7 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
             ctx.stroke();
         }
         // Droplets on glass — more than drizzle
-        ctx.fillStyle = 'rgba(150,200,240,0.55)';
+        ctx.fillStyle = 'rgba(150,200,240,0.7)';
         for (var ld = 0; ld < 10; ld++) {
             var ls = _wRand(ld * 19 + wx + 77);
             var ldx = wx + 2 + ls * (ww - 4);
@@ -696,7 +696,7 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
             if (ldPhase > 2) {
                 ctx.fillStyle = 'rgba(150,200,240,0.2)';
                 ctx.fillRect(ldx - 0.3, ldy + ldR, 0.6, (ldPhase - 2) * 5);
-                ctx.fillStyle = 'rgba(150,200,240,0.55)';
+                ctx.fillStyle = 'rgba(150,200,240,0.7)';
             }
         }
         ctx.restore();
@@ -705,11 +705,11 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
     } else if (cond === 'rain') {
         ctx.save();
         ctx.beginPath(); ctx.rect(wx, wy, ww, wh); ctx.clip();
-        ctx.fillStyle = 'rgba(80,85,95,0.28)';
+        ctx.fillStyle = 'rgba(80,85,95,0.38)';
         ctx.fillRect(wx, wy, ww, wh);
         // Dense rain streaks
         var rWindAngle = Math.min(wind * 0.025, 0.5);
-        ctx.strokeStyle = 'rgba(130,180,220,0.8)';
+        ctx.strokeStyle = 'rgba(130,180,220,0.9)';
         ctx.lineWidth = 1;
         for (var rr = 0; rr < 14; rr++) {
             var rSeed = _wRand(rr * 7 + wx);
@@ -733,7 +733,7 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
             }
         }
         // Water droplets + running streams on glass
-        ctx.fillStyle = 'rgba(150,200,240,0.6)';
+        ctx.fillStyle = 'rgba(150,200,240,0.75)';
         for (var rd = 0; rd < 12; rd++) {
             var rs = _wRand(rd * 11 + wx + 44);
             var rdx = wx + 2 + rs * (ww - 4);
@@ -743,10 +743,10 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
             ctx.fillStyle = 'rgba(150,200,240,0.2)';
             var trailLen = 3 + _wRand(rd * 3) * 8;
             ctx.fillRect(rdx - 0.4, rdy + 1.5, 0.8, trailLen);
-            ctx.fillStyle = 'rgba(150,200,240,0.6)';
+            ctx.fillStyle = 'rgba(150,200,240,0.75)';
         }
         // Clouds
-        _drawCloud(wx + (_weatherTick * 0.03 + 5) % (ww + 10) - 5, wy + 5, 14, 5, 0.5);
+        _drawCloud(wx + (_weatherTick * 0.03 + 5) % (ww + 10) - 5, wy + 5, 14, 5, 0.65);
         ctx.restore();
 
     // ─── HEAVY RAIN ───
@@ -754,11 +754,11 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
         ctx.save();
         ctx.beginPath(); ctx.rect(wx, wy, ww, wh); ctx.clip();
         // Very dark overlay
-        ctx.fillStyle = 'rgba(50,55,65,0.38)';
+        ctx.fillStyle = 'rgba(50,55,65,0.5)';
         ctx.fillRect(wx, wy, ww, wh);
         // Torrential rain — dense, fast, wind-driven
         var hrWind = Math.min(wind * 0.03, 0.6);
-        ctx.strokeStyle = 'rgba(120,170,210,0.85)';
+        ctx.strokeStyle = 'rgba(120,170,210,0.92)';
         ctx.lineWidth = 1.2;
         for (var hr = 0; hr < 20; hr++) {
             var hSeed = _wRand(hr * 7 + wx);
@@ -781,7 +781,7 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
             }
         }
         // Water streaming down window — thick rivulets
-        ctx.strokeStyle = 'rgba(140,190,230,0.55)';
+        ctx.strokeStyle = 'rgba(140,190,230,0.7)';
         ctx.lineWidth = 1.5;
         for (var rv = 0; rv < 4; rv++) {
             var rvx = wx + 4 + _wRand(rv * 41 + wx) * (ww - 8);
@@ -794,7 +794,7 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
             ctx.stroke();
         }
         // Mist/spray at bottom
-        ctx.fillStyle = 'rgba(180,200,220,0.18)';
+        ctx.fillStyle = 'rgba(180,200,220,0.28)';
         ctx.fillRect(wx, wy + wh - 10, ww, 10);
         ctx.restore();
 
@@ -803,11 +803,11 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
         ctx.save();
         ctx.beginPath(); ctx.rect(wx, wy, ww, wh); ctx.clip();
         // Very dark sky
-        ctx.fillStyle = 'rgba(30,30,40,0.5)';
+        ctx.fillStyle = 'rgba(30,30,40,0.6)';
         ctx.fillRect(wx, wy, ww, wh);
         // Heavy wind-driven rain
         var stWind = Math.min(wind * 0.035, 0.7);
-        ctx.strokeStyle = 'rgba(120,165,200,0.82)';
+        ctx.strokeStyle = 'rgba(120,165,200,0.9)';
         ctx.lineWidth = 1;
         for (var sr = 0; sr < 18; sr++) {
             var sSeed = _wRand(sr * 7 + wx);
@@ -843,8 +843,8 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
         // Dark roiling clouds
         var stDrift = _weatherTick * 0.04;
         ctx.fillStyle = 'rgba(50,50,60,0.35)';
-        _drawCloud(wx + (stDrift + 3) % (ww + 10) - 5, wy + 5, 16, 6, 0.6);
-        _drawCloud(wx + (stDrift * 0.6 + ww * 0.5) % (ww + 10) - 5, wy + 10, 12, 5, 0.52);
+        _drawCloud(wx + (stDrift + 3) % (ww + 10) - 5, wy + 5, 16, 6, 0.72);
+        _drawCloud(wx + (stDrift * 0.6 + ww * 0.5) % (ww + 10) - 5, wy + 10, 12, 5, 0.65);
         // Splashes
         for (var tsp = 0; tsp < 5; tsp++) {
             var tsps = _wRand(tsp * 19 + wx);
@@ -865,7 +865,7 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
         // Multi-layer fog with parallax drifting
         var fogPhase = _weatherTick * 0.008;
         // Background haze
-        ctx.fillStyle = 'rgba(195,195,200,0.35)';
+        ctx.fillStyle = 'rgba(195,195,200,0.48)';
         ctx.fillRect(wx, wy, ww, wh);
         // Fog bands — three layers at different speeds and heights
         for (var fb = 0; fb < 3; fb++) {
@@ -877,7 +877,7 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
             ctx.fillRect(bandX, bandY, bandW, 6 - fb);
         }
         // Misty particles drifting
-        ctx.fillStyle = 'rgba(220,220,225,0.28)';
+        ctx.fillStyle = 'rgba(220,220,225,0.4)';
         for (var mp = 0; mp < 6; mp++) {
             var mpx = wx + (_wRand(mp * 17) * ww + _weatherTick * 0.15) % ww;
             var mpy = wy + _wRand(mp * 29 + 7) * wh;
@@ -896,7 +896,7 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
     } else if (cond === 'light_snow') {
         ctx.save();
         ctx.beginPath(); ctx.rect(wx, wy, ww, wh); ctx.clip();
-        ctx.fillStyle = 'rgba(210,215,225,0.16)';
+        ctx.fillStyle = 'rgba(210,215,225,0.25)';
         ctx.fillRect(wx, wy, ww, wh);
         // Gentle floating snowflakes — slow, drifting
         for (var ls = 0; ls < 5; ls++) {
@@ -920,7 +920,7 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
         ctx.save();
         ctx.beginPath(); ctx.rect(wx, wy, ww, wh); ctx.clip();
         // Cold blue-grey tint
-        ctx.fillStyle = 'rgba(200,205,220,0.22)';
+        ctx.fillStyle = 'rgba(200,205,220,0.32)';
         ctx.fillRect(wx, wy, ww, wh);
         // Dense snowflakes with varied sizes and wobble
         for (var sf = 0; sf < 10; sf++) {
@@ -941,7 +941,7 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
             }
         }
         // Snow accumulation on window sill
-        ctx.fillStyle = 'rgba(240,242,248,0.6)';
+        ctx.fillStyle = 'rgba(240,242,248,0.75)';
         ctx.fillRect(wx, wy + wh - 3, ww, 3);
         ctx.fillStyle = 'rgba(250,250,255,0.3)';
         for (var sa = 0; sa < 5; sa++) {
