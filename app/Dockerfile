@@ -8,10 +8,8 @@ RUN pip install --no-cache-dir websockets
 # Copy application files
 COPY . .
 
-# Fix line endings (Windows git may add \r) and make scripts executable
-RUN sed -i 's/\r$//' entrypoint.sh && \
-    chmod +x entrypoint.sh && \
-    mkdir -p /data /tmp/vo-data
+# Create data directories
+RUN mkdir -p /data /tmp/vo-data
 
 # Default environment
 ENV VO_STATUS_DIR=/data \
@@ -21,4 +19,4 @@ ENV VO_STATUS_DIR=/data \
 
 EXPOSE 8090 8091
 
-ENTRYPOINT ["/app/entrypoint.sh"]
+CMD ["python3", "server.py"]
