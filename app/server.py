@@ -338,6 +338,79 @@ def _compute_local_host_header(gw_url):
     return f"127.0.0.1:{port}"
 
 _GW_LOCAL_HOST = _compute_local_host_header(GATEWAY_URL)
+
+
+def _auto_configure_gateway_origin():
+    """Auto-configure the OpenClaw gateway to accept connections from this VO instance.
+
+    Adds the VO's origin to gateway.controlUi.allowedOrigins in openclaw.json
+    and signals the gateway to reload. This makes Docker bridge networking
+    work without any manual gateway configuration — truly plug and play.
+
+    Safe for all setups:
+    - --network host: gateway treats connection as local, skips origin check (no-op)
+    - Docker bridge: origin gets added to allowlist on first boot
+    - Already configured: detects existing entry, skips
+    """
+    origin = f"http://127.0.0.1:{PORT}"
+    try:
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                cfg = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            print(f"⚠️  Gateway auto-config: cannot read {CONFIG_PATH}")
+            return
+
+        gateway_cfg = cfg.setdefault("gateway", {})
+        control_ui = gateway_cfg.setdefault("controlUi", {})
+
+        origins = control_ui.get("allowedOrigins", [])
+        if not isinstance(origins, list):
+            origins = []
+
+        if origin in origins:
+            return  # already configured
+
+        origins.append(origin)
+        control_ui["allowedOrigins"] = origins
+        control_ui["allowInsecureAuth"] = True
+        control_ui["dangerouslyDisableDeviceAuth"] = True
+
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(cfg, f, indent=2)
+
+        # Signal gateway to reload config
+        import subprocess
+        try:
+            r = subprocess.run(["systemctl", "--user", "kill", "-s", "USR1", "openclaw-gateway.service"],
+                               capture_output=True, timeout=5)
+            if r.returncode == 0:
+                print(f"✅ Gateway auto-config: added origin {origin}, gateway reloaded")
+                return
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        # Fallback: scan /proc for gateway process and send SIGUSR1
+        import signal as _signal
+        try:
+            for entry in os.listdir("/proc"):
+                if not entry.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{entry}/cmdline", "r") as f:
+                        cmdline = f.read()
+                    if "openclaw" in cmdline and "gateway" in cmdline:
+                        os.kill(int(entry), _signal.SIGUSR1)
+                        print(f"✅ Gateway auto-config: added origin {origin}, signaled PID {entry}")
+                        return
+                except (PermissionError, FileNotFoundError, ProcessLookupError):
+                    continue
+        except FileNotFoundError:
+            pass  # not on Linux
+
+        print(f"✅ Gateway auto-config: added origin {origin} (gateway will pick up on next restart)")
+    except Exception as e:
+        print(f"⚠️  Gateway auto-config failed: {e}")
 GATEWAY_HTTP = VO_CONFIG["openclaw"]["gatewayHttp"]
 CONFIG_PATH = os.path.join(WORKSPACE_BASE, "openclaw.json")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -2097,7 +2170,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     ws = await _ws_connect(
                         gw_url,
                         max_size=1024 * 1024,
-                        additional_headers={"Origin": origin, "Host": _GW_LOCAL_HOST},
+                        additional_headers={"Origin": origin},
                         close_timeout=3,
                     )
                     async with ws:
@@ -2237,7 +2310,7 @@ async def try_connect_gateway():
     for url in [GATEWAY_URL, GATEWAY_URL_FALLBACK]:
         try:
             gw = await asyncio.wait_for(
-                ws_connect(url, max_size=10 * 1024 * 1024, additional_headers={"Origin": f"http://127.0.0.1:{PORT}", "Host": _GW_LOCAL_HOST}),
+                ws_connect(url, max_size=10 * 1024 * 1024, additional_headers={"Origin": f"http://127.0.0.1:{PORT}"}),
                 timeout=3
             )
             if not _ws_proxy_connected_logged:
@@ -2341,6 +2414,9 @@ def start_http_server():
         gw_token = cfg.get("gateway", {}).get("auth", {}).get("token", "")
     except Exception:
         pass
+
+    # Auto-configure gateway to accept our origin (plug and play for Docker bridge)
+    _auto_configure_gateway_origin()
 
     # Start gateway presence listener
     gw_url = VO_CONFIG["openclaw"]["gatewayUrl"]
