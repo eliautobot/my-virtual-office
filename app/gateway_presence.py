@@ -461,12 +461,21 @@ async def _gateway_loop(gateway_url, gateway_token, origin):
 
         except asyncio.CancelledError:
             break
+        except (ConnectionRefusedError, ConnectionResetError, OSError) as e:
+            # Gateway not available — quiet retry, no traceback spam
+            _gw_connected = False
+            _gw_error = str(e)
+            if "Connect call failed" in str(e) or "Connection refused" in str(e):
+                print(f"⚠️  Gateway presence: gateway not reachable at {gateway_url} — retrying in 15s")
+            else:
+                print(f"⚠️  Gateway presence: connection error: {e}")
+            await asyncio.sleep(15)
         except Exception as e:
             _gw_connected = False
             _gw_error = str(e)
             print(f"⚠️  Gateway presence: error: {e}")
             traceback.print_exc()
-            await asyncio.sleep(5)
+            await asyncio.sleep(10)
 
 
 async def _message_reader(ws, response_queue):

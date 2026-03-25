@@ -4,8 +4,11 @@ services:
   virtual-office:
     build: ./app
     container_name: virtual-office
-    network_mode: host
-    pid: host  # Allows signaling OpenClaw gateway for config reload
+    ports:
+      - "${VO_PORT:-8090}:${VO_PORT:-8090}"
+      - "${VO_WS_PORT:-8091}:${VO_WS_PORT:-8091}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Makes host.docker.internal work on Linux too
     volumes:
       # Mount OpenClaw home directory (read-write for model/key management)
       - ${VO_OPENCLAW_PATH:-~/.openclaw}:/openclaw
@@ -14,8 +17,8 @@ services:
     environment:
       - VO_OPENCLAW_PATH=/openclaw
       - VO_STATUS_DIR=/data
-      - VO_GATEWAY_URL=${VO_GATEWAY_URL:-ws://127.0.0.1:18789}
-      - VO_GATEWAY_HTTP=${VO_GATEWAY_HTTP:-http://127.0.0.1:18789}
+      - VO_GATEWAY_URL=${VO_GATEWAY_URL:-ws://host.docker.internal:18789}
+      - VO_GATEWAY_HTTP=${VO_GATEWAY_HTTP:-http://host.docker.internal:18789}
       - VO_PORT=${VO_PORT:-8090}
       - VO_WS_PORT=${VO_WS_PORT:-8091}
       - VO_OFFICE_NAME=${VO_OFFICE_NAME:-Virtual Office}
@@ -35,17 +38,17 @@ services:
   # agent-browser:
   #   image: kasmweb/chromium:1.17.0
   #   container_name: agent-browser
-  #   network_mode: host
+  #   ports:
+  #     - "6901:6901"   # KasmVNC viewer
+  #     - "9222:9222"   # CDP endpoint
   #   environment:
   #     - VNC_PW=${BROWSER_VNC_PASSWORD:-changeme}
-  #     - DISPLAY=:10
   #   volumes:
   #     - browser-data:/home/kasm-user
   #   restart: unless-stopped
-  #   # KasmVNC on port 6901, CDP on port 9222
   #   # Configure in Virtual Office Settings → Agent Browser:
-  #   #   CDP URL: http://127.0.0.1:9222
-  #   #   Viewer URL: https://127.0.0.1:6901
+  #   #   CDP URL: http://host.docker.internal:9222
+  #   #   Viewer URL: https://localhost:6901
 
 volumes:
   vo-data:
