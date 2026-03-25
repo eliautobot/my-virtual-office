@@ -540,24 +540,24 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
             ctx.save();
             ctx.beginPath(); ctx.rect(wx, wy, ww, wh); ctx.clip();
             // Warm golden wash
-            ctx.fillStyle = 'rgba(255,235,59,0.35)';
+            ctx.fillStyle = 'rgba(255,235,59,0.5)';
             ctx.fillRect(wx, wy, ww, wh);
             if (isLeft) {
                 var sunX = wx + 8, sunY = wy + 8;
                 var rayAngle = (_weatherTick * 0.003);
                 // Outer glow
                 var grad = ctx.createRadialGradient(sunX, sunY, 2, sunX, sunY, 32);
-                grad.addColorStop(0, 'rgba(255,245,157,0.8)');
-                grad.addColorStop(0.5, 'rgba(255,235,59,0.45)');
+                grad.addColorStop(0, 'rgba(255,245,157,0.92)');
+                grad.addColorStop(0.5, 'rgba(255,235,59,0.65)');
                 grad.addColorStop(1, 'rgba(255,235,59,0)');
                 ctx.fillStyle = grad;
                 ctx.fillRect(wx, wy, ww, wh);
                 // Rotating rays with varying lengths
-                ctx.lineWidth = 1.5;
+                ctx.lineWidth = 2;
                 for (var ri = 0; ri < 12; ri++) {
                     var a = rayAngle + ri * (Math.PI / 6);
                     var rayLen = 24 + Math.sin(_weatherTick * 0.02 + ri * 0.7) * 10;
-                    var rayAlpha = 0.3 + Math.sin(_weatherTick * 0.015 + ri) * 0.12;
+                    var rayAlpha = 0.55 + Math.sin(_weatherTick * 0.015 + ri) * 0.15;
                     ctx.strokeStyle = 'rgba(255,245,157,' + rayAlpha + ')';
                     ctx.beginPath();
                     ctx.moveTo(sunX + Math.cos(a) * 5, sunY + Math.sin(a) * 5);
@@ -566,19 +566,19 @@ function drawWeatherOnWindow(wx, wy, ww, wh, isLeft) {
                 }
                 // Sun core with pulsing
                 var pulse = 8 + Math.sin(_weatherTick * 0.02) * 2.5;
-                ctx.fillStyle = 'rgba(255,235,59,0.85)';
+                ctx.fillStyle = 'rgba(255,235,59,0.95)';
                 ctx.beginPath(); ctx.arc(sunX, sunY, pulse, 0, Math.PI * 2); ctx.fill();
                 ctx.fillStyle = 'rgba(255,250,200,1.0)';
                 ctx.beginPath(); ctx.arc(sunX, sunY, 3.5, 0, Math.PI * 2); ctx.fill();
                 // Lens flare streak
-                var flareAlpha = 0.12 + Math.sin(_weatherTick * 0.01) * 0.05;
+                var flareAlpha = 0.22 + Math.sin(_weatherTick * 0.01) * 0.08;
                 ctx.fillStyle = 'rgba(255,255,200,' + flareAlpha + ')';
                 ctx.fillRect(wx, sunY - 1, ww, 2);
             }
             // Heat shimmer effect near bottom of window (hot day)
             if (weatherData.temp > 85) {
                 var shimmer = Math.sin(_weatherTick * 0.08) * 0.04;
-                ctx.fillStyle = 'rgba(255,200,50,' + (0.03 + shimmer) + ')';
+                ctx.fillStyle = 'rgba(255,200,50,' + (0.08 + shimmer) + ')';
                 ctx.fillRect(wx, wy + wh - 8, ww, 8);
             }
             ctx.restore();
