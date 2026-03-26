@@ -837,19 +837,44 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             # Return dynamically discovered agent roster
             refresh_agent_maps()
+            # Load office-config overrides for agent names/emoji/branch
+            _oc_overrides = {}
+            _oc_branches = {}
+            try:
+                _oc_path = os.path.join(STATUS_DIR, "office-config.json")
+                with open(_oc_path, "r") as f:
+                    _oc_data = json.load(f)
+                for _oc_agent in _oc_data.get("agents", []):
+                    _oc_id = _oc_agent.get("id", "")
+                    if _oc_id:
+                        _oc_overrides[_oc_id] = _oc_agent
+                # Build branch ID → display name map
+                for _br in _oc_data.get("branches", []):
+                    _br_id = _br.get("id", "")
+                    if _br_id:
+                        _oc_branches[_br_id] = _br.get("name", _br_id)
+            except (FileNotFoundError, json.JSONDecodeError):
+                pass
             agents = []
             for a in get_roster():
                 session_key = f"agent:{a['id']}:main"
+                # Prefer office-config name/emoji over IDENTITY.md
+                oc = _oc_overrides.get(a["statusKey"], {})
+                # Resolve branch ID to display name
+                branch_id = oc.get("branch", "")
+                branch_name = _oc_branches.get(branch_id, "") if branch_id else ""
+                if not branch_name:
+                    branch_name = "Unassigned"
                 agents.append({
                     "key": a["statusKey"],
                     "agentId": a["id"],
                     "sessionKey": session_key,
-                    "emoji": a["emoji"],
-                    "name": a["name"],
+                    "emoji": oc.get("emoji") or a["emoji"],
+                    "name": oc.get("name") or a["name"],
                     "role": a.get("role", ""),
                     "model": a.get("model", ""),
                     "lastActiveAt": a.get("lastActiveAt", 0),
-                    "branch": "",
+                    "branch": branch_name,
                 })
             # Enforce agent limit in demo mode
             agent_limit = get_agent_limit()
