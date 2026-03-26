@@ -65,6 +65,10 @@ function saveOfficeConfig() {
     officeConfig.canvasWidth = W;
     officeConfig.canvasHeight = H;
     _deskPosCache = null; // invalidate lamp cache
+    MEETING_SLOTS = getMeetingSlots(); // re-derive meeting slots from current meeting table position
+    // Sync LOCATIONS.meeting with actual meeting table position
+    var mtPos = getMeetingTablePos();
+    if (mtPos) { LOCATIONS.meeting.x = mtPos.x; LOCATIONS.meeting.y = mtPos.y; }
     // Save to localStorage immediately (fast)
     localStorage.setItem(OFFICE_CONFIG_KEY, JSON.stringify(officeConfig));
     // Debounce server save (avoid hammering on rapid edits)
@@ -1557,10 +1561,23 @@ const LOCATIONS = {
     },
 };
 
-// --- Meeting slots around the table ---
-const MEETING_SLOTS = (() => {
-    const m = LOCATIONS.meeting;
-    // 5 chairs per side, evenly spaced across 240px wide table (pad=20, chairSpacing=46.5)
+// --- Meeting slots — derived dynamically from meeting table furniture position ---
+// If a meetingTable item exists, slots are relative to its position.
+// If no meetingTable exists, returns empty (agents meet at random spots instead).
+function getMeetingTablePos() {
+    if (typeof officeConfig !== 'undefined' && officeConfig.furniture) {
+        var table = officeConfig.furniture.find(function(f) { return f.type === 'meetingTable'; });
+        if (table) return { x: table.x, y: table.y, w: 240, h: 120 };
+    }
+    // Fallback to LOCATIONS.meeting if it exists (backward compat)
+    if (LOCATIONS.meeting) return LOCATIONS.meeting;
+    return null;
+}
+
+function getMeetingSlots() {
+    var m = getMeetingTablePos();
+    if (!m) return [];
+    // 5 chairs per side, evenly spaced across 240px wide table
     return [
         { x: m.x + 27, y: m.y + 15 },    // top row
         { x: m.x + 73, y: m.y + 15 },
@@ -1573,7 +1590,9 @@ const MEETING_SLOTS = (() => {
         { x: m.x + 166, y: m.y + 103 },
         { x: m.x + 213, y: m.y + 103 },
     ];
-})();
+}
+// Legacy constant — kept for backward compat but now calls dynamic function
+var MEETING_SLOTS = getMeetingSlots();
 
 // --- 1-on-1 meeting positions (relative to target desk) ---
 const VISIT_OFFSET = { x: -30, y: 15 };  // visitor stands beside desk
@@ -2954,7 +2973,6 @@ class Agent {
         this.visitTarget = null;
         this.idleReturnTimer = 0;
 
-        const m = LOCATIONS.meeting;
         const slotI = agents.indexOf(this);
         switch (state) {
             case 'working':
@@ -2968,11 +2986,18 @@ class Agent {
                 this.addIntent(state === 'working' ? 'Returning to desk' : 'Relaxing at desk');
                 break;
             case 'meeting': {
-                const cols = 5, spacing = 35;
-                const row = Math.floor(slotI / cols);
-                const col = slotI % cols;
-                this.targetX = m.x + 20 + col * spacing;
-                this.targetY = m.y + 25 + row * 40;
+                const m = getMeetingTablePos();
+                if (m) {
+                    const cols = 5, spacing = 35;
+                    const row = Math.floor(slotI / cols);
+                    const col = slotI % cols;
+                    this.targetX = m.x + 20 + col * spacing;
+                    this.targetY = m.y + 25 + row * 40;
+                } else {
+                    // No meeting table — meet at a random spot near the caller
+                    this.targetX = this.x + (Math.random() - 0.5) * 100;
+                    this.targetY = this.y + (Math.random() - 0.5) * 100;
+                }
                 this.state = 'meeting';
                 this.addIntent('Joining meeting');
                 break;
@@ -4284,13 +4309,26 @@ function processMeetings(meetingsData) {
             activeMeetings[m.id] = { agents: meetingAgents, topic, type };
             addGlobalLog(`🤝 ${visitor.name} → ${host.name}: ${topic}`);
         } else {
-            // Group meeting at the table
+            // Group meeting — use meeting table if it exists, otherwise random cluster
+            const slots = getMeetingSlots();
             const slotAssignments = [];
-            meetingAgents.forEach((agent, i) => {
-                const slot = MEETING_SLOTS[i % MEETING_SLOTS.length];
-                agent.joinMeeting(m.id, slot, topic);
-                slotAssignments.push({ agent: agent.id, slot });
-            });
+            if (slots.length > 0) {
+                // Meeting at the table
+                meetingAgents.forEach((agent, i) => {
+                    const slot = slots[i % slots.length];
+                    agent.joinMeeting(m.id, slot, topic);
+                    slotAssignments.push({ agent: agent.id, slot });
+                });
+            } else {
+                // No meeting table — cluster agents near first agent's position
+                const anchor = meetingAgents[0];
+                meetingAgents.forEach((agent, i) => {
+                    const angle = (i / meetingAgents.length) * Math.PI * 2;
+                    const slot = { x: anchor.x + Math.cos(angle) * 40, y: anchor.y + Math.sin(angle) * 40 };
+                    agent.joinMeeting(m.id, slot, topic);
+                    slotAssignments.push({ agent: agent.id, slot });
+                });
+            }
             activeMeetings[m.id] = { agents: meetingAgents, topic, type, slotAssignments };
             addGlobalLog(`📊 Meeting: ${meetingAgents.map(a => a.name).join(', ')} — ${topic}`);
         }
@@ -10448,12 +10486,8 @@ function _shiftAllPositions(dx, dy) {
     if (inter.toaster)       { inter.toaster.x        += dx; inter.toaster.y        += dy; }
     if (inter.dartBoard)     { inter.dartBoard.x      += dx; inter.dartBoard.y      += dy; }
     inter.engCouchSeats.forEach(function(s) { s.x += dx; s.y += dy; });
-    // Re-compute meeting slots
-    var m = LOCATIONS.meeting;
-    for (var i = 0; i < MEETING_SLOTS.length; i++) {
-        MEETING_SLOTS[i].x += dx;
-        MEETING_SLOTS[i].y += dy;
-    }
+    // Re-derive meeting slots from the (now shifted) meeting table furniture position
+    MEETING_SLOTS = getMeetingSlots();
     // Shift officeConfig furniture items to stay in sync
     officeConfig.furniture.forEach(function(item) { item.x += dx; item.y += dy; });
     // Re-sync interaction spots from shifted furniture
@@ -12908,6 +12942,7 @@ function _deleteSelectedItem() {
     isDragging = false;
     if (_floatingToolbar) _floatingToolbar.style.display = 'none';
     getInteractionSpots();
+    saveOfficeConfig(); // persist deletion + re-derive meeting slots
 }
 
 function _updateCatalogSelection() {

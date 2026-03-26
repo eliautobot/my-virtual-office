@@ -824,6 +824,8 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
+            # Sync meetings from file on every status poll (office.py writes here)
+            gateway_presence._sync_meetings_from_file()
             state = gateway_presence.get_state()
             self.wfile.write(json.dumps(state).encode())
         elif self.path == "/agents-list":
