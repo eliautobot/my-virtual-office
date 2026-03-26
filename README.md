@@ -142,11 +142,12 @@ Unlocks everything:
 ### How to Activate
 Activate during the setup wizard or later from **☰ Menu → Settings**.
 
-Accepted key formats:
-- `VO-EARLY-xxxxxxxx-xxxxxxxx`
-- `VO-FULL-xxxxxxxx-xxxxxxxx`
+License keys are provided after purchase and look like this:
+```
+xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
 
-Premium features unlock immediately. The key persists across restarts and updates.
+Enter your key during setup or in **☰ Menu → Settings**. The key is validated once online with Lemon Squeezy, then works offline forever. Premium features unlock immediately and persist across restarts and updates.
 
 ## Configuration
 
