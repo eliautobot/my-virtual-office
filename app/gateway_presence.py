@@ -605,7 +605,24 @@ def start(gateway_url, gateway_token, port=8090):
         global _loop
         _loop = asyncio.new_event_loop()
         asyncio.set_event_loop(_loop)
-        _loop.run_until_complete(_gateway_loop(gateway_url, gateway_token, origin))
+        try:
+            _loop.run_until_complete(_gateway_loop(gateway_url, gateway_token, origin))
+        except RuntimeError as e:
+            if "Event loop stopped" not in str(e):
+                print(f"⚠️  Gateway presence: runtime error: {e}")
+        except Exception as e:
+            print(f"⚠️  Gateway presence: thread error: {e}")
+        finally:
+            # Clean up pending tasks
+            try:
+                pending = asyncio.all_tasks(_loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    _loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                _loop.close()
+            except Exception:
+                pass
 
     _thread = threading.Thread(target=run, daemon=True, name="gateway-presence")
     _thread.start()

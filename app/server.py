@@ -251,6 +251,8 @@ def get_agent_messages(agent_key, max_messages=500):
         # Find the most recently updated session (any type — main, telegram, etc.)
         best_ts = 0
         for key, val in sessions.items():
+            if not isinstance(val, dict):
+                continue
             ts = val.get("updatedAt", 0)
             sid = val.get("sessionId", "")
             candidate = os.path.join(sessions_dir, f"{sid}.jsonl")

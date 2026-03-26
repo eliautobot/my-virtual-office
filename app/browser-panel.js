@@ -118,9 +118,8 @@
     // Load browser viewer
     if (!browserFrame.src || browserFrame.src === 'about:blank') {
       if (BROWSER_VIEW_URL) {
-        browserFrame.src = BROWSER_VIEW_URL.includes('?')
-          ? BROWSER_VIEW_URL
-          : `${BROWSER_VIEW_URL}/?resize=scale&autoconnect=1`;
+        const sep = BROWSER_VIEW_URL.includes('?') ? '&' : '?';
+        browserFrame.src = `${BROWSER_VIEW_URL}${sep}resize=scale&autoconnect=1`;
       } else {
         browserFrame.srcdoc = '<html><body style="background:#0a0a0f;color:#888;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center"><div><h2 style="color:#ffd700">🌐 Browser Not Configured</h2><p>Set a Browser Viewer URL in<br>☰ Menu → Settings or /setup</p></div></body></html>';
       }
@@ -325,6 +324,8 @@
     browserStatus.textContent = '🖱️ You have control';
     browserStatus.className = 'browser-status user-control';
     browserFrame.style.pointerEvents = 'auto';
+    // Focus the iframe so keyboard events reach KasmVNC
+    browserFrame.focus();
   });
 
   browserRelease.addEventListener('click', () => {
@@ -335,6 +336,14 @@
     pollBrowserController();
     browserFrame.style.pointerEvents = 'none';
   });
+
+  // ─── Click-to-focus: clicking anywhere in the iframe area focuses it ─────
+  const frameContainer = document.getElementById('browser-frame-container');
+  if (frameContainer) {
+    frameContainer.addEventListener('mousedown', () => {
+      if (userHasControl) browserFrame.focus();
+    });
+  }
 
   // ─── Auto-open on agent browser activity ─────────────────────────────────
   const chatMessages = document.getElementById('chat-messages');
