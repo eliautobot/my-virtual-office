@@ -4988,6 +4988,70 @@ function _isFurnitureNearHorizontalWall(item) {
     return false;
 }
 
+// Classify furniture as IN FRONT of a horizontal wall (should render on top of occluders)
+// vs BEHIND it (should stay behind occluders, i.e. NOT redrawn after occluders).
+// "In front" = furniture's bottom edge is at or below the wall base line.
+// Uses FURNITURE_BOUNDS to compute the actual visual bottom edge.
+function _isFurnitureInFrontOfWall(item) {
+    var interior = (officeConfig.walls && officeConfig.walls.interior) || [];
+    var bounds = FURNITURE_BOUNDS[item.type] || { w: 40, h: 40, ox: 0, oy: 0 };
+    var ox = bounds.ox || 0, oy = bounds.oy || 0;
+    // Compute the visual bottom Y of this furniture item
+    var itemBottomY = item.y + bounds.h * (1 - oy);
+
+    for (var i = 0; i < interior.length; i++) {
+        var wall = interior[i];
+        if (wall.x1 === wall.x2) continue; // skip vertical walls
+        var px = Math.min(wall.x1, wall.x2) * TILE;
+        var pw = Math.abs(wall.x2 - wall.x1) * TILE;
+        var py = wall.y1 * TILE; // wall base line in pixels
+        var faceH = 36;
+
+        // Item must horizontally overlap the wall
+        var itemLeft = item.x - bounds.w * ox;
+        var itemRight = itemLeft + bounds.w;
+        if (itemRight <= px || itemLeft >= px + pw) continue;
+
+        // Check if near this wall (same vertical range as _isFurnitureNearHorizontalWall)
+        var itemTopY = item.y - bounds.h * oy;
+        if (itemTopY >= py + 10 || itemBottomY <= py - faceH - 16) continue;
+
+        // Near this wall — is the item IN FRONT (below wall base)?
+        // Wall base is at py. Furniture whose bottom edge extends past py is in front.
+        if (itemBottomY >= py - 4) {
+            return true; // in front — should be redrawn after occluders
+        }
+        // Otherwise, furniture is behind — should NOT be redrawn after occluders
+        return false;
+    }
+    // Not near any wall
+    return false;
+}
+
+// Check if a desk (by agent desk coords) is behind a horizontal wall
+// Used to decide whether desk char items should be drawn before or after occluders
+function _isDeskBehindHorizontalWall(deskX, deskY) {
+    var interior = (officeConfig.walls && officeConfig.walls.interior) || [];
+    var bounds = FURNITURE_BOUNDS['desk'] || { w: 72, h: 76, ox: 0.5, oy: 0.66 };
+    var deskBottomY = deskY + bounds.h * (1 - (bounds.oy || 0));
+    for (var i = 0; i < interior.length; i++) {
+        var wall = interior[i];
+        if (wall.x1 === wall.x2) continue;
+        var px = Math.min(wall.x1, wall.x2) * TILE;
+        var pw = Math.abs(wall.x2 - wall.x1) * TILE;
+        var py = wall.y1 * TILE;
+        var faceH = 36;
+        // Check horizontal overlap
+        if (deskX < px || deskX > px + pw) continue;
+        // Check vertical proximity (same as agent behind-wall check)
+        if (deskY >= py - faceH - 16 && deskY < py + 10) {
+            // Desk is near this wall — is it behind?
+            if (deskBottomY < py - 4) return true; // behind
+        }
+    }
+    return false;
+}
+
 function _isAgentBehindHorizontalWall(agent) {
     var interior = (officeConfig.walls && officeConfig.walls.interior) || [];
     for (var i = 0; i < interior.length; i++) {
@@ -6972,6 +7036,9 @@ function openModal(agent) {
         logBox.appendChild(div);
     });
     logBox.scrollTop = logBox.scrollHeight;
+
+    // Load skills for this agent
+    loadAgentSkills(agent.statusKey || agent.id);
 
     document.getElementById('agentModal').classList.remove('hidden');
 }
@@ -9966,15 +10033,25 @@ function loop() {
     ctx.clip();
     _perfStart('environment'); drawEnvironment(); _perfEnd('environment');
     _rimFrame++;
-    // Draw persistent desk items (before ambient so they get tinted)
+
+    // ─── Z-ORDER FIX: Split desk char items into behind-wall vs normal ───
+    // Desk char items for desks NOT behind walls are drawn here (before occluders,
+    // they'll be covered if near a wall, but that's handled in the front-of-wall redraw).
+    // Desk char items for desks BEHIND walls are drawn with the behind-wall agents.
     _perfStart('deskItems');
+    var _behindWallDesks = []; // agents whose desks are behind a wall
     agents.forEach(a => {
-        ctx.save();
-        ctx.translate(a.desk.x, a.desk.y);
-        a._drawDeskCharItem(ctx);
-        ctx.restore();
+        if (_isDeskBehindHorizontalWall(a.desk.x, a.desk.y)) {
+            _behindWallDesks.push(a);
+        } else {
+            ctx.save();
+            ctx.translate(a.desk.x, a.desk.y);
+            a._drawDeskCharItem(ctx);
+            ctx.restore();
+        }
     });
     _perfEnd('deskItems');
+
     _perfStart('agents');
     agents.forEach(a => { a.update(); maybeThrowAirplane(a); maybeStartRPS(a); maybeStartSocial(a); maybeStartDarts(a); maybeStartPong(a); _maybePetInteraction(a); if (a._petCooldown > 0) a._petCooldown--; });
     updatePets();
@@ -9987,9 +10064,20 @@ function loop() {
         if (_isAgentBehindHorizontalWall(a)) _behindWalls.push(a);
         else _frontWalls.push(a);
     });
+
+    // ─── Draw behind-wall desk char items, then behind-wall agents ───
+    // Both render BEFORE wall occluders, so they appear BEHIND the wall face.
+    _behindWallDesks.forEach(function(a) {
+        ctx.save();
+        ctx.translate(a.desk.x, a.desk.y);
+        a._drawDeskCharItem(ctx);
+        ctx.restore();
+    });
     _behindWalls.forEach(function(a) { a.draw(); });
     _perfEnd('agents');
+
     _perfStart('wallOccluders'); drawInteriorWallOccluders(); _perfEnd('wallOccluders');
+
     // Redraw vertical walls going down (they must stay on top of horizontal wall occluders)
     var _intWalls = (officeConfig.walls && officeConfig.walls.interior) || [];
     _intWalls.forEach(function(wall, idx) {
@@ -9997,12 +10085,35 @@ function loop() {
             _drawSingleWall(wall, idx);
         }
     });
-    // Redraw furniture near horizontal walls (occluders may have covered them)
+
+    // ─── Z-ORDER FIX: Only redraw furniture that is IN FRONT of walls ───
+    // Furniture behind walls was already drawn in drawEnvironment() and stays
+    // behind the wall occluder. Only furniture in front gets redrawn on top.
     officeConfig.furniture.forEach(function(item) {
         if (item.type === 'branchSign' || item.type === 'textLabel') return;
         if (item.type === 'wall' || item.type === 'door') return;
-        if (_isFurnitureNearHorizontalWall(item)) drawFurnitureItem(item);
+        if (_isFurnitureNearHorizontalWall(item) && _isFurnitureInFrontOfWall(item)) {
+            drawFurnitureItem(item);
+        }
     });
+
+    // ─── Desk char items for IN-FRONT desks near walls also need redraw ───
+    // (They were drawn before occluders, so they got covered by the wall face.
+    // Redraw them now so they appear on top of the wall, matching their desk.)
+    agents.forEach(function(a) {
+        if (_behindWallDesks.indexOf(a) >= 0) return; // skip behind-wall desks
+        // Find the furniture item for this desk
+        var deskItem = officeConfig.furniture.find(function(f) {
+            return (f.type === 'desk' || f.type === 'bossDesk') && f.x === a.desk.x && f.y === a.desk.y;
+        });
+        if (deskItem && _isFurnitureNearHorizontalWall(deskItem) && _isFurnitureInFrontOfWall(deskItem)) {
+            ctx.save();
+            ctx.translate(a.desk.x, a.desk.y);
+            a._drawDeskCharItem(ctx);
+            ctx.restore();
+        }
+    });
+
     // Labels on top of walls
     officeConfig.furniture.forEach(function(item) {
         if (item.type === 'branchSign' || item.type === 'textLabel') drawFurnitureItem(item);
@@ -11876,8 +11987,8 @@ function _acpBuildEditor(agent) {
 
     col.appendChild(sectionsWrap);
 
-    // Delete button (custom agents only)
-    if (_isCustomAgent(agent.id)) {
+    // Delete button (any agent except main)
+    if (agent.id !== 'main') {
         var delWrap = document.createElement('div');
         delWrap.className = 'agent-delete-wrap';
         var delBtn = document.createElement('button');
@@ -12223,75 +12334,108 @@ function _isCustomAgent(agentId) {
 }
 
 function _acpCreateNewAgent() {
-    var newId = 'agent-' + Date.now();
-    var newAgent = {
-        id: newId,
-        name: 'New Agent',
-        role: 'Agent',
-        emoji: '😊',
-        gender: 'M',
-        color: '#607d8b',
-        statusKey: newId,
-        branch: 'UNASSIGNED',
-        deskType: 'center',
-    };
+    var agentName = prompt('Agent name:', 'New Agent');
+    if (!agentName || !agentName.trim()) return;
+    agentName = agentName.trim();
 
-    // Create appearance
-    var appearance = getDefaultAppearance(newId, 'M');
+    var agentRole = prompt('Role (e.g., "Email specialist", "QA engineer"):', 'AI assistant');
+    if (agentRole === null) return;
+    agentRole = agentRole.trim() || 'AI assistant';
 
-    // Ensure officeConfig.agents exists
-    if (!officeConfig.agents) officeConfig.agents = [];
+    var agentEmoji = prompt('Emoji:', '🤖');
+    if (agentEmoji === null) return;
+    agentEmoji = agentEmoji.trim() || '🤖';
 
-    // Add to config
-    officeConfig.agents.push(Object.assign({}, newAgent, { appearance: appearance }));
+    // Call server to create the OpenClaw agent
+    _acpShowToast('Creating agent in OpenClaw...');
+    fetch('/api/agent/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: agentName, role: agentRole, emoji: agentEmoji })
+    }).then(function(res) { return res.json(); }).then(function(data) {
+        if (data.error) {
+            alert('Failed to create agent: ' + data.error);
+            return;
+        }
+        var newId = data.agentId;
+        var newAgent = {
+            id: newId,
+            name: agentName,
+            role: agentRole,
+            emoji: agentEmoji,
+            gender: 'M',
+            color: '#607d8b',
+            statusKey: newId,
+            branch: 'UNASSIGNED',
+            deskType: 'center',
+        };
 
-    // Find a starting position near center
-    var startX = 500 + (agents.length * 20) % 100;
-    var startY = 350;
+        var appearance = getDefaultAppearance(newId, 'M');
+        if (!officeConfig.agents) officeConfig.agents = [];
+        officeConfig.agents.push(Object.assign({}, newAgent, { appearance: appearance }));
 
-    // Create Agent instance
-    var agentInst = new Agent(newAgent);
-    agentInst.desk = { x: startX, y: startY };
-    agentInst.x = startX;
-    agentInst.y = startY;
-    agentInst.targetX = startX;
-    agentInst.targetY = startY;
+        var startX = 500 + (agents.length * 20) % 100;
+        var startY = 350;
+        var agentInst = new Agent(newAgent);
+        agentInst.desk = { x: startX, y: startY };
+        agentInst.x = startX;
+        agentInst.y = startY;
+        agentInst.targetX = startX;
+        agentInst.targetY = startY;
+        agents.push(agentInst);
+        agentMap[newId] = agentInst;
 
-    agents.push(agentInst);
-    agentMap[newId] = agentInst;
-
-    saveOfficeConfig();
-
-    _acpRefreshList();
-    _acpSelectAgent(newId);
+        saveOfficeConfig();
+        _acpRefreshList();
+        _acpSelectAgent(newId);
+        _acpShowToast('✅ Agent "' + agentName + '" created in OpenClaw!');
+    }).catch(function(e) {
+        alert('Error creating agent: ' + e.message);
+    });
 }
 
 function _acpDeleteAgent(agentId) {
-    if (!confirm('Delete this agent?')) return;
+    var agentName = agentId;
+    var agentCfg = (officeConfig.agents || []).find(function(a) { return a.id === agentId; });
+    if (agentCfg) agentName = agentCfg.name || agentId;
 
-    // Remove from agents array
-    var idx = agents.findIndex(function(a){ return a.id === agentId; });
-    if (idx >= 0) agents.splice(idx, 1);
+    if (!confirm('Delete agent "' + agentName + '"?\n\nThis will permanently remove the agent from OpenClaw, including all workspace files, memory, and session history.\n\nThis cannot be undone.')) return;
 
-    // Remove from agentMap
-    delete agentMap[agentId];
+    // Call server to delete from OpenClaw
+    fetch('/api/agent/delete', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: agentId })
+    }).then(function(res) { return res.json(); }).then(function(data) {
+        if (data.error) {
+            alert('Failed to delete agent: ' + data.error);
+            return;
+        }
 
-    // Remove from officeConfig.agents
-    if (officeConfig.agents) {
-        var cidx = officeConfig.agents.findIndex(function(a){ return a.id === agentId; });
-        if (cidx >= 0) officeConfig.agents.splice(cidx, 1);
-    }
+        // Remove from local state
+        var idx = agents.findIndex(function(a){ return a.id === agentId; });
+        if (idx >= 0) agents.splice(idx, 1);
+        delete agentMap[agentId];
 
-    saveOfficeConfig();
-    _acpRefreshList();
+        if (officeConfig.agents) {
+            var cidx = officeConfig.agents.findIndex(function(a){ return a.id === agentId; });
+            if (cidx >= 0) officeConfig.agents.splice(cidx, 1);
+        }
 
-    // Select another agent
-    if (agents.length > 0) {
-        _acpSelectAgent(agents[0].id);
-    } else {
-        var col = document.getElementById('acp-editor-col');
-        if (col) col.innerHTML = '<div style="padding:20px;color:#666;font-size:11px">No agents. Click ➕ New Agent to create one.</div>';
-    }
+        saveOfficeConfig();
+        _acpRefreshList();
+
+        if (agents.length > 0) {
+            _acpSelectAgent(agents[0].id);
+        } else {
+            var col = document.getElementById('acp-editor-col');
+            if (col) col.innerHTML = '<div style="padding:20px;color:#666;font-size:11px">No agents. Click ➕ New Agent to create one.</div>';
+        }
+
+        _acpShowToast('🗑️ Agent "' + agentName + '" deleted');
+    }).catch(function(e) {
+        alert('Error deleting agent: ' + e.message);
+    });
 }
 
 // --- INTERCEPT CLICKS IN EDIT MODE ---
@@ -13224,6 +13368,132 @@ function _showCouchColorEditor(item) {
 function _hideColorPicker() {
     if (_colorPickerEl) _colorPickerEl.style.display = 'none';
     _colorPickerTarget = null;
+}
+
+// ─── SKILLS MANAGEMENT ──────────────────────────────────────────────────────
+var _currentSkillAgent = null; // statusKey of agent whose skills are shown
+var _editingSkillName = null;
+
+function loadAgentSkills(agentKey) {
+    _currentSkillAgent = agentKey;
+    var listEl = document.getElementById('skills-list');
+    if (!listEl) return;
+    listEl.innerHTML = '<span style="color:#666;font-size:11px;">Loading skills...</span>';
+    fetch('/api/agent/' + encodeURIComponent(agentKey) + '/skills')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            listEl.innerHTML = '';
+            if (!data.skills || data.skills.length === 0) {
+                listEl.innerHTML = '<span style="color:#666;font-size:11px;">No skills configured</span>';
+                return;
+            }
+            data.skills.forEach(function(skill) {
+                var row = document.createElement('div');
+                row.className = 'skill-row';
+                var info = document.createElement('div');
+                info.className = 'skill-row-info';
+                info.innerHTML = '<span style="color:#ffd700;">🧩 ' + escHtml(skill.name) + '</span>' +
+                    (skill.description ? '<br><span style="color:#888;font-size:10px;">' + escHtml(skill.description).substring(0, 80) + '</span>' : '');
+                var btns = document.createElement('div');
+                btns.className = 'skill-row-btns';
+                var editBtn = document.createElement('button');
+                editBtn.textContent = '✏️';
+                editBtn.title = 'Edit skill';
+                editBtn.onclick = (function(sName) { return function() { editSkill(sName); }; })(skill.name);
+                var delBtn = document.createElement('button');
+                delBtn.textContent = '🗑️';
+                delBtn.title = 'Remove skill';
+                delBtn.onclick = (function(sName) { return function() { deleteSkill(sName); }; })(skill.name);
+                btns.appendChild(editBtn);
+                btns.appendChild(delBtn);
+                row.appendChild(info);
+                row.appendChild(btns);
+                listEl.appendChild(row);
+            });
+        })
+        .catch(function(e) {
+            listEl.innerHTML = '<span style="color:#f44336;font-size:11px;">Error loading skills</span>';
+        });
+}
+
+function showAddSkillForm() {
+    document.getElementById('skill-add-form').style.display = 'block';
+    document.getElementById('skill-edit-form').style.display = 'none';
+    document.getElementById('skill-new-name').value = '';
+    document.getElementById('skill-new-content').value = '';
+    document.getElementById('skill-new-name').focus();
+}
+
+function hideAddSkillForm() {
+    document.getElementById('skill-add-form').style.display = 'none';
+}
+
+function saveNewSkill() {
+    if (!_currentSkillAgent) return;
+    var name = document.getElementById('skill-new-name').value.trim();
+    var content = document.getElementById('skill-new-content').value;
+    if (!name) { alert('Skill name is required'); return; }
+    fetch('/api/agent/' + encodeURIComponent(_currentSkillAgent) + '/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, content: content })
+    }).then(function(r) { return r.json(); }).then(function(data) {
+        if (data.error) { alert('Error: ' + data.error); return; }
+        hideAddSkillForm();
+        loadAgentSkills(_currentSkillAgent);
+        _acpShowToast('✅ Skill "' + name + '" added');
+    }).catch(function(e) { alert('Error saving skill: ' + e.message); });
+}
+
+function editSkill(skillName) {
+    if (!_currentSkillAgent) return;
+    _editingSkillName = skillName;
+    document.getElementById('skill-add-form').style.display = 'none';
+    document.getElementById('skill-edit-form').style.display = 'block';
+    document.getElementById('skill-edit-title').textContent = '✏️ Editing: ' + skillName;
+    document.getElementById('skill-edit-content').value = 'Loading...';
+    // Fetch skills list which includes content
+    fetch('/api/agent/' + encodeURIComponent(_currentSkillAgent) + '/skills')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var skill = (data.skills || []).find(function(s) { return s.name === skillName; });
+            document.getElementById('skill-edit-content').value = (skill && skill.content) || '# ' + skillName + '\n\n_No content yet._';
+        })
+        .catch(function(e) {
+            document.getElementById('skill-edit-content').value = '# ' + skillName + '\n\n_Could not load content. Edit and save to create._';
+        });
+}
+
+function hideEditSkillForm() {
+    document.getElementById('skill-edit-form').style.display = 'none';
+    _editingSkillName = null;
+}
+
+function saveEditedSkill() {
+    if (!_currentSkillAgent || !_editingSkillName) return;
+    var content = document.getElementById('skill-edit-content').value;
+    fetch('/api/agent/' + encodeURIComponent(_currentSkillAgent) + '/skills', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: _editingSkillName, content: content })
+    }).then(function(r) { return r.json(); }).then(function(data) {
+        if (data.error) { alert('Error: ' + data.error); return; }
+        hideEditSkillForm();
+        loadAgentSkills(_currentSkillAgent);
+        _acpShowToast('✅ Skill "' + _editingSkillName + '" updated');
+    }).catch(function(e) { alert('Error saving skill: ' + e.message); });
+}
+
+function deleteSkill(skillName) {
+    if (!_currentSkillAgent) return;
+    if (!confirm('Remove skill "' + skillName + '" from this agent?')) return;
+    fetch('/api/agent/' + encodeURIComponent(_currentSkillAgent) + '/skills/' + encodeURIComponent(skillName), {
+        method: 'DELETE'
+    }).then(function(r) { return r.json(); }).then(function(data) {
+        if (data.error) { alert('Error: ' + data.error); return; }
+        loadAgentSkills(_currentSkillAgent);
+        _acpShowToast('🗑️ Skill "' + skillName + '" removed');
+    }).catch(function(e) { alert('Error deleting skill: ' + e.message); });
 }
 
 loop();
