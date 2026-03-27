@@ -119,12 +119,9 @@ Then open `http://localhost:8090/setup` to run the setup wizard.
 ### Free Demo
 Works without a license key:
 - Up to 3 agents
-- Full office editor and furniture
-- Agent customization and appearance editor
 - Branch management
 - Weather and day/night cycle
 - Chat with any agent
-- Office pet
 - API usage monitoring
 - Setup wizard
 
@@ -133,6 +130,9 @@ Demo mode shows a watermark and demo banner.
 ### Full License
 Unlocks everything:
 - Unlimited agents
+- Full office editor and furniture
+- Agent customization and appearance editor
+- Office pet
 - Agent Browser panel
 - SMS / Twilio panel
 - Cron Job Manager
