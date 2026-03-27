@@ -35,7 +35,7 @@ _meetings_lock = threading.Lock()
 MANUAL_OVERRIDE_TTL = 30
 
 # How long after last activity before an agent is considered idle
-IDLE_TIMEOUT_SEC = 60
+IDLE_TIMEOUT_SEC = 120
 
 # How often to poll sessions.list
 SESSIONS_POLL_SEC = 10
@@ -227,19 +227,10 @@ def _process_event(event_type, payload):
             _last_event_at[agent_id] = now
             _last_event_task[agent_id] = task
         elif state_val in ("final", "done"):
-            # Turn complete — will go idle after timeout
+            # Turn complete — record recent activity, but don't force idle immediately.
+            # Let sessions polling + idle timeout decide when the agent is truly idle.
             _last_event_at[agent_id] = now
             _last_event_task[agent_id] = ""
-            # Set idle immediately on final (agent is done)
-            with _state_lock:
-                if agent_id not in _state:
-                    _state[agent_id] = {}
-                _state[agent_id].update({
-                    "state": "idle",
-                    "task": "",
-                    "updated": int(now),
-                    "source": "gateway"
-                })
             return
 
     elif event_type == "agent":
@@ -310,23 +301,25 @@ def _process_sessions_list(sessions):
             if agent_id not in _state:
                 _state[agent_id] = {"state": "idle", "task": "", "updated": 0, "source": "discovered"}
 
-        if updated_at > prev_updated and prev_updated > 0:
-            # Session was updated since last check — agent is working
-            age_sec = (now_ms - updated_at) / 1000
-            if age_sec < IDLE_TIMEOUT_SEC:
-                # Only mark working if no real-time event gave us a better task
-                last_evt = _last_event_at.get(agent_id, 0)
-                if now - last_evt > 5:
-                    # No recent real-time event, use sessions.list detection
-                    with _state_lock:
-                        current = _state[agent_id].get("state", "idle")
-                        if current != "working":
-                            _state[agent_id].update({
-                                "state": "working",
-                                "task": "Active",
-                                "updated": int(now),
-                                "source": "gateway-poll"
-                            })
+        session_is_fresh = updated_at and ((now_ms - updated_at) / 1000) < IDLE_TIMEOUT_SEC
+        session_changed = updated_at > prev_updated
+
+        if session_is_fresh and (session_changed or prev_updated == 0):
+            # Session is active right now — mark working even on first sight.
+            # This lets polling recover if the WS event stream missed activity.
+            last_evt = _last_event_at.get(agent_id, 0)
+            if now - last_evt > 5:
+                # No recent real-time event, use sessions.list detection
+                with _state_lock:
+                    current = _state[agent_id].get("state", "idle")
+                    current_task = _state[agent_id].get("task", "")
+                    if current != "working" or not current_task:
+                        _state[agent_id].update({
+                            "state": "working",
+                            "task": current_task or "Active",
+                            "updated": int(now),
+                            "source": "gateway-poll"
+                        })
 
         _last_updated_at[key] = updated_at
 

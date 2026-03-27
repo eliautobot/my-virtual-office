@@ -237,6 +237,536 @@ def refresh_agent_maps():
     AGENT_WORKSPACES = _build_agent_workspaces()
     AGENT_SESSION_IDS = _build_agent_session_ids()
 
+##############################################################################
+# AGENT CREATION + SKILLS MANAGEMENT
+##############################################################################
+
+def _sanitize_agent_id(name):
+    """Convert a display name into a safe agent ID."""
+    import re
+    s = name.lower().strip()
+    s = re.sub(r'[^a-z0-9\s-]', '', s)
+    s = re.sub(r'[\s]+', '-', s)
+    s = re.sub(r'-+', '-', s).strip('-')
+    return s or f"agent-{int(time.time())}"
+
+def _handle_agent_create(body):
+    """Create a new OpenClaw agent from the VO app."""
+    name = (body.get("name") or "").strip()
+    if not name:
+        return {"error": "Agent name is required", "_status": 400}
+
+    agent_id = body.get("id") or _sanitize_agent_id(name)
+    emoji = body.get("emoji", "🤖")
+    role = body.get("role", "AI assistant")
+    model = body.get("model", "")
+
+    # Check if agent already exists
+    agent_dir = os.path.join(WORKSPACE_BASE, f"agents/{agent_id}")
+    if os.path.exists(agent_dir):
+        return {"error": f"Agent '{agent_id}' already exists", "_status": 409}
+
+    workspace_dir = os.path.join(WORKSPACE_BASE, f"workspace-{agent_id}")
+
+    try:
+        # 1. Create agent directory structure
+        os.makedirs(os.path.join(agent_dir, "sessions"), exist_ok=True)
+        # Write empty agent marker
+        with open(os.path.join(agent_dir, "agent"), "w") as f:
+            pass
+        # Write empty sessions.json
+        with open(os.path.join(agent_dir, "sessions", "sessions.json"), "w") as f:
+            json.dump({}, f)
+        # Write MEMORY.md in agent dir
+        with open(os.path.join(agent_dir, "MEMORY.md"), "w") as f:
+            f.write(f"# MEMORY.md - {name}\n\n_No memories yet._\n")
+
+        # 2. Create workspace with template files
+        os.makedirs(os.path.join(workspace_dir, "memory"), exist_ok=True)
+        os.makedirs(os.path.join(workspace_dir, "skills"), exist_ok=True)
+
+        _write_template(workspace_dir, "IDENTITY.md", f"""# IDENTITY.md
+
+- **Name:** {name}
+- **Creature:** AI assistant
+- **Vibe:** Helpful, efficient, ready to work
+- **Emoji:** {emoji}
+""")
+        _write_template(workspace_dir, "SOUL.md", f"""# SOUL.md — {name}
+
+You are **{name}** {emoji} — {role}.
+
+## Style
+- Be helpful and direct
+- Follow your AGENTS.md workflow strictly
+- Always set working status before starting and idle when done
+
+## Tool-First Rule
+You ALWAYS start with tool calls before responding with text. Every task requires ALL workflow steps in AGENTS.md — no exceptions.
+""")
+        _write_template(workspace_dir, "USER.md", """# USER.md
+
+- **Name:** (set by your owner)
+- **Timezone:** (set by your owner)
+- **Notes:** Prefers direct, clear communication.
+""")
+        _write_template(workspace_dir, "AGENTS.md", f"""# {name} {emoji} — {role}
+
+## Role
+{role}
+
+## Core Rules
+- Follow instructions carefully
+- Log your work in memory/YYYY-MM-DD.md
+- Always complete the full loop: working → work → report → idle
+
+## Communication
+- Use `sessions_send` to reach other agents
+- Your text reply IS your response — write it directly
+
+## Memory
+- Daily logs: `memory/YYYY-MM-DD.md`
+- Long-term: `MEMORY.md`
+""")
+        _write_template(workspace_dir, "HEARTBEAT.md", """# HEARTBEAT.md
+
+# Add periodic tasks below. If nothing needs attention, reply HEARTBEAT_OK.
+""")
+        _write_template(workspace_dir, "MEMORY.md", f"# MEMORY.md - {name}\n\n_No memories yet._\n")
+        _write_template(workspace_dir, "TOOLS.md", f"# TOOLS.md — {name}\n\n_Add tool-specific notes here._\n")
+
+        # 3. Add agent to openclaw.json
+        config_path = os.path.join(WORKSPACE_BASE, "openclaw.json")
+        with open(config_path, "r") as f:
+            config = json.load(f)
+
+        # Get defaults for model and memorySearch
+        defaults = config.get("agents", {}).get("defaults", {})
+        default_model = model or defaults.get("model", {}).get("primary", "anthropic/claude-sonnet-4-6")
+        default_memory = defaults.get("memorySearch", {})
+
+        new_agent_entry = {
+            "id": agent_id,
+            "workspace": workspace_dir,
+            "model": default_model,
+            "tools": {
+                "allow": [
+                    "group:sessions",
+                    "group:fs",
+                    "group:runtime",
+                    "group:web",
+                    "group:memory",
+                    "message",
+                    "tts"
+                ]
+            },
+        }
+        # Add memorySearch if configured in defaults
+        if default_memory:
+            new_agent_entry["memorySearch"] = default_memory
+
+        agent_list = config.get("agents", {}).get("list", [])
+        agent_list.append(new_agent_entry)
+        config["agents"]["list"] = agent_list
+
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+        # 4. Signal gateway to reload
+        _signal_gateway_reload()
+
+        # 5. Refresh discovery
+        global _discovered_at
+        _discovered_at = 0
+        refresh_agent_maps()
+
+        return {
+            "ok": True,
+            "agentId": agent_id,
+            "name": name,
+            "workspace": workspace_dir,
+            "message": f"Agent '{name}' ({agent_id}) created successfully"
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e), "_status": 500}
+
+
+def _write_template(workspace_dir, filename, content):
+    """Write a template file to a workspace."""
+    with open(os.path.join(workspace_dir, filename), "w") as f:
+        f.write(content)
+
+
+def _signal_gateway_reload():
+    """Send SIGUSR1 to the OpenClaw gateway process to reload config."""
+    import signal
+    try:
+        # Find gateway PID from proc
+        for pid_dir in os.listdir("/proc"):
+            if not pid_dir.isdigit():
+                continue
+            try:
+                with open(f"/proc/{pid_dir}/cmdline", "r") as f:
+                    cmdline = f.read()
+                if "openclaw" in cmdline and "gateway" in cmdline:
+                    os.kill(int(pid_dir), signal.SIGUSR1)
+                    return True
+            except (PermissionError, FileNotFoundError, ProcessLookupError):
+                continue
+        # Fallback: try common PID file locations
+        for pidfile in ["/tmp/openclaw-gateway.pid", os.path.join(WORKSPACE_BASE, "gateway.pid")]:
+            if os.path.exists(pidfile):
+                with open(pidfile) as f:
+                    pid = int(f.read().strip())
+                os.kill(pid, signal.SIGUSR1)
+                return True
+    except Exception as e:
+        print(f"⚠️  Could not signal gateway reload: {e}")
+    return False
+
+
+def _handle_skill_list(agent_key):
+    """List skills for an agent."""
+    refresh_agent_maps()
+    ws_dir = AGENT_WORKSPACES.get(agent_key)
+    if not ws_dir:
+        return {"error": "Agent not found", "_status": 404}
+    ws_path = os.path.join(WORKSPACE_BASE, ws_dir)
+    skills_dir = os.path.join(ws_path, "skills")
+    if not os.path.isdir(skills_dir):
+        return {"skills": []}
+    skills = []
+    for entry in sorted(os.listdir(skills_dir)):
+        skill_path = os.path.join(skills_dir, entry)
+        # Skill can be a folder with SKILL.md or a single .md file
+        if os.path.isdir(skill_path):
+            skill_md = os.path.join(skill_path, "SKILL.md")
+            if os.path.exists(skill_md):
+                desc = _extract_skill_description(skill_md)
+                try:
+                    with open(skill_md, "r") as f:
+                        content = f.read()
+                except Exception:
+                    content = ""
+                skills.append({"name": entry, "type": "folder", "description": desc, "content": content})
+        elif entry.endswith(".md"):
+            desc = _extract_skill_description(skill_path)
+            try:
+                with open(skill_path, "r") as f:
+                    content = f.read()
+            except Exception:
+                content = ""
+            skills.append({"name": entry.replace(".md", ""), "type": "file", "description": desc, "content": content})
+    return {"skills": skills}
+
+
+def _extract_skill_description(filepath):
+    """Extract first meaningful line from a skill file as description."""
+    try:
+        with open(filepath, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and not line.startswith("---") and not line.startswith("name:"):
+                    return line[:200]
+    except Exception:
+        pass
+    return ""
+
+
+def _handle_skill_write(agent_key, skill_name, body):
+    """Create or update a skill for an agent."""
+    refresh_agent_maps()
+    ws_dir = AGENT_WORKSPACES.get(agent_key)
+    if not ws_dir:
+        return {"error": "Agent not found", "_status": 404}
+    ws_path = os.path.join(WORKSPACE_BASE, ws_dir)
+    skills_dir = os.path.join(ws_path, "skills")
+    os.makedirs(skills_dir, exist_ok=True)
+
+    name = body.get("name", skill_name or "").strip()
+    content = body.get("content", "")
+    if not name:
+        return {"error": "Skill name is required", "_status": 400}
+
+    # Sanitize name
+    import re
+    safe_name = re.sub(r'[^a-zA-Z0-9_-]', '-', name).strip('-')
+    if not safe_name:
+        return {"error": "Invalid skill name", "_status": 400}
+
+    # Create skill as a folder with SKILL.md
+    skill_dir = os.path.join(skills_dir, safe_name)
+    os.makedirs(skill_dir, exist_ok=True)
+    skill_file = os.path.join(skill_dir, "SKILL.md")
+
+    if not content:
+        content = f"# {name}\n\n_Describe this skill's instructions here._\n"
+
+    with open(skill_file, "w") as f:
+        f.write(content)
+
+    return {"ok": True, "skill": safe_name, "path": skill_file}
+
+
+def _handle_skill_delete(agent_key, skill_name):
+    """Delete a skill from an agent."""
+    refresh_agent_maps()
+    ws_dir = AGENT_WORKSPACES.get(agent_key)
+    if not ws_dir:
+        return {"error": "Agent not found", "_status": 404}
+    ws_path = os.path.join(WORKSPACE_BASE, ws_dir)
+    skills_dir = os.path.join(ws_path, "skills")
+
+    if not skill_name:
+        return {"error": "Skill name is required", "_status": 400}
+
+    # Try folder first, then file
+    skill_folder = os.path.join(skills_dir, skill_name)
+    skill_file = os.path.join(skills_dir, f"{skill_name}.md")
+
+    import shutil
+    if os.path.isdir(skill_folder):
+        shutil.rmtree(skill_folder)
+        return {"ok": True, "deleted": skill_name}
+    elif os.path.isfile(skill_file):
+        os.remove(skill_file)
+        return {"ok": True, "deleted": skill_name}
+    else:
+        return {"error": f"Skill '{skill_name}' not found", "_status": 404}
+
+
+def _load_meetings_file():
+    """Load the persistent meetings/status file."""
+    try:
+        with open(STATUS_FILE, "r") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def _save_meetings_file(data):
+    """Persist the meetings/status file with permissive mode for shared runtimes."""
+    os.makedirs(os.path.dirname(STATUS_FILE), exist_ok=True)
+    with open(STATUS_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+    try:
+        os.chmod(STATUS_FILE, 0o666)
+    except Exception:
+        pass
+
+
+def _handle_meeting_create(body):
+    """Create/update a meeting in the canonical server-side status file."""
+    topic = (body.get("topic") or "").strip()
+    meet_id = (body.get("id") or "").strip()
+    if not meet_id:
+        import uuid
+        meet_id = str(uuid.uuid4())[:8]
+    meet_type = (body.get("type") or "").strip()
+    agents = body.get("agents") or body.get("participants") or []
+    organizer = (body.get("organizer") or "").strip()
+    purpose = (body.get("purpose") or body.get("topic") or "").strip()
+    kind = (body.get("kind") or "discussion").strip() or "discussion"
+
+    if not topic:
+        return {"error": "Meeting topic is required", "_status": 400}
+    if not isinstance(agents, list) or len(agents) < 2:
+        return {"error": "Meeting requires at least 2 agents", "_status": 400}
+
+    clean_agents = [str(a).strip() for a in agents if str(a).strip()]
+    if len(clean_agents) < 2:
+        return {"error": "Meeting requires at least 2 valid agent keys", "_status": 400}
+
+    if not organizer:
+        organizer = clean_agents[0]
+
+    if meet_type not in ("1on1", "group"):
+        meet_type = "1on1" if len(clean_agents) == 2 else "group"
+
+    data = _load_meetings_file()
+    meetings = data.get("_meetings", [])
+    if not isinstance(meetings, list):
+        meetings = []
+    meetings = [m for m in meetings if m.get("id") != meet_id]
+    meeting = {
+        "id": meet_id,
+        "topic": topic,
+        "purpose": purpose,
+        "kind": kind,
+        "type": meet_type,
+        "organizer": organizer,
+        "status": "active",
+        "participants": clean_agents,
+        "agents": clean_agents,
+        "rules": {
+            "mode": "discussion-not-work",
+            "endWhen": "purpose-complete",
+            "resumeStateAfterEnd": "working-or-idle"
+        }
+    }
+    meetings.append(meeting)
+    data["_meetings"] = meetings
+    _save_meetings_file(data)
+    gateway_presence.set_meetings(meetings)
+    return {"ok": True, "meeting": meeting}
+
+
+def _handle_meeting_end(body):
+    """End one meeting by id. Requires a summary from the organizer."""
+    meet_id = (body.get("id") or body.get("meetingId") or "").strip()
+    if not meet_id:
+        return {"error": "Meeting id is required", "_status": 400}
+
+    summary = (body.get("summary") or "").strip()
+    resolution = (body.get("resolution") or "").strip()
+    ended_by = (body.get("endedBy") or body.get("organizer") or "").strip()
+    action_items = body.get("actionItems") or []
+    responses = body.get("responses") or {}  # {agentKey: "what they said"}
+
+    if not summary:
+        return {"error": "A meeting summary is required to end the meeting", "_status": 400}
+
+    data = _load_meetings_file()
+    meetings = data.get("_meetings", [])
+    if not isinstance(meetings, list):
+        meetings = []
+
+    # Find the meeting being ended
+    ended_meeting = None
+    for m in meetings:
+        if m.get("id") == meet_id:
+            ended_meeting = dict(m)
+            break
+
+    if not ended_meeting:
+        return {"error": f"Meeting '{meet_id}' not found", "_status": 404}
+
+    # Build completed meeting record
+    import time as _time_end
+    completed = dict(ended_meeting)
+    completed["status"] = "completed"
+    completed["endedBy"] = ended_by or completed.get("organizer", "unknown")
+    completed["summary"] = summary
+    completed["resolution"] = resolution
+    completed["actionItems"] = action_items if isinstance(action_items, list) else []
+    completed["responses"] = responses if isinstance(responses, dict) else {}
+    completed["endedAt"] = int(_time_end.time())
+
+    # Remove from active meetings
+    meetings = [m for m in meetings if m.get("id") != meet_id]
+    data["_meetings"] = meetings
+
+    # Store in meeting history
+    history = data.get("_meetingHistory", [])
+    if not isinstance(history, list):
+        history = []
+    history.append(completed)
+    # Keep last 50 meetings in history
+    if len(history) > 50:
+        history = history[-50:]
+    data["_meetingHistory"] = history
+
+    _save_meetings_file(data)
+    gateway_presence.set_meetings(meetings)
+    return {"ok": True, "id": meet_id, "completed": completed}
+
+
+def _handle_meeting_end_all():
+    """End all meetings. Requires summaries per meeting or a bulk summary."""
+    data = _load_meetings_file()
+    data["_meetings"] = []
+    _save_meetings_file(data)
+    gateway_presence.set_meetings([])
+    return {"ok": True}
+
+
+def _handle_meeting_history_delete(meet_id):
+    """Delete a completed meeting from history."""
+    if not meet_id:
+        return {"error": "Meeting id is required", "_status": 400}
+    data = _load_meetings_file()
+    history = data.get("_meetingHistory", [])
+    if not isinstance(history, list):
+        history = []
+    before = len(history)
+    history = [m for m in history if m.get("id") != meet_id]
+    data["_meetingHistory"] = history
+    _save_meetings_file(data)
+    return {"ok": True, "removed": len(history) < before, "id": meet_id}
+
+
+def _handle_agent_delete(body):
+    """Delete an OpenClaw agent — removes from config, agent dir, and workspace."""
+    agent_id = (body.get("id") or "").strip()
+    if not agent_id:
+        return {"error": "Agent ID is required", "_status": 400}
+
+    # Safety: never delete the main agent
+    if agent_id == "main":
+        return {"error": "Cannot delete the main agent", "_status": 403}
+
+    config_path = os.path.join(WORKSPACE_BASE, "openclaw.json")
+
+    try:
+        # 1. Remove from openclaw.json
+        with open(config_path, "r") as f:
+            config = json.load(f)
+
+        agent_list = config.get("agents", {}).get("list", [])
+        agent_entry = None
+        for a in agent_list:
+            if a.get("id") == agent_id:
+                agent_entry = a
+                break
+
+        if not agent_entry:
+            return {"error": f"Agent '{agent_id}' not found in config", "_status": 404}
+
+        workspace_dir = agent_entry.get("workspace", "")
+        agent_list = [a for a in agent_list if a.get("id") != agent_id]
+        config["agents"]["list"] = agent_list
+
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+        # 2. Remove agent directory (~/.openclaw/agents/<id>/)
+        import shutil
+        agent_dir = os.path.join(WORKSPACE_BASE, f"agents/{agent_id}")
+        if os.path.isdir(agent_dir):
+            shutil.rmtree(agent_dir, ignore_errors=True)
+
+        # 3. Remove workspace directory
+        if workspace_dir and os.path.isdir(workspace_dir):
+            shutil.rmtree(workspace_dir, ignore_errors=True)
+
+        # 4. Signal gateway to reload
+        _signal_gateway_reload()
+
+        # 5. Refresh discovery
+        global _discovered_at
+        _discovered_at = 0
+        refresh_agent_maps()
+
+        return {
+            "ok": True,
+            "agentId": agent_id,
+            "message": f"Agent '{agent_id}' deleted successfully"
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e), "_status": 500}
+
+
+##############################################################################
+
 def get_agent_messages(agent_key, max_messages=500):
     """Read recent messages from an agent's active session JSONL."""
     agent_id = AGENT_SESSION_IDS.get(agent_key)
@@ -1076,6 +1606,35 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             if agent_limit > 0 and len(roster) > agent_limit:
                 roster = roster[:agent_limit]
             self.wfile.write(json.dumps({"agents": roster}).encode())
+        elif self.path.startswith("/api/agent/") and "/skills" in self.path:
+            # GET /api/agent/<id>/skills — list skills for an agent
+            parts = self.path.split("/api/agent/")[1].split("/skills")
+            agent_key = parts[0]
+            result = _handle_skill_list(agent_key)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path == "/api/meetings" or self.path == "/api/meetings/active":
+            # Return active meetings
+            data = _load_meetings_file()
+            active = data.get("_meetings", [])
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "meetings": active}).encode())
+        elif self.path == "/api/meetings/history":
+            # Return meeting history
+            data = _load_meetings_file()
+            history = data.get("_meetingHistory", [])
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "history": history}).encode())
         elif self.path == "/api/presence" or self.path.startswith("/api/presence/"):
             # Presence API — read from gateway_presence in-memory state
             if self.path == "/api/presence":
@@ -1936,10 +2495,49 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         request = {"type": "set-model", "agent_id": agent_id, "model": model_id, "status_key": status_key}
         return self._send_watcher_request(request)
 
+    def do_DELETE(self):
+        if self.path == "/api/agent/delete":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_agent_delete(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path.startswith("/api/meetings/history/"):
+            # DELETE /api/meetings/history/<id>
+            meet_id = self.path.split("/api/meetings/history/")[1].strip("/")
+            result = _handle_meeting_history_delete(meet_id)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path.startswith("/api/agent/") and "/skills/" in self.path:
+            # DELETE /api/agent/<id>/skills/<skill-name>
+            parts = self.path.split("/api/agent/")[1].split("/skills/")
+            agent_key = parts[0]
+            skill_name = parts[1].strip("/") if len(parts) > 1 else ""
+            result = _handle_skill_delete(agent_key, skill_name)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
@@ -2026,6 +2624,66 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(b'{"ok":true}')
+            return
+        # --- AGENT CREATION API ---
+        elif self.path == "/api/agent/create":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_agent_create(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        # --- MEETINGS API ---
+        elif self.path == "/api/meetings/create":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_meeting_create(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/meetings/end":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_meeting_end(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/meetings/end-all":
+            result = _handle_meeting_end_all()
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        # --- AGENT SKILLS API ---
+        elif self.path.startswith("/api/agent/") and "/skills" in self.path:
+            # POST /api/agent/<id>/skills — add or update a skill
+            parts = self.path.split("/api/agent/")[1].split("/skills")
+            agent_key = parts[0]
+            skill_path = parts[1].strip("/") if len(parts) > 1 else ""
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_skill_write(agent_key, skill_path, body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
             return
         # --- PRESENCE API ---
         elif self.path.startswith("/api/presence/"):

@@ -4292,10 +4292,12 @@ function processMeetings(meetingsData) {
     for (const m of meetingsData) {
         if (activeMeetings[m.id]) continue;  // Already active
 
-        const meetingAgents = m.agents.map(key => agentMap[key]).filter(Boolean);
+        const participantKeys = Array.isArray(m.participants) && m.participants.length ? m.participants : (m.agents || []);
+        const meetingAgents = participantKeys.map(key => agentMap[key]).filter(Boolean);
         if (meetingAgents.length < 2) continue;
 
         const topic = m.topic || 'Discussion';
+        const purpose = m.purpose || topic;
         const type = m.type || (meetingAgents.length <= 2 ? '1on1' : 'group');
 
         if (type === '1on1' && meetingAgents.length === 2) {
@@ -4306,7 +4308,7 @@ function processMeetings(meetingsData) {
             host.state = 'visiting';
             host.visitTarget = visitor.id;
             host.addIntent(`Meeting with ${visitor.name}: ${topic}`);
-            activeMeetings[m.id] = { agents: meetingAgents, topic, type };
+            activeMeetings[m.id] = { agents: meetingAgents, topic, purpose, type, organizer: m.organizer || participantKeys[0] || '', kind: m.kind || 'discussion', rules: m.rules || null };
             addGlobalLog(`🤝 ${visitor.name} → ${host.name}: ${topic}`);
         } else {
             // Group meeting — use meeting table if it exists, otherwise random cluster
@@ -4329,7 +4331,7 @@ function processMeetings(meetingsData) {
                     slotAssignments.push({ agent: agent.id, slot });
                 });
             }
-            activeMeetings[m.id] = { agents: meetingAgents, topic, type, slotAssignments };
+            activeMeetings[m.id] = { agents: meetingAgents, topic, purpose, type, organizer: m.organizer || participantKeys[0] || '', kind: m.kind || 'discussion', rules: m.rules || null, slotAssignments };
             addGlobalLog(`📊 Meeting: ${meetingAgents.map(a => a.name).join(', ')} — ${topic}`);
         }
     }
@@ -10897,6 +10899,8 @@ function handleEditClick(worldX, worldY, screenX, screenY, event) {
     // 3. Hit-test furniture — skip if mousedown already handled it (drag)
     var hit = _findFurnitureAt(worldX, worldY);
     if (hit) {
+        // Meeting table click → open dashboard (only outside edit mode)
+        if (_meetingTableClickCheck(hit)) return true;
         // Furniture selection is handled by mousedown now.
         // Only reach here if it was a quick click (no drag).
         // Selection was already set in mousedown, just return.
@@ -13495,5 +13499,398 @@ function deleteSkill(skillName) {
         _acpShowToast('🗑️ Skill "' + skillName + '" removed');
     }).catch(function(e) { alert('Error deleting skill: ' + e.message); });
 }
+
+// ─── MEETINGS DASHBOARD ──────────────────────────────────────────
+var _mtgAgentMap = {};  // key → {name, emoji, role}
+var _mtgCurrentTab = 'active';
+var _mtgData = { active: [], history: [] };
+
+function openMeetingsDashboard() {
+    document.getElementById('meetingsModal').classList.remove('hidden');
+    _mtgRefresh();
+}
+
+function closeMeetingsModal() {
+    document.getElementById('meetingsModal').classList.add('hidden');
+}
+
+function switchMtgTab(tab) {
+    _mtgCurrentTab = tab;
+    document.querySelectorAll('.mtg-tab').forEach(function(t) {
+        t.classList.toggle('active', t.dataset.tab === tab);
+    });
+    _mtgRender();
+}
+
+async function _mtgRefresh() {
+    try {
+        var [activeRes, histRes, agentsRes] = await Promise.all([
+            fetch('/api/meetings/active').then(function(r) { return r.json(); }),
+            fetch('/api/meetings/history').then(function(r) { return r.json(); }),
+            fetch('/agents-list').then(function(r) { return r.json(); })
+        ]);
+        _mtgData.active = activeRes.meetings || [];
+        _mtgData.history = (histRes.history || []).reverse();
+        _mtgAgentMap = {};
+        var agentsList = agentsRes.agents || agentsRes || [];
+        if (Array.isArray(agentsList)) {
+            agentsList.forEach(function(a) {
+                _mtgAgentMap[a.key || a.agentId || a.id] = {
+                    name: a.name || a.key || 'Unknown',
+                    emoji: a.emoji || '🤖',
+                    role: a.role || ''
+                };
+            });
+        }
+        _mtgRender();
+        _updateSidebarMeetings();
+    } catch (e) {
+        console.warn('[meetings] refresh error:', e);
+    }
+}
+
+function _mtgRender() {
+    var container = document.getElementById('mtg-cards');
+    var meetings = [];
+    if (_mtgCurrentTab === 'active') meetings = _mtgData.active;
+    else if (_mtgCurrentTab === 'completed') meetings = _mtgData.history;
+    else meetings = _mtgData.active.concat(_mtgData.history);
+
+    if (!meetings.length) {
+        container.innerHTML = '<div class="mtg-empty">No ' + _mtgCurrentTab + ' meetings</div>';
+        return;
+    }
+
+    container.innerHTML = meetings.map(function(m) {
+        var isActive = m.status === 'active';
+        var participants = m.participants || m.agents || [];
+
+        var cardId = 'mtg-card-' + m.id;
+        var isOpen = false;  // all meetings start collapsed by default
+
+        // Header (clickable to toggle)
+        var html = '<div class="mtg-card">';
+        html += '<div class="mtg-card-header" onclick="toggleMtgCard(\'' + _escMtg(m.id) + '\')">';
+        html += '<div><div class="mtg-card-title"><span class="mtg-card-toggle' + (isOpen ? ' open' : '') + '" id="mtg-toggle-' + _escMtg(m.id) + '">▶</span>' + _escMtg(m.topic || 'Untitled Meeting') + '</div>';
+        if (m.purpose && m.purpose !== m.topic) {
+            html += '<div class="mtg-card-purpose">' + _escMtg(m.purpose) + '</div>';
+        }
+        html += '</div>';
+        html += '<div>';
+        html += '<span class="mtg-badge ' + (isActive ? 'mtg-badge-active' : 'mtg-badge-completed') + '">' + (isActive ? '● Active' : '✓ Completed') + '</span>';
+        if (m.kind) html += '<span class="mtg-badge mtg-badge-kind">' + _escMtg(m.kind) + '</span>';
+        html += '</div></div>';
+
+        // Body (collapsible)
+        html += '<div class="mtg-card-body' + (isOpen ? ' open' : '') + '" id="mtg-body-' + _escMtg(m.id) + '">';
+
+        // Meta
+        html += '<div class="mtg-meta">';
+        var orgInfo = _mtgAgentMap[m.organizer] || { emoji: '🤖', name: m.organizer || 'Unknown' };
+        html += '<div class="mtg-meta-item">👑 ' + orgInfo.emoji + ' ' + _escMtg(orgInfo.name) + '</div>';
+        html += '<div class="mtg-meta-item">👥 ' + participants.length + ' participants</div>';
+        if (m.type) html += '<div class="mtg-meta-item">📋 ' + _escMtg(m.type) + '</div>';
+        if (m.endedAt) {
+            var d = new Date(m.endedAt * 1000);
+            html += '<div class="mtg-meta-item mtg-timestamp">🕐 ' + d.toLocaleString() + '</div>';
+        }
+        html += '</div>';
+
+        // Participants
+        html += '<div class="mtg-participants">';
+        participants.forEach(function(pKey) {
+            var info = _mtgAgentMap[pKey] || { emoji: '🤖', name: pKey, role: '' };
+            html += '<div class="mtg-participant">';
+            html += '<span class="mtg-participant-emoji">' + info.emoji + '</span>';
+            html += '<div class="mtg-participant-info">';
+            html += '<div class="mtg-participant-name">' + _escMtg(info.name) + '</div>';
+            if (info.role) html += '<div class="mtg-participant-role">' + _escMtg(info.role) + '</div>';
+            if (!isActive && m.actionItems && m.actionItems.length) {
+                var agentActions = m.actionItems.filter(function(item) {
+                    return item.toLowerCase().indexOf(info.name.toLowerCase()) >= 0 ||
+                           item.toLowerCase().indexOf(pKey.toLowerCase()) >= 0;
+                });
+                if (agentActions.length) {
+                    html += '<div class="mtg-participant-actions">→ ' + agentActions.map(_escMtg).join('<br>→ ') + '</div>';
+                }
+            }
+            html += '</div></div>';
+        });
+        html += '</div>';
+
+        // Per-agent responses
+        var responses = m.responses || {};
+        if (!isActive && Object.keys(responses).length > 0) {
+            html += '<div class="mtg-section"><div class="mtg-section-title">Agent Responses</div>';
+            html += '<div class="mtg-responses">';
+            participants.forEach(function(pKey) {
+                var info = _mtgAgentMap[pKey] || { emoji: '🤖', name: pKey, role: '' };
+                var resp = responses[pKey] || '';
+                html += '<div class="mtg-response">';
+                html += '<div class="mtg-response-header">';
+                html += '<span class="mtg-response-emoji">' + info.emoji + '</span>';
+                html += '<span class="mtg-response-name">' + _escMtg(info.name) + '</span>';
+                if (info.role) html += '<span class="mtg-response-role">' + _escMtg(info.role) + '</span>';
+                html += '</div>';
+                if (resp) {
+                    var respId = 'mtg-resp-' + _escMtg(m.id) + '-' + _escMtg(pKey);
+                    html += '<div class="mtg-response-text" id="' + respId + '">' + _escMtg(resp) + '</div>';
+                    html += '<span class="mtg-response-expand" onclick="toggleMtgResponse(\'' + respId + '\', this)">▼ expand</span>';
+                } else {
+                    html += '<div class="mtg-response-none">No response recorded</div>';
+                }
+                html += '</div>';
+            });
+            html += '</div></div>';
+        }
+
+        // Completed details
+        if (!isActive) {
+            if (m.summary) {
+                html += '<div class="mtg-section"><div class="mtg-section-title">Summary</div>';
+                html += '<div class="mtg-section-text">' + _escMtg(m.summary) + '</div></div>';
+            }
+            if (m.resolution) {
+                html += '<div class="mtg-section"><div class="mtg-section-title">Resolution</div>';
+                html += '<div class="mtg-section-text">' + _escMtg(m.resolution) + '</div></div>';
+            }
+            if (m.actionItems && m.actionItems.length) {
+                html += '<div class="mtg-section"><div class="mtg-section-title">Action Items</div>';
+                html += '<div class="mtg-section-text">' + m.actionItems.map(function(a) { return '• ' + _escMtg(a); }).join('\n') + '</div></div>';
+            }
+            if (m.endedBy) {
+                var endInfo = _mtgAgentMap[m.endedBy] || { emoji: '🤖', name: m.endedBy };
+                html += '<div class="mtg-section"><div class="mtg-section-title">Ended By</div>';
+                html += '<div class="mtg-section-text">' + endInfo.emoji + ' ' + _escMtg(endInfo.name) + '</div></div>';
+            }
+        }
+
+        // Actions bar
+        html += '<div class="mtg-actions-bar">';
+        if (isActive) {
+            html += '<button class="mtg-btn mtg-btn-end" onclick="openEndMeetingForm(\'' + _escMtg(m.id) + '\')">✅ End Meeting</button>';
+        } else {
+            html += '<button class="mtg-btn mtg-btn-delete" onclick="deleteMeetingHistory(\'' + _escMtg(m.id) + '\')">🗑️ Delete</button>';
+        }
+        html += '</div>';
+
+        html += '</div>';  // close mtg-card-body
+        html += '</div>';  // close mtg-card
+        return html;
+    }).join('');
+}
+
+function _escMtg(s) {
+    if (!s) return '';
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function mtgExpandAll() {
+    document.querySelectorAll('.mtg-card-body').forEach(function(el) { el.classList.add('open'); });
+    document.querySelectorAll('.mtg-card-toggle').forEach(function(el) { el.classList.add('open'); });
+}
+
+function mtgCollapseAll() {
+    document.querySelectorAll('.mtg-card-body').forEach(function(el) { el.classList.remove('open'); });
+    document.querySelectorAll('.mtg-card-toggle').forEach(function(el) { el.classList.remove('open'); });
+}
+
+function toggleMtgCard(meetingId) {
+    var body = document.getElementById('mtg-body-' + meetingId);
+    var toggle = document.getElementById('mtg-toggle-' + meetingId);
+    if (body) {
+        body.classList.toggle('open');
+        if (toggle) toggle.classList.toggle('open');
+    }
+}
+
+function toggleMtgResponse(respId, btn) {
+    var el = document.getElementById(respId);
+    if (!el) return;
+    el.classList.toggle('expanded');
+    if (el.classList.contains('expanded')) {
+        btn.textContent = '▲ collapse';
+    } else {
+        btn.textContent = '▼ expand';
+    }
+}
+
+function openEndMeetingForm(meetingId) {
+    document.getElementById('end-mtg-id').value = meetingId;
+    document.getElementById('end-mtg-summary').value = '';
+    document.getElementById('end-mtg-resolution').value = '';
+    document.getElementById('end-mtg-actions').value = '';
+    document.getElementById('end-mtg-error').style.display = 'none';
+
+    // Build per-agent response fields
+    var respSection = document.getElementById('end-mtg-responses-section');
+    respSection.innerHTML = '';
+    var meeting = _mtgData.active.find(function(m) { return m.id === meetingId; });
+    if (meeting) {
+        var participants = meeting.participants || meeting.agents || [];
+        if (participants.length) {
+            respSection.innerHTML = '<label class="mtg-label" style="margin-top:6px">Agent Responses <span style="color:#666;font-size:9px">(what each agent said)</span></label>';
+            participants.forEach(function(pKey) {
+                var info = _mtgAgentMap[pKey] || { emoji: '🤖', name: pKey };
+                var div = document.createElement('div');
+                div.style.cssText = 'margin-bottom:6px;';
+                div.innerHTML = '<div style="font-size:9px;color:#ccc;margin-bottom:2px;">' + info.emoji + ' ' + _escMtg(info.name) + '</div>' +
+                    '<textarea class="mtg-textarea end-mtg-resp" data-agent="' + _escMtg(pKey) + '" rows="2" placeholder="What did ' + _escMtg(info.name) + ' contribute?"></textarea>';
+                respSection.appendChild(div);
+            });
+        }
+    }
+
+    document.getElementById('endMeetingModal').classList.remove('hidden');
+}
+
+function closeEndMeetingModal() {
+    document.getElementById('endMeetingModal').classList.add('hidden');
+}
+
+async function submitEndMeeting() {
+    var meetId = document.getElementById('end-mtg-id').value;
+    var summary = document.getElementById('end-mtg-summary').value.trim();
+    var resolution = document.getElementById('end-mtg-resolution').value.trim();
+    var actionsRaw = document.getElementById('end-mtg-actions').value.trim();
+    var actionItems = actionsRaw ? actionsRaw.split('\n').map(function(l) { return l.trim(); }).filter(Boolean) : [];
+
+    // Collect per-agent responses
+    var responses = {};
+    document.querySelectorAll('.end-mtg-resp').forEach(function(el) {
+        var key = el.dataset.agent;
+        var val = el.value.trim();
+        if (key && val) responses[key] = val;
+    });
+
+    if (!summary) {
+        var errEl = document.getElementById('end-mtg-error');
+        errEl.textContent = 'Summary is required to end the meeting.';
+        errEl.style.display = 'block';
+        return;
+    }
+
+    try {
+        var res = await fetch('/api/meetings/end', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: meetId, summary: summary, resolution: resolution, actionItems: actionItems, responses: responses, endedBy: 'user' })
+        });
+        var data = await res.json();
+        if (data.ok) {
+            closeEndMeetingModal();
+            _mtgRefresh();
+        } else {
+            var errEl = document.getElementById('end-mtg-error');
+            errEl.textContent = data.error || 'Failed to end meeting';
+            errEl.style.display = 'block';
+        }
+    } catch (e) {
+        var errEl = document.getElementById('end-mtg-error');
+        errEl.textContent = 'Error: ' + e.message;
+        errEl.style.display = 'block';
+    }
+}
+
+async function deleteMeetingHistory(meetingId) {
+    if (!confirm('Delete this meeting from history?')) return;
+    try {
+        var res = await fetch('/api/meetings/history/' + meetingId, { method: 'DELETE' });
+        var data = await res.json();
+        if (data.ok) _mtgRefresh();
+        else alert(data.error || 'Failed to delete');
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+// --- Sidebar meetings widget ---
+function _updateSidebarMeetings() {
+    var container = document.getElementById('sidebar-mtg-active');
+    if (!container) return;
+    var active = _mtgData.active || [];
+    if (!active.length) {
+        container.innerHTML = '<div class="sidebar-mtg-none">No active meetings</div>';
+        return;
+    }
+    container.innerHTML = active.map(function(m) {
+        var participants = m.participants || m.agents || [];
+        var pNames = participants.map(function(k) {
+            var info = _mtgAgentMap[k];
+            return info ? info.emoji + ' ' + info.name : k;
+        }).join(', ');
+        return '<div class="sidebar-mtg-item" onclick="openMeetingsDashboard()">' +
+            '<div class="sidebar-mtg-item-title"><span class="sidebar-mtg-item-dot"></span>' + _escMtg(m.topic || 'Meeting') + '</div>' +
+            '<div class="sidebar-mtg-item-meta">' + pNames + '</div>' +
+            '</div>';
+    }).join('');
+}
+
+// Refresh sidebar meetings periodically
+setInterval(function() {
+    fetch('/api/meetings/active').then(function(r) { return r.json(); }).then(function(data) {
+        _mtgData.active = data.meetings || [];
+        // Also refresh agent map if empty
+        if (Object.keys(_mtgAgentMap).length === 0) {
+            fetch('/agents-list').then(function(r) { return r.json(); }).then(function(d) {
+                var list = d.agents || d || [];
+                if (Array.isArray(list)) {
+                    list.forEach(function(a) {
+                        _mtgAgentMap[a.key || a.agentId || a.id] = { name: a.name || a.key, emoji: a.emoji || '🤖', role: a.role || '' };
+                    });
+                }
+                _updateSidebarMeetings();
+            }).catch(function() { _updateSidebarMeetings(); });
+        } else {
+            _updateSidebarMeetings();
+        }
+    }).catch(function() {});
+}, 10000);
+
+// Initial load
+setTimeout(function() {
+    fetch('/api/meetings/active').then(function(r) { return r.json(); }).then(function(data) {
+        _mtgData.active = data.meetings || [];
+        fetch('/agents-list').then(function(r) { return r.json(); }).then(function(d) {
+            var list = d.agents || d || [];
+            if (Array.isArray(list)) {
+                list.forEach(function(a) {
+                    _mtgAgentMap[a.key || a.agentId || a.id] = { name: a.name || a.key, emoji: a.emoji || '🤖', role: a.role || '' };
+                });
+            }
+            _updateSidebarMeetings();
+        }).catch(function() { _updateSidebarMeetings(); });
+    }).catch(function() {});
+}, 2000);
+
+// --- Meeting table click handler ---
+// Override the existing furniture click to detect meetingTable clicks
+var _origHandleFurnitureClick = typeof handleFurnitureClick === 'function' ? handleFurnitureClick : null;
+function _meetingTableClickCheck(item) {
+    if (item && item.type === 'meetingTable' && !editMode) {
+        openMeetingsDashboard();
+        return true;
+    }
+    return false;
+}
+
+// Close meetings modal on Escape
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        if (!document.getElementById('endMeetingModal').classList.contains('hidden')) {
+            closeEndMeetingModal();
+        } else if (!document.getElementById('meetingsModal').classList.contains('hidden')) {
+            closeMeetingsModal();
+        }
+    }
+});
+
+// Close meetings modal on backdrop click
+document.getElementById('meetingsModal').addEventListener('click', function(e) {
+    if (e.target === this) closeMeetingsModal();
+});
+document.getElementById('endMeetingModal').addEventListener('click', function(e) {
+    if (e.target === this) closeEndMeetingModal();
+});
 
 loop();

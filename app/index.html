@@ -9,7 +9,7 @@
     <link rel="apple-touch-icon" href="icon-192.png">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a1a2e">
-    <link rel="stylesheet" href="style.css?v=1773998000">
+    <link rel="stylesheet" href="style.css?v=1774645004">
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -176,12 +176,17 @@
             }).catch(()=>{});
             </script>
 
+            <div class="sidebar-bulk-actions">
+                <button class="sidebar-bulk-btn" onclick="sidebarExpandAll()" title="Expand all widgets">▼ Expand All</button>
+                <button class="sidebar-bulk-btn" onclick="sidebarCollapseAll()" title="Collapse all widgets">▲ Collapse All</button>
+            </div>
+
             <div class="pc-monitor" id="pc-monitor">
                 <h4 class="pc-monitor-toggle" onclick="togglePcMonitor()">
-                    <span id="pc-toggle-arrow">▼</span> 🖥️ PC PERFORMANCE
+                    <span id="pc-toggle-arrow">▶</span> 🖥️ PC PERFORMANCE
                     <span id="pc-status-dot" class="pc-dot offline" title="Offline"></span>
                 </h4>
-                <div id="pc-monitor-body" class="pc-monitor-body" style="display:block">
+                <div id="pc-monitor-body" class="pc-monitor-body" style="display:none">
                     <div class="pc-metric-row">
                         <div class="pc-metric">
                             <div class="pc-metric-header">
@@ -210,21 +215,29 @@
 
             <div class="api-usage-monitor" id="api-usage-monitor">
                 <h4 class="api-usage-toggle" onclick="toggleApiUsage()">
-                    <span id="api-toggle-arrow">▼</span> ☁️ API USAGE
+                    <span id="api-toggle-arrow">▶</span> ☁️ API USAGE
                     <span id="api-status-dot" class="pc-dot offline" title="Loading..."></span>
                 </h4>
-                <div id="api-usage-body" class="api-usage-body" style="display:block">
+                <div id="api-usage-body" class="api-usage-body" style="display:none">
                     <div id="api-usage-cards"></div>
                 </div>
             </div>
 
             <div class="branch-manager-panel collapsible">
-                <h4 onclick="toggleSection(this)"><span class="section-arrow">▼</span> 🏢 BRANCHES</h4>
-                <div class="section-body" style="display:block">
+                <h4 onclick="toggleSection(this)"><span class="section-arrow">▶</span> 🏢 BRANCHES</h4>
+                <div class="section-body" style="display:none">
                     <div class="branch-manager-actions">
                         <button onclick="branchCreatePrompt()">➕ Add Branch</button>
                     </div>
                     <div id="branch-sections-container"></div>
+                </div>
+            </div>
+
+            <div class="meetings-sidebar collapsible">
+                <h4 onclick="toggleSection(this)"><span class="section-arrow">▶</span> 📊 MEETINGS</h4>
+                <div class="section-body" style="display:none">
+                    <div id="sidebar-mtg-active" class="sidebar-mtg-list"></div>
+                    <button class="sidebar-mtg-btn" onclick="openMeetingsDashboard()">📊 Open Meetings</button>
                 </div>
             </div>
 
@@ -236,8 +249,8 @@
             </div>
 
             <div class="activity-feed collapsible">
-                <h4 onclick="toggleSection(this)"><span class="section-arrow">▼</span> > ACTIVITY LOG</h4>
-                <div class="section-body">
+                <h4 onclick="toggleSection(this)"><span class="section-arrow">▶</span> > ACTIVITY LOG</h4>
+                <div class="section-body" style="display:none">
                     <ul id="log-list">
                         <li>System initialized...</li>
                     </ul>
@@ -339,6 +352,31 @@
                     <span style="color:#666;font-size:10px;">Daily notes are read-only</span>
                 </div>
             </div>
+            <div class="modal-section full-width bio-section">
+                <h3 class="bio-toggle" onclick="toggleBio('skills')">▶ 🧩 SKILLS</h3>
+                <div id="modal-bio-skills" class="bio-content" style="display:none">
+                    <div id="skills-list"></div>
+                    <div class="bio-btn-row">
+                        <button class="bio-edit-btn" onclick="showAddSkillForm()">➕ Add Skill</button>
+                    </div>
+                    <div id="skill-add-form" style="display:none;">
+                        <input id="skill-new-name" type="text" placeholder="Skill name" class="skill-form-input">
+                        <textarea id="skill-new-content" placeholder="Paste SKILL.md content here..." class="skill-form-textarea"></textarea>
+                        <div class="bio-btn-row">
+                            <button class="bio-save-btn" style="display:inline-flex" onclick="saveNewSkill()">💾 Save Skill</button>
+                            <button class="bio-edit-btn" onclick="hideAddSkillForm()">Cancel</button>
+                        </div>
+                    </div>
+                    <div id="skill-edit-form" style="display:none;">
+                        <h4 id="skill-edit-title" style="color:#ffd700;font-size:12px;margin:0 0 4px 0;"></h4>
+                        <textarea id="skill-edit-content" class="skill-form-textarea" style="min-height:180px;"></textarea>
+                        <div class="bio-btn-row">
+                            <button class="bio-save-btn" style="display:inline-flex" onclick="saveEditedSkill()">💾 Save</button>
+                            <button class="bio-edit-btn" onclick="hideEditSkillForm()">Cancel</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
                 <div class="modal-section full-width">
                     <h3>INTENT HISTORY</h3>
                     <div id="modal-plan" class="scroll-box"></div>
@@ -357,6 +395,49 @@
                 <button id="btn-trigger-thought">💭 Think</button>
                 <button id="btn-trigger-speech">💬 Say</button>
                 <button id="btn-clear-bubbles">🧹 Clear</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Meetings Dashboard Modal -->
+    <div id="meetingsModal" class="modal hidden">
+        <div class="modal-content meetings-modal-content">
+            <div class="modal-header">
+                <span class="modal-emoji">📊</span>
+                <h2>Meetings</h2>
+                <span class="close-btn" onclick="closeMeetingsModal()">&times;</span>
+            </div>
+            <div class="mtg-tabs">
+                <button class="mtg-tab active" data-tab="active" onclick="switchMtgTab('active')">Active</button>
+                <button class="mtg-tab" data-tab="completed" onclick="switchMtgTab('completed')">History</button>
+            </div>
+            <div class="mtg-bulk-actions">
+                <button class="mtg-btn" onclick="mtgExpandAll()">▼ Expand All</button>
+                <button class="mtg-btn" onclick="mtgCollapseAll()">▲ Collapse All</button>
+            </div>
+            <div id="mtg-cards" class="mtg-cards"></div>
+        </div>
+    </div>
+
+    <!-- End Meeting Sub-Modal -->
+    <div id="endMeetingModal" class="modal hidden">
+        <div class="modal-content" style="max-width:480px;">
+            <div class="modal-header">
+                <span class="modal-emoji">✅</span>
+                <h2>End Meeting</h2>
+                <span class="close-btn" onclick="closeEndMeetingModal()">&times;</span>
+            </div>
+            <input type="hidden" id="end-mtg-id">
+            <div class="mtg-form">
+                <label class="mtg-label">Summary <span style="color:#e74c3c">*</span></label>
+                <textarea id="end-mtg-summary" class="mtg-textarea" rows="3" placeholder="What happened in this meeting?"></textarea>
+                <label class="mtg-label">Resolution</label>
+                <textarea id="end-mtg-resolution" class="mtg-textarea" rows="2" placeholder="Outcome / decisions made (optional)"></textarea>
+                <label class="mtg-label">Action Items <span style="color:#666;font-size:9px">(one per line)</span></label>
+                <textarea id="end-mtg-actions" class="mtg-textarea" rows="3" placeholder="e.g. Cody: implement auth module&#10;Usy: update login UI"></textarea>
+                <div id="end-mtg-responses-section"></div>
+                <div id="end-mtg-error" style="color:#e74c3c;font-size:10px;margin:6px 0;display:none;"></div>
+                <button class="mtg-btn mtg-btn-end" onclick="submitEndMeeting()">End Meeting</button>
             </div>
         </div>
     </div>
@@ -465,6 +546,36 @@
         body.style.display = isHidden ? '' : 'none';
         arrow.textContent = isHidden ? '▼' : '▶';
     }
+    function sidebarExpandAll() {
+        // Collapsible sections (branches, activity log, meetings)
+        document.querySelectorAll('.sidebar .section-body, .sidebar .sidebar-mtg-list').forEach(function(el) { el.style.display = ''; });
+        document.querySelectorAll('.sidebar .section-arrow').forEach(function(el) { el.textContent = '▼'; });
+        // PC monitor
+        var pcBody = document.getElementById('pc-monitor-body');
+        if (pcBody) pcBody.style.display = 'block';
+        var pcArrow = document.getElementById('pc-toggle-arrow');
+        if (pcArrow) pcArrow.textContent = '▼';
+        // API usage
+        var apiBody = document.getElementById('api-usage-body');
+        if (apiBody) apiBody.style.display = 'block';
+        var apiArrow = document.getElementById('api-toggle-arrow');
+        if (apiArrow) apiArrow.textContent = '▼';
+    }
+    function sidebarCollapseAll() {
+        // Collapsible sections
+        document.querySelectorAll('.sidebar .section-body').forEach(function(el) { el.style.display = 'none'; });
+        document.querySelectorAll('.sidebar .section-arrow').forEach(function(el) { el.textContent = '▶'; });
+        // PC monitor
+        var pcBody = document.getElementById('pc-monitor-body');
+        if (pcBody) pcBody.style.display = 'none';
+        var pcArrow = document.getElementById('pc-toggle-arrow');
+        if (pcArrow) pcArrow.textContent = '▶';
+        // API usage
+        var apiBody = document.getElementById('api-usage-body');
+        if (apiBody) apiBody.style.display = 'none';
+        var apiArrow = document.getElementById('api-toggle-arrow');
+        if (apiArrow) apiArrow.textContent = '▶';
+    }
     function toggleSidebar() {
         const sidebar = document.getElementById('sidebar');
         const arrow = document.getElementById('sidebar-edge-arrow');
@@ -474,7 +585,7 @@
         setTimeout(resizeCanvas, 320);
     }
     </script>
-    <script src="game.js?v=1774674000"></script>
+    <script src="game.js?v=1774645004"></script>
     <script src="browser-panel.js?v=1773812451"></script>
     <script>
     // Bio sections for agent modal
