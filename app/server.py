@@ -511,6 +511,165 @@ def _handle_skill_write(agent_key, skill_name, body):
     return {"ok": True, "skill": safe_name, "path": skill_file}
 
 
+# ─── SKILLS LIBRARY HANDLERS ─────────────────────────────────────
+
+def _get_skills_library_dir():
+    """Return path to skills-library/ under STATUS_DIR, create if needed."""
+    d = os.path.join(STATUS_DIR, "skills-library")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _parse_skill_frontmatter(content):
+    """Parse YAML-like frontmatter from SKILL.md content."""
+    name = ""
+    description = ""
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            for line in parts[1].strip().splitlines():
+                line = line.strip()
+                if line.startswith("name:"):
+                    name = line[5:].strip().strip("'\"")
+                elif line.startswith("description:"):
+                    description = line[12:].strip().strip("'\"")
+    return name, description
+
+
+def _handle_skills_library_list():
+    """GET /api/skills-library — list all library skills."""
+    lib_dir = _get_skills_library_dir()
+    skills = []
+    for entry in sorted(os.listdir(lib_dir)):
+        skill_dir = os.path.join(lib_dir, entry)
+        if not os.path.isdir(skill_dir):
+            continue
+        skill_md = os.path.join(skill_dir, "SKILL.md")
+        if not os.path.isfile(skill_md):
+            continue
+        try:
+            with open(skill_md, "r") as f:
+                content = f.read()
+        except Exception:
+            content = ""
+        name, description = _parse_skill_frontmatter(content)
+        if not name:
+            name = entry
+        if not description:
+            description = _extract_skill_description(skill_md)
+        skills.append({"name": entry, "description": description, "path": skill_md})
+    return {"skills": skills}
+
+
+def _handle_skills_library_get(skill_name):
+    """GET /api/skills-library/<name> — read a specific library skill."""
+    lib_dir = _get_skills_library_dir()
+    skill_md = os.path.join(lib_dir, skill_name, "SKILL.md")
+    if not os.path.isfile(skill_md):
+        return {"error": f"Skill '{skill_name}' not found in library", "_status": 404}
+    try:
+        with open(skill_md, "r") as f:
+            content = f.read()
+    except Exception as e:
+        return {"error": str(e), "_status": 500}
+    name, description = _parse_skill_frontmatter(content)
+    if not name:
+        name = skill_name
+    return {"name": name, "description": description, "content": content}
+
+
+def _handle_skills_library_create(body):
+    """POST /api/skills-library — create or update a library skill."""
+    import re
+    name = body.get("name", "").strip()
+    content = body.get("content", "")
+    if not name:
+        return {"error": "name is required", "_status": 400}
+    slug = re.sub(r'[^a-zA-Z0-9_-]', '-', name).strip('-').lower()
+    if not slug:
+        return {"error": "Invalid skill name", "_status": 400}
+    lib_dir = _get_skills_library_dir()
+    skill_dir = os.path.join(lib_dir, slug)
+    os.makedirs(skill_dir, exist_ok=True)
+    skill_file = os.path.join(skill_dir, "SKILL.md")
+    if not content:
+        content = f"---\nname: {slug}\ndescription: \n---\n\n# {name}\n\n_Describe this skill here._\n"
+    with open(skill_file, "w") as f:
+        f.write(content)
+    parsed_name, description = _parse_skill_frontmatter(content)
+    return {"ok": True, "skill": slug, "name": parsed_name or slug, "description": description, "path": skill_file}
+
+
+def _handle_skills_library_delete(skill_name):
+    """DELETE /api/skills-library/<name> — delete a library skill."""
+    import shutil
+    lib_dir = _get_skills_library_dir()
+    skill_dir = os.path.join(lib_dir, skill_name)
+    if not os.path.isdir(skill_dir):
+        return {"error": f"Skill '{skill_name}' not found in library", "_status": 404}
+    shutil.rmtree(skill_dir)
+    return {"ok": True, "deleted": skill_name}
+
+
+def _handle_skills_library_apply(body):
+    """POST /api/skills-library/apply — copy library skill to agent workspace."""
+    skill_name = body.get("skill", "").strip()
+    agent_id = body.get("agentId", "").strip()
+    overwrite = body.get("overwrite", False)
+    if not skill_name:
+        return {"error": "skill name is required", "_status": 400}
+    if not agent_id:
+        return {"error": "agentId is required", "_status": 400}
+    # Check library skill exists
+    lib_dir = _get_skills_library_dir()
+    src_file = os.path.join(lib_dir, skill_name, "SKILL.md")
+    if not os.path.isfile(src_file):
+        return {"error": f"Skill '{skill_name}' not found in library", "_status": 404}
+    # Find agent workspace
+    refresh_agent_maps()
+    ws_dir = AGENT_WORKSPACES.get(agent_id)
+    if not ws_dir:
+        return {"error": f"Agent '{agent_id}' not found", "_status": 404}
+    ws_path = os.path.join(WORKSPACE_BASE, ws_dir)
+    dest_dir = os.path.join(ws_path, "skills", skill_name)
+    dest_file = os.path.join(dest_dir, "SKILL.md")
+    if os.path.isfile(dest_file) and not overwrite:
+        return {"ok": False, "warning": f"Agent '{agent_id}' already has skill '{skill_name}'. Set overwrite=true to replace.", "exists": True}
+    os.makedirs(dest_dir, exist_ok=True)
+    import shutil
+    shutil.copy2(src_file, dest_file)
+    return {"ok": True, "skill": skill_name, "agentId": agent_id, "path": dest_file, "overwritten": os.path.isfile(dest_file) and overwrite}
+
+
+def _handle_skills_library_upload(body):
+    """POST /api/skills-library/upload — upload a SKILL.md to library."""
+    import base64
+    import re
+    filename = body.get("filename", "").strip()
+    content_b64 = body.get("content", "")
+    if not content_b64:
+        return {"error": "content is required (base64)", "_status": 400}
+    try:
+        content = base64.b64decode(content_b64).decode("utf-8")
+    except Exception:
+        content = content_b64  # allow plain text too
+    # Extract name from frontmatter or filename
+    name, description = _parse_skill_frontmatter(content)
+    if not name and filename:
+        name = filename.replace(".md", "").replace("SKILL", "").strip("-_ ")
+    if not name:
+        name = "uploaded-skill"
+    slug = re.sub(r'[^a-zA-Z0-9_-]', '-', name).strip('-').lower()
+    if not slug:
+        slug = "uploaded-skill"
+    lib_dir = _get_skills_library_dir()
+    skill_dir = os.path.join(lib_dir, slug)
+    os.makedirs(skill_dir, exist_ok=True)
+    with open(os.path.join(skill_dir, "SKILL.md"), "w") as f:
+        f.write(content)
+    return {"ok": True, "skill": slug, "name": name, "description": description}
+
+
 def _handle_skill_delete(agent_key, skill_name):
     """Delete a skill from an agent."""
     refresh_agent_maps()
@@ -1793,6 +1952,22 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(502)
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode())
+        elif self.path == "/api/skills-library":
+            result = _handle_skills_library_list()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/skills-library/") and self.path != "/api/skills-library/apply" and self.path != "/api/skills-library/upload":
+            skill_name = self.path.split("/api/skills-library/")[1].strip("/")
+            result = _handle_skills_library_get(skill_name)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
         else:
             super().do_GET()
 
@@ -2544,6 +2719,15 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/skills-library/"):
+            skill_name = self.path.split("/api/skills-library/")[1].strip("/")
+            result = _handle_skills_library_delete(skill_name)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -2912,6 +3096,36 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps({"path": dest, "size": len(content)}).encode())
             print(f"📎 Upload: {dest} ({len(content):,} bytes)")
 
+        elif self.path == "/api/skills-library":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_skills_library_create(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path == "/api/skills-library/apply":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_skills_library_apply(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path == "/api/skills-library/upload":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_skills_library_upload(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
         else:
             self.send_response(404)
             self.end_headers()

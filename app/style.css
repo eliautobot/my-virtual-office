@@ -1369,11 +1369,13 @@ button:active { transform: translateY(3px); box-shadow: none; }
     align-items: center;
     margin-top: 4px;
     max-width: 100%;
-    overflow: hidden;
+    overflow: visible;
+    flex-wrap: wrap;
 }
 .model-settings-row select {
     flex: 1;
     min-width: 0;
+    max-width: calc(100% - 60px);
     padding: 5px 6px;
     font-family: 'Press Start 2P', monospace;
     font-size: 6px;
@@ -1383,10 +1385,11 @@ button:active { transform: translateY(3px); box-shadow: none; }
     border-radius: 3px;
     appearance: auto;
     text-overflow: ellipsis;
+    box-sizing: border-box;
 }
 .model-settings-row button {
     flex-shrink: 0;
-    padding: 5px 8px;
+    padding: 5px 6px;
     font-family: 'Press Start 2P', monospace;
     font-size: 6px;
     background: #e6a800;
@@ -2494,6 +2497,7 @@ button:active { transform: translateY(3px); box-shadow: none; }
 
 /* Sidebar meetings widget */
 .meetings-sidebar h4 { cursor: pointer; font-size: 10px; color: var(--gold); padding: 8px 12px; margin: 0; }
+.skills-library-sidebar h4 { cursor: pointer; font-size: 10px; color: var(--gold); padding: 8px 12px; margin: 0; }
 .sidebar-mtg-list { padding: 0 8px; }
 .sidebar-mtg-item { background: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer; transition: border-color 0.2s; }
 .sidebar-mtg-item:hover { border-color: var(--gold); }
@@ -2503,3 +2507,25 @@ button:active { transform: translateY(3px); box-shadow: none; }
 .sidebar-mtg-none { font-size: 9px; color: #555; padding: 4px 8px; }
 .sidebar-mtg-btn { display: block; width: calc(100% - 16px); margin: 6px 8px; padding: 6px; font-size: 9px; background: #12121e; border: 1px solid #2a2a4e; color: var(--gold); border-radius: 4px; cursor: pointer; text-align: center; }
 .sidebar-mtg-btn:hover { background: #1a1a2e; border-color: var(--gold); }
+
+/* === Skills Library === */
+.skills-library-modal { max-width: 520px; width: calc(100vw - 20px); min-height: 200px; max-height: 90vh; max-height: 90dvh; overflow-y: auto; }
+.skl-topbar { display: flex; gap: 6px; align-items: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--ui-border); }
+.skl-topbar button, .skl-upload-label { font-size: 10px; padding: 4px 10px; }
+.skl-upload-label { cursor: pointer; }
+.skl-cards { display: flex; flex-direction: column; gap: 6px; padding-bottom: 12px; }
+.skl-card { background: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 6px; padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.skl-card-top { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+.skl-card-name { font-size: 11px; font-weight: bold; color: #eee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.skl-card-desc { display: none; }
+.skl-card-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.skl-card-actions button { font-size: 9px; padding: 3px 7px; background: #12121e; border: 1px solid #2a2a4e; color: #ccc; border-radius: 4px; cursor: pointer; }
+.skl-card-actions button:hover { background: #1e1e36; border-color: var(--gold); color: var(--gold); }
+.skl-apply-dropdown { margin-top: 6px; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; width: 100%; }
+.skl-apply-dropdown select { background: #12121e; border: 1px solid #2a2a4e; color: #ccc; border-radius: 4px; padding: 4px 8px; font-size: 10px; flex: 1; min-width: 0; }
+.skl-apply-dropdown button { font-size: 9px; padding: 4px 10px; background: #1b5e20; border: 1px solid #66bb6a; color: #66bb6a; border-radius: 4px; cursor: pointer; }
+.skl-editor-body { display: flex; flex-direction: column; gap: 10px; padding: 4px 0; }
+.skl-field-label { font-size: 10px; color: #888; }
+.skl-input { background: #12121e; border: 1px solid #2a2a4e; color: #eee; border-radius: 6px; padding: 8px 10px; font-size: 11px; width: 100%; box-sizing: border-box; }
+.skl-textarea { background: #12121e; border: 1px solid #2a2a4e; color: #eee; border-radius: 6px; padding: 10px; font-size: 11px; font-family: 'Courier New', monospace; min-height: 320px; resize: vertical; white-space: pre; width: 100%; box-sizing: border-box; }
+.skl-editor-actions { display: flex; gap: 8px; }

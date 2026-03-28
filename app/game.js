@@ -13396,7 +13396,7 @@ function loadAgentSkills(agentKey) {
                 row.className = 'skill-row';
                 var info = document.createElement('div');
                 info.className = 'skill-row-info';
-                info.innerHTML = '<span style="color:#ffd700;">🧩 ' + escHtml(skill.name) + '</span>' +
+                info.innerHTML = '<span style="font-weight:bold;">' + escHtml(skill.name) + '</span>' +
                     (skill.description ? '<br><span style="color:#888;font-size:10px;">' + escHtml(skill.description).substring(0, 80) + '</span>' : '');
                 var btns = document.createElement('div');
                 btns.className = 'skill-row-btns';
@@ -13430,6 +13430,72 @@ function showAddSkillForm() {
 
 function hideAddSkillForm() {
     document.getElementById('skill-add-form').style.display = 'none';
+}
+
+async function showLibraryPicker() {
+    var picker = document.getElementById('skill-library-picker');
+    var select = document.getElementById('skill-library-select');
+    document.getElementById('skill-add-form').style.display = 'none';
+    document.getElementById('skill-edit-form').style.display = 'none';
+    picker.style.display = 'block';
+    select.innerHTML = '<option value="">Loading...</option>';
+    try {
+        var res = await fetch('/api/skills-library');
+        var data = await res.json();
+        var skills = Array.isArray(data) ? data : (data.skills || []);
+        if (skills.length === 0) {
+            select.innerHTML = '<option value="">No skills in library</option>';
+            return;
+        }
+        skills.sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); });
+        select.innerHTML = skills.map(function(s) {
+            return '<option value="' + escHtml(s.name) + '">' + escHtml(s.name) + (s.description ? ' — ' + escHtml(s.description).substring(0, 50) : '') + '</option>';
+        }).join('');
+    } catch (e) {
+        select.innerHTML = '<option value="">Failed to load library</option>';
+    }
+}
+
+function hideLibraryPicker() {
+    document.getElementById('skill-library-picker').style.display = 'none';
+}
+
+async function applyLibrarySkill() {
+    if (!_currentSkillAgent) return;
+    var select = document.getElementById('skill-library-select');
+    var skillName = select.value;
+    if (!skillName) return;
+    try {
+        var res = await fetch('/api/skills-library/apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ skill: skillName, agentId: _currentSkillAgent, overwrite: false })
+        });
+        var data = await res.json();
+        if (data.ok) {
+            if (typeof _acpShowToast === 'function') _acpShowToast('✅ Applied "' + skillName + '" to agent');
+            hideLibraryPicker();
+            loadAgentSkills(_currentSkillAgent);
+        } else if (data.exists) {
+            if (confirm('"' + skillName + '" already exists on this agent. Overwrite?')) {
+                var res2 = await fetch('/api/skills-library/apply', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ skill: skillName, agentId: _currentSkillAgent, overwrite: true })
+                });
+                var data2 = await res2.json();
+                if (data2.ok) {
+                    if (typeof _acpShowToast === 'function') _acpShowToast('✅ Overwrote "' + skillName + '" on agent');
+                    hideLibraryPicker();
+                    loadAgentSkills(_currentSkillAgent);
+                }
+            }
+        } else {
+            if (typeof _acpShowToast === 'function') _acpShowToast('❌ ' + (data.error || 'Failed to apply'));
+        }
+    } catch (e) {
+        if (typeof _acpShowToast === 'function') _acpShowToast('❌ Error: ' + e.message);
+    }
 }
 
 function saveNewSkill() {
@@ -13891,6 +13957,257 @@ document.getElementById('meetingsModal').addEventListener('click', function(e) {
 });
 document.getElementById('endMeetingModal').addEventListener('click', function(e) {
     if (e.target === this) closeEndMeetingModal();
+});
+
+// ============================================================
+// SKILLS LIBRARY
+// ============================================================
+
+var _sklSkills = [];
+var _sklEditingName = null; // null = new, string = editing existing
+
+function openSkillsLibrary() {
+    document.getElementById('skillsLibraryModal').classList.remove('hidden');
+    refreshSkillsList();
+}
+
+function closeSkillsLibrary() {
+    document.getElementById('skillsLibraryModal').classList.add('hidden');
+}
+
+async function refreshSkillsList() {
+    try {
+        var res = await fetch('/api/skills-library');
+        var data = await res.json();
+        _sklSkills = Array.isArray(data) ? data : (data.skills || []);
+    } catch (e) {
+        _sklSkills = [];
+    }
+    renderSkillCards();
+}
+
+function renderSkillCards() {
+    var container = document.getElementById('skl-cards');
+    if (!container) return;
+
+    if (!_sklSkills.length) {
+        container.innerHTML = '<div style="color:#666;font-size:11px;padding:20px;text-align:center;">No skills in library. Click ➕ Add Skill to create one.</div>';
+        return;
+    }
+
+    var sorted = _sklSkills.slice().sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); });
+
+    container.innerHTML = sorted.map(function(skill) {
+        var safeName = _sklEsc(skill.name);
+        return '<div class="skl-card" id="skl-card-' + safeName + '">' +
+            '<div class="skl-card-top">' +
+                '<div class="skl-card-name">' + safeName + '</div>' +
+                '<div class="skl-card-actions">' +
+                    '<button onclick="toggleSkillApply(\'' + safeName + '\')" title="Apply to agent">📋</button>' +
+                    '<button onclick="openSkillEditor(\'' + safeName + '\')" title="Edit">✏️</button>' +
+                    '<button onclick="deleteSkill(\'' + safeName + '\')" title="Delete">🗑️</button>' +
+                '</div>' +
+            '</div>' +
+            '<div class="skl-apply-dropdown" id="skl-apply-' + safeName + '" style="display:none"></div>' +
+        '</div>';
+    }).join('');
+}
+
+function _sklEsc(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+}
+
+async function toggleSkillApply(skillName) {
+    var dropdown = document.getElementById('skl-apply-' + skillName);
+    if (!dropdown) return;
+
+    if (dropdown.style.display !== 'none') {
+        dropdown.style.display = 'none';
+        return;
+    }
+
+    // Fetch agent list
+    try {
+        var res = await fetch('/agents-list');
+        var data = await res.json();
+        var agentList = Array.isArray(data) ? data : (data.agents || []);
+
+        var options = agentList.map(function(a) {
+            var id = a.id || a.agentId || a.name;
+            var name = a.name || id;
+            return '<option value="' + _sklEsc(id) + '">' + _sklEsc(name) + '</option>';
+        }).join('');
+
+        dropdown.innerHTML =
+            '<select id="skl-agent-select-' + skillName + '">' + options + '</select>' +
+            '<button onclick="applySkillToAgent(\'' + _sklEsc(skillName) + '\')">Apply</button>';
+        dropdown.style.display = 'flex';
+    } catch (e) {
+        _acpShowToast('❌ Failed to load agent list');
+    }
+}
+
+async function applySkillToAgent(skillName) {
+    var select = document.getElementById('skl-agent-select-' + skillName);
+    if (!select) return;
+    var agentId = select.value;
+    if (!agentId) return;
+
+    try {
+        var res = await fetch('/api/skills-library/apply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ skill: skillName, agentId: agentId })
+        });
+        var data = await res.json();
+        if (res.ok) {
+            if (data.warning) {
+                _acpShowToast('⚠️ ' + data.warning);
+            } else {
+                _acpShowToast('✅ Applied ' + skillName + ' to ' + agentId);
+            }
+        } else {
+            _acpShowToast('❌ ' + (data.error || 'Apply failed'));
+        }
+    } catch (e) {
+        _acpShowToast('❌ Apply failed: ' + e.message);
+    }
+
+    // Hide dropdown after apply
+    var dropdown = document.getElementById('skl-apply-' + skillName);
+    if (dropdown) dropdown.style.display = 'none';
+}
+
+async function openSkillEditor(skillName) {
+    _sklEditingName = skillName;
+    var titleEl = document.getElementById('skl-editor-title');
+    var nameInput = document.getElementById('skl-editor-name');
+    var contentArea = document.getElementById('skl-editor-content');
+
+    if (skillName) {
+        // Edit existing: fetch content
+        titleEl.textContent = 'Edit Skill';
+        nameInput.value = skillName;
+        nameInput.disabled = true;
+        try {
+            var res = await fetch('/api/skills-library/' + encodeURIComponent(skillName));
+            var data = await res.json();
+            contentArea.value = data.content || '';
+        } catch (e) {
+            contentArea.value = '';
+            _acpShowToast('❌ Failed to load skill');
+        }
+    } else {
+        // New skill
+        titleEl.textContent = 'Add Skill';
+        nameInput.value = '';
+        nameInput.disabled = false;
+        contentArea.value = '---\nname: \ndescription: \n---\n\n# Skill Title\n\nInstructions here...\n';
+    }
+
+    document.getElementById('skillEditorModal').classList.remove('hidden');
+}
+
+function closeSkillEditor() {
+    document.getElementById('skillEditorModal').classList.add('hidden');
+    _sklEditingName = null;
+}
+
+async function saveSkill() {
+    var nameInput = document.getElementById('skl-editor-name');
+    var contentArea = document.getElementById('skl-editor-content');
+    var name = (nameInput.value || '').trim();
+    var content = contentArea.value || '';
+
+    if (!name) {
+        _acpShowToast('❌ Skill name is required');
+        return;
+    }
+
+    try {
+        var res = await fetch('/api/skills-library', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, content: content })
+        });
+        var data = await res.json();
+        if (res.ok) {
+            _acpShowToast('✅ Skill "' + name + '" saved');
+            closeSkillEditor();
+            refreshSkillsList();
+        } else {
+            _acpShowToast('❌ ' + (data.error || 'Save failed'));
+        }
+    } catch (e) {
+        _acpShowToast('❌ Save failed: ' + e.message);
+    }
+}
+
+async function deleteSkill(skillName) {
+    if (!confirm('Delete skill "' + skillName + '" from the library?\n\nThis removes the master copy. Agent copies are not affected.')) return;
+
+    try {
+        var res = await fetch('/api/skills-library/' + encodeURIComponent(skillName), { method: 'DELETE' });
+        if (res.ok) {
+            _acpShowToast('🗑️ Skill "' + skillName + '" deleted');
+            refreshSkillsList();
+        } else {
+            var data = await res.json().catch(function() { return {}; });
+            _acpShowToast('❌ ' + (data.error || 'Delete failed'));
+        }
+    } catch (e) {
+        _acpShowToast('❌ Delete failed: ' + e.message);
+    }
+}
+
+async function handleSkillUpload(input) {
+    if (!input.files || !input.files.length) return;
+    var file = input.files[0];
+    var name = file.name.replace(/\.md$/i, '').replace(/[^a-zA-Z0-9_-]/g, '-');
+
+    try {
+        var text = await file.text();
+        var res = await fetch('/api/skills-library', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, content: text })
+        });
+        if (res.ok) {
+            _acpShowToast('✅ Uploaded "' + name + '"');
+            refreshSkillsList();
+        } else {
+            var data = await res.json().catch(function() { return {}; });
+            _acpShowToast('❌ ' + (data.error || 'Upload failed'));
+        }
+    } catch (e) {
+        _acpShowToast('❌ Upload failed: ' + e.message);
+    }
+
+    // Reset input so same file can be re-uploaded
+    input.value = '';
+}
+
+// Close skills modals on backdrop click
+document.getElementById('skillsLibraryModal').addEventListener('click', function(e) {
+    if (e.target === this) closeSkillsLibrary();
+});
+document.getElementById('skillEditorModal').addEventListener('click', function(e) {
+    if (e.target === this) closeSkillEditor();
+});
+
+// Close skills modals on Escape (extend existing keydown)
+var _origKeydownHandler = document.onkeydown;
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        if (!document.getElementById('skillEditorModal').classList.contains('hidden')) {
+            closeSkillEditor();
+            e.stopPropagation();
+        } else if (!document.getElementById('skillsLibraryModal').classList.contains('hidden')) {
+            closeSkillsLibrary();
+            e.stopPropagation();
+        }
+    }
 });
 
 loop();

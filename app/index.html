@@ -9,7 +9,7 @@
     <link rel="apple-touch-icon" href="icon-192.png">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a1a2e">
-    <link rel="stylesheet" href="style.css?v=1774645004">
+    <link rel="stylesheet" href="style.css?v=1774736671">
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -241,6 +241,13 @@
                 </div>
             </div>
 
+            <div class="skills-library-sidebar collapsible">
+                <h4 onclick="toggleSection(this)"><span class="section-arrow">▶</span> 📚 SKILLS LIBRARY</h4>
+                <div class="section-body" style="display:none">
+                    <button class="sidebar-mtg-btn" onclick="openSkillsLibrary()">📚 Open Skills Library</button>
+                </div>
+            </div>
+
             <div class="status-panel">
                 <p>🔴 Working: <span id="count-working">0</span></p>
                 <p>🟢 Idle: <span id="count-idle">0</span></p>
@@ -353,11 +360,19 @@
                 </div>
             </div>
             <div class="modal-section full-width bio-section">
-                <h3 class="bio-toggle" onclick="toggleBio('skills')">▶ 🧩 SKILLS</h3>
+                <h3 class="bio-toggle" onclick="toggleBio('skills')">▶ SKILLS</h3>
                 <div id="modal-bio-skills" class="bio-content" style="display:none">
                     <div id="skills-list"></div>
                     <div class="bio-btn-row">
                         <button class="bio-edit-btn" onclick="showAddSkillForm()">➕ Add Skill</button>
+                        <button class="bio-edit-btn" onclick="showLibraryPicker()">📚 Add from Library</button>
+                    </div>
+                    <div id="skill-library-picker" style="display:none;">
+                        <select id="skill-library-select" class="skill-form-input" style="margin-bottom:4px;"></select>
+                        <div class="bio-btn-row">
+                            <button class="bio-save-btn" style="display:inline-flex" onclick="applyLibrarySkill()">📋 Apply</button>
+                            <button class="bio-edit-btn" onclick="hideLibraryPicker()">Cancel</button>
+                        </div>
                     </div>
                     <div id="skill-add-form" style="display:none;">
                         <input id="skill-new-name" type="text" placeholder="Skill name" class="skill-form-input">
@@ -416,6 +431,45 @@
                 <button class="mtg-btn" onclick="mtgCollapseAll()">▲ Collapse All</button>
             </div>
             <div id="mtg-cards" class="mtg-cards"></div>
+        </div>
+    </div>
+
+    <!-- Skills Library Modal -->
+    <div id="skillsLibraryModal" class="modal hidden">
+        <div class="modal-content skills-library-modal">
+            <div class="modal-header">
+                <span class="modal-emoji">📚</span>
+                <h2>Skills Library</h2>
+                <span class="close-btn" onclick="closeSkillsLibrary()">&times;</span>
+            </div>
+            <div class="skl-topbar">
+                <button class="mtg-btn" onclick="openSkillEditor(null)">➕ Add Skill</button>
+                <label class="mtg-btn skl-upload-label">📎 Upload
+                    <input type="file" accept=".md" id="skl-upload-input" style="display:none" onchange="handleSkillUpload(this)">
+                </label>
+            </div>
+            <div id="skl-cards" class="skl-cards"></div>
+        </div>
+    </div>
+
+    <!-- Skill Editor Sub-Modal -->
+    <div id="skillEditorModal" class="modal hidden">
+        <div class="modal-content" style="max-width:640px;">
+            <div class="modal-header">
+                <span class="modal-emoji">✏️</span>
+                <h2 id="skl-editor-title">Add Skill</h2>
+                <span class="close-btn" onclick="closeSkillEditor()">&times;</span>
+            </div>
+            <div class="skl-editor-body">
+                <label class="skl-field-label">Skill Name</label>
+                <input type="text" id="skl-editor-name" class="skl-input" placeholder="my-skill-name">
+                <label class="skl-field-label">SKILL.md Content</label>
+                <textarea id="skl-editor-content" class="skl-textarea" placeholder="---&#10;name: skill-name&#10;description: What this skill does&#10;---&#10;&#10;# Skill Title&#10;&#10;Instructions..."></textarea>
+                <div class="skl-editor-actions">
+                    <button class="mtg-btn" onclick="saveSkill()">💾 Save</button>
+                    <button class="mtg-btn" onclick="closeSkillEditor()">Cancel</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -585,7 +639,7 @@
         setTimeout(resizeCanvas, 320);
     }
     </script>
-    <script src="game.js?v=1774645004"></script>
+    <script src="game.js?v=1774736671"></script>
     <script src="browser-panel.js?v=1773812451"></script>
     <script>
     // Bio sections for agent modal
