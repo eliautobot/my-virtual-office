@@ -813,7 +813,7 @@
     // Documents (PDF, etc): upload to workspace and inject path into message
     let attachments;
     if (hasAttachments) {
-      const UPLOAD_URL = window.location.protocol + '//' + window.location.hostname + ':18790/upload';
+      const UPLOAD_URL = window.location.origin + '/upload';
       const imageAtts = [];
       const docPaths = [];
 

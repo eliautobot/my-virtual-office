@@ -30,19 +30,37 @@ services:
       start_period: 10s
 
   # Optional: Agent Browser (uncomment to enable)
-  # Gives AI agents a real Chromium browser they can control via CDP.
+  # Gives AI agents a real Google Chrome browser they can control via CDP.
   # You can watch them browse live through the Virtual Office browser panel.
+  # Includes full Chrome Sync, "Sign in to Chrome", and Google password manager.
+  #
+  # After first start, run the post-boot script to install Chrome:
+  #   docker exec --user root agent-browser bash /tmp/post-boot.sh
+  #   docker exec agent-browser pkill -f chromium-orig
+  #   docker exec -e DISPLAY=:10 -d agent-browser /usr/bin/chromium
+  #
+  # On subsequent restarts, Chrome persists unless the container is recreated.
+  # The kasm-browser-config/ folder contains all config files.
   #
   # agent-browser:
   #   image: kasmweb/chromium:1.17.0
   #   container_name: agent-browser
+  #   entrypoint: /dockerstartup/kasm_default_profile.sh
+  #   command: ["/tmp/override-startup.sh", "/dockerstartup/kasm_startup.sh", "--wait"]
   #   ports:
   #     - "6901:6901"   # KasmVNC viewer
   #     - "9222:9222"   # CDP endpoint
   #   environment:
   #     - VNC_PW=${BROWSER_VNC_PASSWORD:-changeme}
+  #     - VNC_RESOLUTION=1600x900
+  #     - KASMVNC_AUTO_RECOVER=true
   #   volumes:
-  #     - browser-data:/home/kasm-user
+  #     - browser-data:/home/kasm-user/.config/chromium
+  #     - ./kasm-browser-config/chromium-browser:/usr/bin/chromium
+  #     - ./kasm-browser-config/override-startup.sh:/tmp/override-startup.sh
+  #     - ./kasm-browser-config/start-cdp-proxy.sh:/tmp/start-cdp-proxy.sh
+  #     - ./kasm-browser-config/post-boot.sh:/tmp/post-boot.sh
+  #     - ./kasm-browser-config/install-chrome.sh:/tmp/install-chrome.sh
   #   restart: unless-stopped
   #   # Configure in Virtual Office Settings → Agent Browser:
   #   #   CDP URL: http://host.docker.internal:9222

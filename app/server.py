@@ -799,8 +799,22 @@ def get_agent_messages(agent_key, max_messages=500):
         return []
     messages = []
     try:
-        with open(jsonl_file, "r") as f:
-            for line in f:
+        # Performance: only read the tail of the file (last 32KB) instead of the
+        # entire JSONL.  Session files can grow to many megabytes; reading them
+        # in full every 3 seconds blocks the server thread and causes UI stutter.
+        TAIL_BYTES = 32 * 1024
+        with open(jsonl_file, "rb") as fb:
+            fb.seek(0, 2)  # end
+            fsize = fb.tell()
+            start = max(0, fsize - TAIL_BYTES)
+            fb.seek(start)
+            tail_data = fb.read().decode("utf-8", errors="replace")
+        # If we seeked into the middle of a line, drop the first partial line
+        if start > 0:
+            nl = tail_data.find("\n")
+            if nl >= 0:
+                tail_data = tail_data[nl + 1:]
+        for line in tail_data.split("\n"):
                 line = line.strip()
                 if not line:
                     continue
@@ -2859,6 +2873,45 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
+
+        elif self.path == "/upload":
+            # Self-contained file upload — saves to STATUS_DIR/uploads/
+            import base64 as _b64, time as _time
+            MAX_UPLOAD = 50 * 1024 * 1024  # 50MB
+            length = int(self.headers.get('Content-Length', 0))
+            if length > MAX_UPLOAD:
+                self.send_response(413)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": "File too large (max 50MB)"}).encode())
+                return
+            try:
+                body = json.loads(self.rfile.read(length)) if length else {}
+                filename = os.path.basename(body.get("filename", "upload"))
+                content = _b64.b64decode(body.get("content", ""))
+            except Exception as e:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": str(e)}).encode())
+                return
+            upload_dir = os.path.join(STATUS_DIR, "uploads")
+            os.makedirs(upload_dir, exist_ok=True)
+            dest = os.path.join(upload_dir, filename)
+            if os.path.exists(dest):
+                stem, ext = os.path.splitext(filename)
+                dest = os.path.join(upload_dir, f"{stem}_{int(_time.time())}{ext}")
+            with open(dest, "wb") as f:
+                f.write(content)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"path": dest, "size": len(content)}).encode())
+            print(f"📎 Upload: {dest} ({len(content):,} bytes)")
+
         else:
             self.send_response(404)
             self.end_headers()
