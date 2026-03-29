@@ -14005,7 +14005,7 @@ function renderSkillCards() {
                 '<div class="skl-card-actions">' +
                     '<button onclick="toggleSkillApply(\'' + safeName + '\')" title="Apply to agent">📋</button>' +
                     '<button onclick="openSkillEditor(\'' + safeName + '\')" title="Edit">✏️</button>' +
-                    '<button onclick="deleteSkill(\'' + safeName + '\')" title="Delete">🗑️</button>' +
+                    '<button onclick="deleteLibrarySkill(\'' + safeName + '\')" title="Delete">🗑️</button>' +
                 '</div>' +
             '</div>' +
             '<div class="skl-apply-dropdown" id="skl-apply-' + safeName + '" style="display:none"></div>' +
@@ -14144,7 +14144,7 @@ async function saveSkill() {
     }
 }
 
-async function deleteSkill(skillName) {
+async function deleteLibrarySkill(skillName) {
     if (!confirm('Delete skill "' + skillName + '" from the library?\n\nThis removes the master copy. Agent copies are not affected.')) return;
 
     try {
