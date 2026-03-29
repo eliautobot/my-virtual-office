@@ -514,8 +514,9 @@ def _handle_skill_write(agent_key, skill_name, body):
 # ─── SKILLS LIBRARY HANDLERS ─────────────────────────────────────
 
 def _get_skills_library_dir():
-    """Return path to skills-library/ under STATUS_DIR, create if needed."""
-    d = os.path.join(STATUS_DIR, "skills-library")
+    """Return path to the central skills library (master copies, not agent-specific)."""
+    home = VO_CONFIG.get("openclaw", {}).get("homePath", os.path.expanduser("~/.openclaw"))
+    d = os.path.join(home, "skills-library")
     os.makedirs(d, exist_ok=True)
     return d
 
