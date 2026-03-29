@@ -154,7 +154,7 @@ a:hover { text-decoration: underline; }
         </div>
         <div class="form-group">
           <label>Timezone</label>
-          <input id="f-cron-tz" placeholder="America/New_York" value="America/New_York">
+          <input id="f-cron-tz" placeholder="e.g. America/New_York">
         </div>
       </div>
       <div class="form-group">
@@ -264,25 +264,30 @@ a:hover { text-decoration: underline; }
 <script>
 let GATEWAY_TOKEN = '';
 let AGENTS = [];
+let _cronWsPort = 0; // 0 = not yet loaded
 
-// Load gateway token and agents dynamically
+// Load gateway token, WS port, and agents dynamically
 (async function() {
   try {
-    const infoRes = await fetch('/session-info');
+    const infoRes = await fetch('/gateway-info');
     const info = await infoRes.json();
     if (info.token) GATEWAY_TOKEN = info.token;
-  } catch(e) {}
+    if (info.wsPort) _cronWsPort = info.wsPort;
+  } catch(e) {
+    console.warn('Failed to fetch /gateway-info:', e);
+  }
   try {
     const agentsRes = await fetch('/api/agents');
     const data = await agentsRes.json();
     AGENTS = (data.agents || []).map(function(a) {
-      return { id: a.agentId, label: (a.emoji || '🤖') + ' ' + a.name + (a.role ? ' (' + a.role + ')' : '') };
+      return { id: a.id, label: (a.emoji || '🤖') + ' ' + a.name + (a.role ? ' (' + a.role + ')' : '') };
     });
   } catch(e) {
     AGENTS = [{ id: 'main', label: '🤖 Main Agent' }];
   }
-  // Rebuild agent selects
+  // Rebuild agent selects then connect
   populateAgentSelects();
+  connectGateway();
 })();
 
 let ws = null, reqId = 0, connected = false, pendingCB = {};
@@ -292,7 +297,14 @@ let editingJobId = null;
 // --- WS Connection ---
 function getWsUrl() {
   const host = window.location.hostname || '127.0.0.1';
-  return `ws://${host}:8086`;
+  // If accessed via HTTPS, use wss through the reverse-proxy path (same origin)
+  if (window.location.protocol === 'https:') {
+    const port = window.location.port ? ':' + window.location.port : '';
+    return `wss://${host}${port}/ws-gateway`;
+  }
+  // Use the WS proxy port from /gateway-info (falls back to same-origin port + 1)
+  const port = _cronWsPort || (parseInt(window.location.port || '8090') + 1);
+  return `ws://${host}:${port}`;
 }
 function nextId() { return `cron-${++reqId}-${Date.now()}`; }
 
@@ -332,11 +344,15 @@ function sendConnect() {
     }
   }));
   pendingCB[id] = (res) => {
-    if (res.ok || res.payload?.ok) {
+    if (res.ok) {
       connected = true;
       const el = document.getElementById('ws-status');
       el.textContent = 'Connected'; el.className = 'status online';
       loadJobs();
+    } else {
+      const el = document.getElementById('ws-status');
+      el.textContent = 'Auth Failed'; el.className = 'status offline';
+      console.error('Gateway auth failed:', res.error);
     }
   };
 }
@@ -584,7 +600,7 @@ function clearForm() {
   document.getElementById('f-target').value = 'isolated';
   document.getElementById('f-sched-type').value = 'cron';
   document.getElementById('f-cron-time').value = '09:00';
-  document.getElementById('f-cron-tz').value = 'America/New_York';
+  try { document.getElementById('f-cron-tz').value = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch(e) { document.getElementById('f-cron-tz').value = ''; }
   document.querySelectorAll('.day-cb').forEach(cb => cb.checked = false);
   document.getElementById('f-every-min').value = '';
   document.getElementById('f-at-date').value = '';
@@ -610,7 +626,7 @@ function populateForm(job) {
   document.getElementById('f-sched-type').value = s.kind || 'cron';
   if (s.kind === 'cron') {
     parseCronToFields(s.expr || '0 9 * * *');
-    document.getElementById('f-cron-tz').value = s.tz || 'America/New_York';
+    document.getElementById('f-cron-tz').value = s.tz || (Intl.DateTimeFormat().resolvedOptions().timeZone || '');
   } else if (s.kind === 'every') {
     document.getElementById('f-every-min').value = s.everyMs ? Math.round(s.everyMs/60000) : '';
   } else if (s.kind === 'at') {
@@ -635,7 +651,7 @@ function populateForm(job) {
 
 function toggleScheduleFields() {
   const type = document.getElementById('f-sched-type').value;
-  document.getElementById('sched-cron').style.display = type === 'cron' ? 'flex' : 'none';
+  document.getElementById('sched-cron').style.display = type === 'cron' ? 'block' : 'none';
   document.getElementById('sched-every').style.display = type === 'every' ? 'flex' : 'none';
   document.getElementById('sched-at').style.display = type === 'at' ? 'block' : 'none';
 }
@@ -699,7 +715,7 @@ async function saveJob() {
       toast('Job updated!', 'success');
     } else {
       job.agentId = agentId;
-      await rpc('cron.add', {job});
+      await rpc('cron.add', job);
       toast('Job created!', 'success');
     }
     closeModal();
@@ -721,8 +737,13 @@ function toast(msg, type) {
 }
 
 // --- Init ---
+// Detect user timezone
+try {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (tz) document.getElementById('f-cron-tz').value = tz;
+} catch(e) {}
 initAgentDropdowns();
-connectGateway();
+// connectGateway() is called after /gateway-info loads (see async IIFE above)
 </script>
 </body>
 </html>
