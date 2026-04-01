@@ -1447,6 +1447,24 @@ window.addEventListener('mouseup', function() {
     _isPanning = false;
 });
 
+// Track tooltip for project work indicator on chat bubbles
+canvas.addEventListener('mousemove', function(e) {
+    _chatTooltip = null;
+    if (editMode) return;
+    var world = screenToWorld(e.clientX, e.clientY);
+    for (var ti = 0; ti < renderedChatBubbles.length; ti++) {
+        var tb = renderedChatBubbles[ti];
+        if (tb.projIndicator) {
+            var pi = tb.projIndicator;
+            if (world.x >= pi.x && world.x <= pi.x + pi.w && world.y >= pi.y && world.y <= pi.h + pi.y) {
+                var label = '📋 ' + (pi.info.taskTitle || pi.info.phase || 'Project work');
+                _chatTooltip = { x: pi.x, y: pi.y + pi.h + 3, text: label };
+                break;
+            }
+        }
+    }
+}, { passive: true });
+
 // Touch: pan with one finger, pinch-zoom with two
 canvas.addEventListener('touchstart', function(e) {
     if (e.touches.length === 1) {
@@ -7196,6 +7214,7 @@ canvas.addEventListener('touchend', function() {
 
 // === LIVE CHAT BUBBLE SYSTEM ===
 var agentChatData = {};
+var agentChatProjectWork = {}; // agentKey -> { projectId, taskTitle, phase } if working on project task
 var agentChatWrapped = {}; // agentKey -> [{text, isUser, separator}] pre-wrapped lines
 var lastChatPoll = 0;
 var chatLastMsg = {}; // agentKey -> last seen message text
@@ -7206,6 +7225,7 @@ var renderedChatBubbles = []; // for click detection
 var renderedChatIcons = [];
 var chatScrollOffset = {}; // agentKey -> scroll offset (lines from bottom)
 var chatHoveredBubble = null; // agentKey of bubble mouse is over
+var _chatTooltip = null; // { x, y, text } for project indicator tooltip
 
 function pollAgentChat() {
     var now = Date.now();
@@ -7216,6 +7236,9 @@ function pollAgentChat() {
         return res.json();
     }).then(function(data) {
         if (!data) return;
+        // Extract project work metadata (keyed by _projectWork)
+        agentChatProjectWork = data._projectWork || {};
+        delete data._projectWork;
         for (var key in data) {
             var msgs = data[key];
             var lastMsg = msgs[msgs.length - 1];
@@ -7390,10 +7413,22 @@ function drawChatBubbles() {
         chatBubbles.push({ agent: agent, agentKey: agent.statusKey, lines: visLines, canScrollUp: canScrollUp, canScrollDown: canScrollDown, x: headX + 25, y: headY - bubbleH - 10, w: 155, h: bubbleH, anchorX: headX, anchorY: headY, });
     }
 
+    // Compute visible world bounds so bubbles (especially headers with indicators)
+    // stay on-screen.  Falls back to 2 if the camera math isn't available.
+    var _cbMinX = 2, _cbMinY = 2, _cbMaxX = W - 2, _cbMaxY = H - 20;
+    try {
+        var _cbBase = getBaseScale();
+        var _cbTZ = _cbBase * camera.zoom;
+        _cbMinX = Math.max(2, (0 - displayW / 2) / _cbTZ + W / 2 + camera.x + 2);
+        _cbMinY = Math.max(2, (0 - displayH / 2) / _cbTZ + H / 2 + camera.y + 2);
+        _cbMaxX = Math.min(W - 2, (displayW - displayW / 2) / _cbTZ + W / 2 + camera.x - 2);
+        _cbMaxY = Math.min(H - 20, (displayH - displayH / 2) / _cbTZ + H / 2 + camera.y - 20);
+    } catch(e) {}
+
     // Collision resolution
     for (var ci = 0; ci < chatBubbles.length; ci++) {
-        chatBubbles[ci].x = Math.max(2, Math.min(W - chatBubbles[ci].w - 2, chatBubbles[ci].x));
-        chatBubbles[ci].y = Math.max(2, Math.min(H - chatBubbles[ci].h - 20, chatBubbles[ci].y));
+        chatBubbles[ci].x = Math.max(_cbMinX, Math.min(_cbMaxX - chatBubbles[ci].w, chatBubbles[ci].x));
+        chatBubbles[ci].y = Math.max(_cbMinY, Math.min(_cbMaxY - chatBubbles[ci].h, chatBubbles[ci].y));
     }
     for (var pass = 0; pass < 5; pass++) {
         for (var i = 0; i < chatBubbles.length; i++) {
@@ -7413,8 +7448,8 @@ function drawChatBubbles() {
             }
         }
         for (var ri = 0; ri < chatBubbles.length; ri++) {
-            chatBubbles[ri].x = Math.max(2, Math.min(W - chatBubbles[ri].w - 2, chatBubbles[ri].x));
-            chatBubbles[ri].y = Math.max(2, Math.min(H - chatBubbles[ri].h - 20, chatBubbles[ri].y));
+            chatBubbles[ri].x = Math.max(_cbMinX, Math.min(_cbMaxX - chatBubbles[ri].w, chatBubbles[ri].x));
+            chatBubbles[ri].y = Math.max(_cbMinY, Math.min(_cbMaxY - chatBubbles[ri].h, chatBubbles[ri].y));
         }
     }
 
@@ -7462,6 +7497,23 @@ function drawChatBubbles() {
         ctx.fillStyle = 'rgba(0,200,80,' + (0.5 + pulse * 0.5) + ')';
         ctx.beginPath(); ctx.arc(b.x + b.w - 22, b.y + 7, 3, 0, Math.PI * 2); ctx.fill();
 
+        // Project work indicator — blinking square next to green dot
+        var projWork = agentChatProjectWork[b.agentKey];
+        if (projWork) {
+            var sqPulse = 0.5 + Math.sin(Date.now() * 0.005) * 0.5;
+            var sqAlpha = 0.5 + sqPulse * 0.5;
+            // Position square immediately left of the green dot (dot center is at b.x+b.w-22, radius 3)
+            var sqS = 6;
+            var sqX = b.x + b.w - 22 - 3 - sqS - 2; // 2px gap from dot edge
+            var sqY = b.y + 7 - sqS / 2; // vertically centered with dot
+            // Blinking square — same animation as the green dot
+            ctx.fillStyle = 'rgba(0,150,255,' + sqAlpha + ')';
+            ctx.fillRect(sqX, sqY, sqS, sqS);
+            ctx.strokeStyle = 'rgba(255,255,255,' + sqAlpha + ')';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(sqX, sqY, sqS, sqS);
+        }
+
         // Close button
         var closeX = b.x + b.w - 13;
         var closeY = b.y + 3;
@@ -7469,7 +7521,7 @@ function drawChatBubbles() {
         ctx.fillRect(closeX, closeY, 10, 10);
         ctx.fillStyle = '#fff'; ctx.font = 'bold 9px Arial'; ctx.textAlign = 'center';
         ctx.fillText(String.fromCharCode(8722), closeX + 5, closeY + 8);
-        renderedChatBubbles.push({ agentKey: b.agentKey, closeRect: { x: closeX, y: closeY, w: 10, h: 10 }, fullRect: { x: b.x, y: b.y, w: b.w, h: b.h }, canScrollUp: b.canScrollUp, canScrollDown: b.canScrollDown });
+        renderedChatBubbles.push({ agentKey: b.agentKey, closeRect: { x: closeX, y: closeY, w: 10, h: 10 }, fullRect: { x: b.x, y: b.y, w: b.w, h: b.h }, canScrollUp: b.canScrollUp, canScrollDown: b.canScrollDown, projIndicator: projWork ? { x: b.x + b.w - 33, y: b.y + 4, w: 6, h: 6, info: projWork } : null });
 
         // Message lines
         var lineY = b.y + 26;
@@ -10143,6 +10195,22 @@ function loop() {
     ctx.save();
     applyCameraTransform();
     _perfStart('chatBubbles'); drawChatBubbles(); _perfEnd('chatBubbles');
+    // Project work tooltip (rendered in world space, above chat bubble)
+    if (_chatTooltip) {
+        ctx.font = 'bold 8px Arial, sans-serif';
+        var ttW = ctx.measureText(_chatTooltip.text).width + 8;
+        var ttH = 14;
+        var ttX = _chatTooltip.x - 2;
+        var ttY = _chatTooltip.y;
+        ctx.fillStyle = 'rgba(20,20,40,0.9)';
+        ctx.fillRect(ttX, ttY, ttW, ttH);
+        ctx.strokeStyle = 'rgba(100,140,255,0.6)';
+        ctx.lineWidth = 0.5;
+        ctx.strokeRect(ttX, ttY, ttW, ttH);
+        ctx.fillStyle = '#dde';
+        ctx.textAlign = 'left';
+        ctx.fillText(_chatTooltip.text, ttX + 4, ttY + 10);
+    }
     ctx.restore();
 
     // FPS counter

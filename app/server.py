@@ -135,6 +135,7 @@ WORKSPACE_BASE = VO_CONFIG["openclaw"]["homePath"]
 STATUS_DIR = VO_CONFIG["presence"]["statusDir"]
 os.makedirs(STATUS_DIR, exist_ok=True)
 STATUS_FILE = os.path.join(STATUS_DIR, "virtual-office-status.json")
+PROJECTS_FILE = os.path.join(STATUS_DIR, "projects.json")
 AUTH_PROFILES_PATH = os.path.join(WORKSPACE_BASE, "agents/main/agent/auth-profiles.json")
 
 # ─── DYNAMIC AGENT DISCOVERY ─────────────────────────────────
@@ -861,6 +862,2245 @@ def _handle_meeting_history_delete(meet_id):
     return {"ok": True, "removed": len(history) < before, "id": meet_id}
 
 
+##############################################################################
+# ─── PROJECTS SCORING / GAMIFICATION ─────────────────────────────────────────
+SCORES_FILE = os.path.join(STATUS_DIR, "project-scores.json")
+
+def _load_scores():
+    """Load project-scores.json. Format: { "agents": { "agent-key": { "score": N, "completed": N, "streak": N, "lastCompleted": "ISO" } } }"""
+    try:
+        with open(SCORES_FILE, "r") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+        if "agents" not in data:
+            data["agents"] = {}
+        return data
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"agents": {}}
+
+def _save_scores(data):
+    """Persist project-scores.json."""
+    os.makedirs(os.path.dirname(SCORES_FILE), exist_ok=True)
+    with open(SCORES_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+def _award_points(agent_key, points, reason="task_completed"):
+    """Award points to an agent and update streak."""
+    if not agent_key or agent_key in ("null", "None", "unassigned", ""):
+        return None
+    data = _load_scores()
+    agent = data["agents"].get(agent_key, {"score": 0, "completed": 0, "streak": 0, "lastCompleted": None, "history": []})
+
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    now_str = now.isoformat()
+
+    # Streak logic: if last completion was within 24h, increment streak, else reset
+    last = agent.get("lastCompleted")
+    if last:
+        try:
+            last_dt = datetime.fromisoformat(last.replace("Z", "+00:00"))
+            if (now - last_dt) < timedelta(hours=24):
+                agent["streak"] = agent.get("streak", 0) + 1
+                # Streak bonus: +5 per streak level (max +25)
+                streak_bonus = min(agent["streak"] * 5, 25)
+                points += streak_bonus
+            else:
+                agent["streak"] = 1
+        except Exception:
+            agent["streak"] = 1
+    else:
+        agent["streak"] = 1
+
+    agent["score"] = agent.get("score", 0) + points
+    agent["completed"] = agent.get("completed", 0) + 1
+    agent["lastCompleted"] = now_str
+
+    # History (last 50 entries)
+    history = agent.get("history", [])
+    history.append({"points": points, "reason": reason, "at": now_str})
+    if len(history) > 50:
+        history = history[-50:]
+    agent["history"] = history
+
+    data["agents"][agent_key] = agent
+    _save_scores(data)
+    return {"agent": agent_key, "pointsAwarded": points, "totalScore": agent["score"], "streak": agent["streak"], "completed": agent["completed"]}
+
+def _handle_scores_leaderboard():
+    """GET /api/projects/scores — returns top agents sorted by score."""
+    data = _load_scores()
+    agents = []
+    for key, info in data.get("agents", {}).items():
+        agents.append({
+            "agent": key,
+            "score": info.get("score", 0),
+            "completed": info.get("completed", 0),
+            "streak": info.get("streak", 0),
+        })
+    agents.sort(key=lambda x: x["score"], reverse=True)
+    return {"ok": True, "leaderboard": agents}
+
+def _handle_score_award(body):
+    """POST /api/projects/scores/award — manually award points."""
+    agent_key = (body.get("agent") or "").strip()
+    points = int(body.get("points", 0))
+    reason = body.get("reason", "manual")
+    if not agent_key or points <= 0:
+        return {"error": "agent and positive points required", "_status": 400}
+    result = _award_points(agent_key, points, reason)
+    if result:
+        return {"ok": True, **result}
+    return {"error": "Invalid agent", "_status": 400}
+
+
+# ── SCORING POINT VALUES ──────────────────────────────────────────────────────
+SCORE_TASK_COMPLETED = 10        # Base points for completing a task
+SCORE_CRITICAL_BONUS = 15       # Extra for critical priority
+SCORE_HIGH_BONUS = 10           # Extra for high priority
+SCORE_MEDIUM_BONUS = 5          # Extra for medium priority
+SCORE_ON_TIME_BONUS = 10        # Extra for completing before due date
+SCORE_CHECKLIST_BONUS = 2       # Per checklist item completed
+
+
+# ─── PROJECTS API ────────────────────────────────────────────────────────────
+##############################################################################
+
+_PROJECTS_FILE_LOCK = threading.Lock()
+
+def _load_projects():
+    """Load projects.json from STATUS_DIR. Thread-safe via lock."""
+    with _PROJECTS_FILE_LOCK:
+        try:
+            with open(PROJECTS_FILE, "r") as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                data = {}
+            if not isinstance(data.get("projects"), list):
+                data["projects"] = []
+            if not isinstance(data.get("templates"), list):
+                data["templates"] = []
+            return data
+        except FileNotFoundError:
+            return {"projects": [], "templates": []}
+        except json.JSONDecodeError:
+            return {"projects": [], "templates": []}
+
+
+def _save_projects(data):
+    """Persist projects.json with permissive mode. Thread-safe via lock."""
+    with _PROJECTS_FILE_LOCK:
+        os.makedirs(os.path.dirname(PROJECTS_FILE), exist_ok=True)
+        # Write to temp file first, then atomic rename to prevent corruption
+        tmp_path = PROJECTS_FILE + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp_path, PROJECTS_FILE)
+        try:
+            os.chmod(PROJECTS_FILE, 0o666)
+        except Exception:
+            pass
+
+
+def _proj_uuid():
+    """Generate a UUID4 string."""
+    import uuid
+    return str(uuid.uuid4())
+
+
+def _proj_now():
+    """ISO-8601 timestamp."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _log_activity(project, type_, by, detail, task_id=None):
+    """Append an activity record to a project."""
+    if not isinstance(project.get("activity"), list):
+        project["activity"] = []
+    entry = {"type": type_, "by": by, "at": _proj_now(), "detail": detail}
+    if task_id:
+        entry["taskId"] = task_id
+    project["activity"].append(entry)
+    # Cap at 200
+    if len(project["activity"]) > 200:
+        project["activity"] = project["activity"][-200:]
+
+
+# ── Built-in templates ────────────────────────────────────────────────────────
+_BUILTIN_TEMPLATES = [
+    {
+        "id": "tpl-software",
+        "title": "Software Development",
+        "description": "Standard software development workflow with sprint planning",
+        "builtin": True,
+        "columns": [
+            {"title": "Backlog", "color": "#6c757d"},
+            {"title": "Sprint", "color": "#0d6efd"},
+            {"title": "In Progress", "color": "#ffc107"},
+            {"title": "Code Review", "color": "#fd7e14"},
+            {"title": "QA", "color": "#17a2b8"},
+            {"title": "Done", "color": "#198754"},
+        ],
+        "taskTemplates": [
+            {"title": "Set up development environment", "columnIndex": 0, "priority": "high"},
+            {"title": "Define acceptance criteria", "columnIndex": 0, "priority": "medium"},
+            {"title": "Write unit tests", "columnIndex": 0, "priority": "medium"},
+        ],
+    },
+    {
+        "id": "tpl-marketing",
+        "title": "Marketing Campaign",
+        "description": "Plan and execute marketing campaigns",
+        "builtin": True,
+        "columns": [
+            {"title": "Ideas", "color": "#6c757d"},
+            {"title": "Planning", "color": "#0d6efd"},
+            {"title": "Creating", "color": "#ffc107"},
+            {"title": "Review", "color": "#fd7e14"},
+            {"title": "Published", "color": "#198754"},
+        ],
+        "taskTemplates": [
+            {"title": "Define target audience", "columnIndex": 0, "priority": "high"},
+            {"title": "Create content calendar", "columnIndex": 0, "priority": "medium"},
+        ],
+    },
+    {
+        "id": "tpl-bugs",
+        "title": "Bug Tracking",
+        "description": "Track and resolve bugs systematically",
+        "builtin": True,
+        "columns": [
+            {"title": "Reported", "color": "#dc3545"},
+            {"title": "Confirmed", "color": "#fd7e14"},
+            {"title": "In Progress", "color": "#ffc107"},
+            {"title": "Fixed", "color": "#0d6efd"},
+            {"title": "Verified", "color": "#198754"},
+        ],
+        "taskTemplates": [],
+    },
+    {
+        "id": "tpl-content",
+        "title": "Content Pipeline",
+        "description": "Manage content creation workflow",
+        "builtin": True,
+        "columns": [
+            {"title": "Backlog", "color": "#6c757d"},
+            {"title": "Research", "color": "#17a2b8"},
+            {"title": "Writing", "color": "#ffc107"},
+            {"title": "Editing", "color": "#fd7e14"},
+            {"title": "Published", "color": "#198754"},
+        ],
+        "taskTemplates": [],
+    },
+]
+
+# ── GET handlers ──────────────────────────────────────────────────────────────
+
+def _handle_projects_list(query_string=""):
+    """GET /api/projects — return all projects (summaries)."""
+    data = _load_projects()
+    projects = data.get("projects", [])
+    # Optional ?status= filter
+    status_filter = None
+    if query_string:
+        for part in query_string.split("&"):
+            if part.startswith("status="):
+                status_filter = part.split("=", 1)[1]
+    if status_filter:
+        projects = [p for p in projects if p.get("status") == status_filter]
+    # Return summary (no activity log, trim tasks to counts)
+    summaries = []
+    for p in projects:
+        tasks = p.get("tasks", [])
+        total = len(tasks)
+        done = sum(1 for t in tasks if t.get("completedAt"))
+        summaries.append({
+            "id": p["id"],
+            "title": p.get("title", ""),
+            "description": p.get("description", ""),
+            "status": p.get("status", "active"),
+            "priority": p.get("priority", "medium"),
+            "createdAt": p.get("createdAt", ""),
+            "updatedAt": p.get("updatedAt", ""),
+            "dueDate": p.get("dueDate"),
+            "createdBy": p.get("createdBy", ""),
+            "tags": p.get("tags", []),
+            "branch": p.get("branch", ""),
+            "columns": p.get("columns", []),
+            "taskCount": total,
+            "taskDone": done,
+            "template": p.get("template", False),
+        })
+    return {"ok": True, "projects": summaries}
+
+
+def _handle_project_get(project_id):
+    """GET /api/projects/{id} — return full project."""
+    data = _load_projects()
+    for p in data["projects"]:
+        if p["id"] == project_id:
+            return {"ok": True, "project": p}
+    return {"error": "Project not found", "_status": 404}
+
+
+def _handle_projects_templates():
+    """GET /api/projects/templates — list built-in + user templates."""
+    data = _load_projects()
+    all_templates = list(_BUILTIN_TEMPLATES) + data.get("templates", [])
+    return {"ok": True, "templates": all_templates}
+
+
+def _handle_project_report(project_id):
+    """GET /api/projects/{id}/report."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"error": "Project not found", "_status": 404}
+    tasks = p.get("tasks", [])
+    now_str = _proj_now()
+    from datetime import datetime, timezone
+    def _is_overdue(t):
+        dd = t.get("dueDate")
+        if not dd or t.get("completedAt"):
+            return False
+        try:
+            due = datetime.fromisoformat(dd.replace("Z", "+00:00"))
+            return due < datetime.now(timezone.utc)
+        except Exception:
+            return False
+    total = len(tasks)
+    done = sum(1 for t in tasks if t.get("completedAt"))
+    in_progress_cols = [c["id"] for c in p.get("columns", []) if "progress" in c.get("title", "").lower() or "doing" in c.get("title", "").lower()]
+    in_progress = sum(1 for t in tasks if t.get("columnId") in in_progress_cols)
+    overdue = sum(1 for t in tasks if _is_overdue(t))
+    # Per-column breakdown
+    col_stats = []
+    for col in p.get("columns", []):
+        col_tasks = [t for t in tasks if t.get("columnId") == col["id"]]
+        col_stats.append({"id": col["id"], "title": col["title"], "color": col.get("color", "#666"), "count": len(col_tasks)})
+    # Agent workload
+    agent_load = {}
+    for t in tasks:
+        a = t.get("assignee") or "Unassigned"
+        agent_load[a] = agent_load.get(a, 0) + 1
+    # Timeline (tasks with due dates)
+    timeline = []
+    for t in tasks:
+        if t.get("dueDate"):
+            timeline.append({"id": t["id"], "title": t["title"], "dueDate": t["dueDate"], "completedAt": t.get("completedAt"), "assignee": t.get("assignee"), "priority": t.get("priority", "medium")})
+    timeline.sort(key=lambda x: x["dueDate"])
+    return {"ok": True, "report": {
+        "projectId": project_id,
+        "title": p.get("title", ""),
+        "generatedAt": now_str,
+        "stats": {"total": total, "done": done, "inProgress": in_progress, "overdue": overdue},
+        "columns": col_stats,
+        "agentWorkload": agent_load,
+        "timeline": timeline,
+    }}
+
+
+# ── POST handlers ─────────────────────────────────────────────────────────────
+
+def _handle_project_create(body):
+    """POST /api/projects — create a new project."""
+    title = (body.get("title") or "").strip()
+    if not title:
+        return {"error": "Project title is required", "_status": 400}
+    created_by = (body.get("createdBy") or body.get("author") or "user").strip()
+    now = _proj_now()
+    # Default columns
+    default_cols = [
+        {"id": _proj_uuid(), "title": "Backlog", "color": "#6c757d", "order": 0},
+        {"id": _proj_uuid(), "title": "In Progress", "color": "#ffc107", "order": 1},
+        {"id": _proj_uuid(), "title": "Review", "color": "#fd7e14", "order": 2},
+        {"id": _proj_uuid(), "title": "Done", "color": "#198754", "order": 3},
+    ]
+    cols = body.get("columns") or default_cols
+    project = {
+        "id": _proj_uuid(),
+        "title": title,
+        "description": body.get("description", ""),
+        "status": body.get("status", "active"),
+        "priority": body.get("priority", "medium"),
+        "createdAt": now,
+        "updatedAt": now,
+        "dueDate": body.get("dueDate"),
+        "createdBy": created_by,
+        "tags": body.get("tags", []),
+        "branch": body.get("branch", ""),
+        "columns": cols,
+        "tasks": [],
+        "activity": [],
+        "template": False,
+    }
+    _log_activity(project, "project_created", created_by, f"Created project '{title}'")
+    data = _load_projects()
+    data["projects"].append(project)
+    _save_projects(data)
+    return {"ok": True, "project": project}
+
+
+def _handle_task_create(project_id, body):
+    """POST /api/projects/{id}/tasks — create a task."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"error": "Project not found", "_status": 404}
+    title = (body.get("title") or "").strip()
+    if not title:
+        return {"error": "Task title is required", "_status": 400}
+    # Determine column
+    col_id = body.get("columnId")
+    if not col_id and p.get("columns"):
+        col_id = p["columns"][0]["id"]
+    # Max order in column
+    max_order = max((t.get("order", 0) for t in p["tasks"] if t.get("columnId") == col_id), default=-1) + 1
+    now = _proj_now()
+    task = {
+        "id": _proj_uuid(),
+        "title": title,
+        "description": body.get("description", ""),
+        "columnId": col_id,
+        "order": max_order,
+        "priority": body.get("priority", "medium"),
+        "assignee": body.get("assignee"),
+        "assigneeBranch": body.get("assigneeBranch"),
+        "dueDate": body.get("dueDate"),
+        "tags": body.get("tags", []),
+        "checklist": body.get("checklist", []),
+        "comments": [],
+        "attachments": [],
+        "createdAt": now,
+        "updatedAt": now,
+        "completedAt": None,
+    }
+    p["tasks"].append(task)
+    p["updatedAt"] = now
+    by = body.get("by", "user")
+    _log_activity(p, "task_created", by, f"Created task '{title}'", task["id"])
+    _save_projects(data)
+    # Create task markdown file at creation time
+    col_title = next((c["title"] for c in p.get("columns", []) if c["id"] == col_id), "backlog")
+    _wf_write_task_file(project_id, task, col_title.lower().replace(" ", "_"), work_log_entry=f"Task created by {by} in '{col_title}'")
+    return {"ok": True, "task": task}
+
+
+def _handle_task_comment(project_id, task_id, body):
+    """POST /api/projects/{id}/tasks/{taskId}/comments."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"error": "Project not found", "_status": 404}
+    task = next((t for t in p["tasks"] if t["id"] == task_id), None)
+    if not task:
+        return {"error": "Task not found", "_status": 404}
+    text = (body.get("text") or "").strip()
+    if not text:
+        return {"error": "Comment text is required", "_status": 400}
+    author = (body.get("author") or "user").strip()
+    comment = {"id": _proj_uuid(), "author": author, "text": text, "createdAt": _proj_now()}
+    if not isinstance(task.get("comments"), list):
+        task["comments"] = []
+    task["comments"].append(comment)
+    task["updatedAt"] = _proj_now()
+    p["updatedAt"] = _proj_now()
+    _log_activity(p, "task_commented", author, f"Commented on '{task['title']}'", task_id)
+    _save_projects(data)
+    # Update task markdown file with comment
+    current_col = next((c["title"] for c in p.get("columns", []) if c["id"] == task.get("columnId")), "unknown")
+    _wf_write_task_file(project_id, task, current_col.lower().replace(" ", "_"), work_log_entry=f"Comment by {author}: {text[:200]}")
+    return {"ok": True, "comment": comment}
+
+
+def _handle_project_from_template(body):
+    """POST /api/projects/from-template."""
+    template_id = (body.get("templateId") or "").strip()
+    title = (body.get("title") or "").strip()
+    if not title:
+        return {"error": "Project title is required", "_status": 400}
+    data = _load_projects()
+    tpl = next((t for t in data.get("templates", []) if t["id"] == template_id), None)
+    # Also check built-in templates
+    if not tpl:
+        tpl = next((t for t in _BUILTIN_TEMPLATES if t["id"] == template_id), None)
+    if not tpl:
+        return {"error": "Template not found", "_status": 404}
+    now = _proj_now()
+    # Clone columns with new IDs
+    col_map = {}
+    new_cols = []
+    for i, col in enumerate(tpl.get("columns", [])):
+        new_id = _proj_uuid()
+        col_map[i] = new_id
+        new_cols.append({"id": new_id, "title": col.get("title", f"Column {i+1}"), "color": col.get("color", "#6c757d"), "order": i})
+    # Create tasks from taskTemplates
+    new_tasks = []
+    for tt in tpl.get("taskTemplates", []):
+        col_idx = tt.get("columnIndex", 0)
+        col_id = col_map.get(col_idx, new_cols[0]["id"] if new_cols else None)
+        if col_id:
+            new_tasks.append({
+                "id": _proj_uuid(),
+                "title": tt.get("title", "Task"),
+                "description": tt.get("description", ""),
+                "columnId": col_id,
+                "order": tt.get("order", 0),
+                "priority": tt.get("priority", "medium"),
+                "assignee": None,
+                "assigneeBranch": None,
+                "dueDate": None,
+                "tags": tt.get("tags", []),
+                "checklist": [],
+                "comments": [],
+                "attachments": [],
+                "createdAt": now,
+                "updatedAt": now,
+                "completedAt": None,
+            })
+    created_by = (body.get("createdBy") or "user").strip()
+    project = {
+        "id": _proj_uuid(),
+        "title": title,
+        "description": body.get("description", tpl.get("description", "")),
+        "status": "active",
+        "priority": body.get("priority", "medium"),
+        "createdAt": now,
+        "updatedAt": now,
+        "dueDate": body.get("dueDate"),
+        "createdBy": created_by,
+        "tags": body.get("tags", []),
+        "branch": body.get("branch", ""),
+        "columns": new_cols,
+        "tasks": new_tasks,
+        "activity": [],
+        "template": False,
+    }
+    _log_activity(project, "project_created", created_by, f"Created from template '{tpl.get('title', '')}'")
+    data["projects"].append(project)
+    _save_projects(data)
+    return {"ok": True, "project": project}
+
+
+def _handle_save_as_template(body):
+    """POST /api/projects/templates — save a project as template."""
+    project_id = (body.get("projectId") or "").strip()
+    title = (body.get("title") or "").strip()
+    data = _load_projects()
+    p = None
+    if project_id:
+        p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not title:
+        title = (p.get("title", "Template") if p else "Template") + " Template"
+    task_templates = []
+    if p:
+        col_idx_map = {col["id"]: i for i, col in enumerate(p.get("columns", []))}
+        for t in p.get("tasks", []):
+            task_templates.append({
+                "title": t.get("title", ""),
+                "columnIndex": col_idx_map.get(t.get("columnId", ""), 0),
+                "priority": t.get("priority", "medium"),
+                "tags": t.get("tags", []),
+                "description": t.get("description", ""),
+            })
+    template = {
+        "id": _proj_uuid(),
+        "title": title,
+        "description": body.get("description", p.get("description", "") if p else ""),
+        "columns": [{"title": c.get("title"), "color": c.get("color", "#6c757d")} for c in (p.get("columns", []) if p else [])],
+        "taskTemplates": task_templates,
+    }
+    if not isinstance(data.get("templates"), list):
+        data["templates"] = []
+    data["templates"].append(template)
+    _save_projects(data)
+    return {"ok": True, "template": template}
+
+
+# ── PUT handlers ──────────────────────────────────────────────────────────────
+
+def _handle_project_update(project_id, body):
+    """PUT /api/projects/{id} — update project metadata."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"error": "Project not found", "_status": 404}
+    by = body.get("by", "user")
+    updatable = ["title", "description", "status", "priority", "dueDate", "tags", "branch"]
+    for field in updatable:
+        if field in body:
+            old = p.get(field)
+            p[field] = body[field]
+            if old != body[field]:
+                _log_activity(p, "project_updated", by, f"Changed {field}: {old} → {body[field]}")
+    p["updatedAt"] = _proj_now()
+    _save_projects(data)
+    return {"ok": True, "project": p}
+
+
+def _handle_task_update(project_id, task_id, body):
+    """PUT /api/projects/{id}/tasks/{taskId} — update a task."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"error": "Project not found", "_status": 404}
+    task = next((t for t in p["tasks"] if t["id"] == task_id), None)
+    if not task:
+        return {"error": "Task not found", "_status": 404}
+    by = body.get("by", "user")
+    now = _proj_now()
+    # Track column move
+    if "columnId" in body and body["columnId"] != task.get("columnId"):
+        old_col = next((c["title"] for c in p.get("columns", []) if c["id"] == task.get("columnId")), task.get("columnId"))
+        new_col = next((c["title"] for c in p.get("columns", []) if c["id"] == body["columnId"]), body["columnId"])
+        # Check if moving to "Done" column
+        done_cols = [c["id"] for c in p.get("columns", []) if c.get("title", "").lower() in ("done", "completed", "verified", "published", "fixed", "closed")]
+        if body["columnId"] in done_cols and not task.get("completedAt"):
+            task["completedAt"] = now
+            # GAMIFICATION: Award points to assignee
+            assignee = task.get("assignee") or body.get("assignee")
+            if assignee:
+                pts = SCORE_TASK_COMPLETED
+                pri = task.get("priority", "medium")
+                if pri == "critical": pts += SCORE_CRITICAL_BONUS
+                elif pri == "high": pts += SCORE_HIGH_BONUS
+                elif pri == "medium": pts += SCORE_MEDIUM_BONUS
+                # On-time bonus
+                dd = task.get("dueDate")
+                if dd:
+                    try:
+                        from datetime import datetime, timezone
+                        due = datetime.fromisoformat(dd.replace("Z", "+00:00"))
+                        if datetime.now(timezone.utc) <= due:
+                            pts += SCORE_ON_TIME_BONUS
+                    except Exception:
+                        pass
+                # Checklist bonus
+                chk = task.get("checklist", [])
+                done_items = sum(1 for c in chk if c.get("done"))
+                pts += done_items * SCORE_CHECKLIST_BONUS
+                score_result = _award_points(assignee, pts, f"Completed: {task.get('title','')}")
+                task["_scoreAwarded"] = score_result  # Transient field for response
+        elif body["columnId"] not in done_cols and task.get("completedAt"):
+            task["completedAt"] = None
+        _log_activity(p, "task_moved", by, f"Moved '{task['title']}' from {old_col} to {new_col}", task_id)
+    # Track priority change
+    if "priority" in body and body["priority"] != task.get("priority"):
+        _log_activity(p, "task_priority_changed", by, f"Priority changed: {task.get('priority')} → {body['priority']}", task_id)
+    # Track assignee change
+    if "assignee" in body and body["assignee"] != task.get("assignee"):
+        _log_activity(p, "task_assigned", by, f"Assigned to {body['assignee']}", task_id)
+    updatable = ["title", "description", "columnId", "order", "priority", "assignee", "assigneeBranch", "dueDate", "tags", "checklist", "completedAt"]
+    # Track which fields changed for md file update
+    changed_fields = []
+    for field in updatable:
+        if field in body:
+            if task.get(field) != body[field]:
+                changed_fields.append(field)
+            task[field] = body[field]
+    task["updatedAt"] = now
+    p["updatedAt"] = now
+    _save_projects(data)
+    # Update task markdown file on meaningful changes
+    if changed_fields:
+        current_col = next((c["title"] for c in p.get("columns", []) if c["id"] == task.get("columnId")), "unknown")
+        status_text = current_col.lower().replace(" ", "_")
+        log_parts = []
+        if "columnId" in changed_fields:
+            log_parts.append(f"Moved to '{current_col}' by {by}")
+        if "assignee" in changed_fields:
+            log_parts.append(f"Assigned to {task.get('assignee', 'unassigned')}")
+        if "priority" in changed_fields:
+            log_parts.append(f"Priority set to {task.get('priority')}")
+        if any(f in changed_fields for f in ("title", "description", "checklist", "tags", "dueDate")):
+            log_parts.append(f"Updated by {by}")
+        work_log_entry = "; ".join(log_parts) if log_parts else f"Updated by {by}"
+        review_results = task.get("reviewCheck") if task.get("reviewCheck") else None
+        _wf_write_task_file(project_id, task, status_text, review_results=review_results, work_log_entry=work_log_entry)
+    return {"ok": True, "task": task}
+
+
+def _handle_columns_update(project_id, body):
+    """PUT /api/projects/{id}/columns — reorder/add/edit columns."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"error": "Project not found", "_status": 404}
+    columns = body.get("columns")
+    if not isinstance(columns, list):
+        return {"error": "columns must be a list", "_status": 400}
+    by = body.get("by", "user")
+    # Assign IDs to new columns
+    for i, col in enumerate(columns):
+        if not col.get("id"):
+            col["id"] = _proj_uuid()
+        col["order"] = i
+    p["columns"] = columns
+    p["updatedAt"] = _proj_now()
+    _log_activity(p, "columns_updated", by, "Columns updated")
+    _save_projects(data)
+    return {"ok": True, "columns": columns}
+
+
+def _handle_tasks_reorder(project_id, body):
+    """PUT /api/projects/{id}/tasks/reorder — batch reorder."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"error": "Project not found", "_status": 404}
+    # body.updates = [{id, columnId, order}, ...]
+    # Also accept body.tasks as alias for updates (frontend compat)
+    updates = body.get("updates", body.get("tasks", []))
+    task_map = {t["id"]: t for t in p["tasks"]}
+    done_cols = {c["id"] for c in p.get("columns", []) if c.get("title", "").lower() in ("done", "completed", "verified", "published", "fixed", "closed")}
+    now = _proj_now()
+    for u in updates:
+        tid = u.get("id")
+        if tid in task_map:
+            task = task_map[tid]
+            new_col = u.get("columnId")
+            if new_col and new_col != task.get("columnId"):
+                # Auto-set/clear completedAt on done column moves
+                if new_col in done_cols and not task.get("completedAt"):
+                    task["completedAt"] = now
+                elif new_col not in done_cols and task.get("completedAt"):
+                    task["completedAt"] = None
+                task["columnId"] = new_col
+            if "order" in u:
+                task["order"] = u["order"]
+            task["updatedAt"] = now
+    p["updatedAt"] = now
+    _save_projects(data)
+    return {"ok": True}
+
+
+# ── DELETE handlers ───────────────────────────────────────────────────────────
+
+def _handle_project_delete(project_id):
+    """DELETE /api/projects/{id}."""
+    data = _load_projects()
+    before = len(data["projects"])
+    data["projects"] = [p for p in data["projects"] if p["id"] != project_id]
+    if len(data["projects"]) == before:
+        return {"error": "Project not found", "_status": 404}
+    _save_projects(data)
+    return {"ok": True, "id": project_id}
+
+
+def _handle_task_delete(project_id, task_id):
+    """DELETE /api/projects/{id}/tasks/{taskId}."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"error": "Project not found", "_status": 404}
+    before = len(p["tasks"])
+    p["tasks"] = [t for t in p["tasks"] if t["id"] != task_id]
+    if len(p["tasks"]) == before:
+        return {"error": "Task not found", "_status": 404}
+    p["updatedAt"] = _proj_now()
+    _save_projects(data)
+    # Clean up task markdown file
+    try:
+        md_path = os.path.join(TASK_FILES_DIR, project_id, f"{task_id}.md")
+        if os.path.isfile(md_path):
+            os.remove(md_path)
+    except Exception:
+        pass
+    return {"ok": True, "id": task_id}
+
+
+# ─── PROJECT WORKFLOW ENGINE ──────────────────────────────────────────────────
+# Background thread-based workflow: Backlog → In Progress → Review → Done
+# Uses `openclaw agent` CLI or Gateway HTTP API to dispatch tasks and reviews to agents.
+##############################################################################
+
+import time as _time
+
+# Global workflow state: { projectId: { "active": bool, "autoMode": bool, "currentTaskId": str, "phase": str, "thread": Thread, "stopFlag": Event } }
+_WORKFLOW_STATE = {}
+_WORKFLOW_LOCK = threading.Lock()
+
+# Task markdown files directory
+TASK_FILES_DIR = os.path.join(STATUS_DIR, "project-tasks")
+
+def _wf_find_column(project, title_lower):
+    """Find a column by title (case-insensitive). Tries exact match first, then contains."""
+    cols = project.get("columns", [])
+    # Exact match first
+    for col in cols:
+        if col.get("title", "").lower() == title_lower:
+            return col
+    # Fallback: column title contains the keyword (e.g. "Code Review" matches "review")
+    for col in cols:
+        if title_lower in col.get("title", "").lower():
+            return col
+    return None
+
+def _wf_get_backlog_col(project):
+    """Find the backlog/source column. Tries 'backlog' first, then common alternatives."""
+    col = _wf_find_column(project, "backlog")
+    if col:
+        return col
+    # Try common alternative names for the first/source column
+    for alt in ("to do", "todo", "ideas", "reported"):
+        col = _wf_find_column(project, alt)
+        if col:
+            return col
+    # Last resort: use the first column by order
+    cols = project.get("columns", [])
+    if cols:
+        sorted_cols = sorted(cols, key=lambda c: c.get("order", 0))
+        return sorted_cols[0]
+    return None
+
+def _wf_get_inprogress_col(project):
+    """Find the in-progress/work column. Tries common names, falls back to second column."""
+    for name in ("in progress", "in_progress", "sprint", "creating", "writing", "working"):
+        col = _wf_find_column(project, name)
+        if col:
+            return col
+    # Fallback: second column by order (between backlog and review)
+    cols = sorted(project.get("columns", []), key=lambda c: c.get("order", 0))
+    if len(cols) >= 3:
+        return cols[1]
+    return None
+
+def _wf_get_review_col(project):
+    """Find the review column. Tries common names, falls back to second-to-last column."""
+    for name in ("review", "code review", "qa", "editing", "testing"):
+        col = _wf_find_column(project, name)
+        if col:
+            return col
+    # Fallback: second-to-last column by order
+    cols = sorted(project.get("columns", []), key=lambda c: c.get("order", 0))
+    if len(cols) >= 3:
+        return cols[-2]
+    return None
+
+def _wf_get_done_col(project):
+    """Find the done/final column. Tries 'done' first, then common alternatives."""
+    col = _wf_find_column(project, "done")
+    if col:
+        return col
+    for alt in ("completed", "verified", "published", "fixed", "closed"):
+        col = _wf_find_column(project, alt)
+        if col:
+            return col
+    # Last resort: use the last column by order
+    cols = project.get("columns", [])
+    if cols:
+        sorted_cols = sorted(cols, key=lambda c: c.get("order", 0))
+        return sorted_cols[-1]
+    return None
+
+def _wf_next_backlog_task(project):
+    """Get highest priority task from backlog column."""
+    backlog = _wf_get_backlog_col(project)
+    if not backlog:
+        return None
+    tasks = [t for t in project.get("tasks", []) if t.get("columnId") == backlog["id"]]
+    if not tasks:
+        return None
+    priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    tasks.sort(key=lambda t: (priority_order.get(t.get("priority", "medium"), 2), t.get("order", 0)))
+    return tasks[0]
+
+
+def _wf_get_active_task(project):
+    """Find a task currently in-progress or in review that still needs work.
+
+    This prevents backlog tasks from jumping ahead of tasks that were sent
+    back for rework after a failed review cycle.  Only assigned tasks are
+    considered (unassigned ones can't be worked by the pipeline).
+    """
+    inprogress_col = _wf_get_inprogress_col(project)
+    review_col = _wf_get_review_col(project)
+    active_col_ids = set()
+    if inprogress_col:
+        active_col_ids.add(inprogress_col["id"])
+    if review_col:
+        active_col_ids.add(review_col["id"])
+    if not active_col_ids:
+        return None
+
+    for t in project.get("tasks", []):
+        if t.get("columnId") in active_col_ids and t.get("assignee"):
+            return t
+    return None
+
+def _wf_move_task(project_id, task_id, target_col_id, by="workflow"):
+    """Move a task to a target column and persist."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return None
+    task = next((t for t in p["tasks"] if t["id"] == task_id), None)
+    if not task:
+        return None
+    old_col = next((c["title"] for c in p.get("columns", []) if c["id"] == task.get("columnId")), "?")
+    new_col = next((c["title"] for c in p.get("columns", []) if c["id"] == target_col_id), "?")
+    task["columnId"] = target_col_id
+    # Max order in target column
+    col_tasks = [t for t in p["tasks"] if t.get("columnId") == target_col_id and t["id"] != task_id]
+    task["order"] = max((t.get("order", 0) for t in col_tasks), default=-1) + 1
+    task["updatedAt"] = _proj_now()
+    p["updatedAt"] = _proj_now()
+    # Handle done column — match common "final" column names
+    done_cols = [c["id"] for c in p.get("columns", []) if c.get("title", "").lower() in ("done", "completed", "verified", "published", "fixed", "closed")]
+    if target_col_id in done_cols and not task.get("completedAt"):
+        task["completedAt"] = _proj_now()
+        # Award points
+        assignee = task.get("assignee")
+        if assignee:
+            pts = SCORE_TASK_COMPLETED
+            pri = task.get("priority", "medium")
+            if pri == "critical": pts += SCORE_CRITICAL_BONUS
+            elif pri == "high": pts += SCORE_HIGH_BONUS
+            elif pri == "medium": pts += SCORE_MEDIUM_BONUS
+            chk = task.get("checklist", [])
+            done_items = sum(1 for c in chk if c.get("done"))
+            pts += done_items * SCORE_CHECKLIST_BONUS
+            _award_points(assignee, pts, f"Completed: {task.get('title','')}")
+    elif target_col_id not in done_cols:
+        task["completedAt"] = None
+    _log_activity(p, "task_moved", by, f"Moved '{task['title']}' from {old_col} to {new_col}", task_id)
+    _save_projects(data)
+    return task
+
+def _wf_update_task_field(project_id, task_id, field, value):
+    """Update a single field on a task and persist."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return None
+    task = next((t for t in p["tasks"] if t["id"] == task_id), None)
+    if not task:
+        return None
+    task[field] = value
+    task["updatedAt"] = _proj_now()
+    p["updatedAt"] = _proj_now()
+    _save_projects(data)
+    return task
+
+def _wf_write_task_file(project_id, task, status_text, review_results=None, work_log_entry=None):
+    """Write/update a task's markdown file."""
+    task_dir = os.path.join(TASK_FILES_DIR, project_id)
+    os.makedirs(task_dir, exist_ok=True)
+    filepath = os.path.join(task_dir, f"{task['id']}.md")
+
+    # Read existing file if present (to preserve work log)
+    existing_log = []
+    if os.path.isfile(filepath):
+        with open(filepath, "r") as f:
+            in_log = False
+            for line in f:
+                if line.strip() == "## Work Log":
+                    in_log = True
+                    continue
+                if in_log:
+                    existing_log.append(line.rstrip())
+
+    checklist = task.get("checklist", [])
+    lines = [
+        f"# Task: {task.get('title', 'Untitled')}",
+        f"**Status:** {status_text} | **Assignee:** {task.get('assignee', 'unassigned')} | **Priority:** {task.get('priority', 'medium')}",
+        "",
+        "## Description",
+        task.get("description", "_No description_"),
+        "",
+    ]
+
+    if checklist:
+        lines.append("## Checklist")
+        for item in checklist:
+            check = "x" if item.get("done") else " "
+            review_status = ""
+            if review_results:
+                for rr in review_results:
+                    if rr.get("id") == item.get("id"):
+                        review_status = f" — {rr.get('status', '')}"
+                        break
+            lines.append(f"- [{check}] {item.get('text', '')}{review_status}")
+        lines.append("")
+
+    if review_results:
+        lines.append("## Review Check")
+        for rr in review_results:
+            icon = {"pass": "✅", "needs_more_work": "⚠️", "did_not_pass": "❌", "requires_user_review": "👤"}.get(rr.get("status"), "❓")
+            lines.append(f"- {icon} **{rr.get('text', '')}**: {rr.get('status', 'pending')}")
+        lines.append("")
+
+    lines.append("## Work Log")
+    lines.extend(existing_log)
+    if work_log_entry:
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        lines.append(f"### {ts} — {work_log_entry}")
+
+    with open(filepath, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    try:
+        os.chmod(filepath, 0o666)
+    except Exception:
+        pass
+
+def _wf_read_task_file(project_id, task_id):
+    """Read task markdown file if it exists."""
+    filepath = os.path.join(TASK_FILES_DIR, project_id, f"{task_id}.md")
+    if os.path.isfile(filepath):
+        with open(filepath, "r") as f:
+            return f.read()
+    return None
+
+
+# Track workflow sessions for cleanup: { project_id: { task_id: set(session_keys) } }
+def _wf_task_session_key(agent_id, project_id, task_id):
+    """Return a stable session key for a workflow task.
+
+    All calls for the same task (work, review, rework) reuse one session.
+    This means the agent keeps context across the full task lifecycle,
+    prompt caching kicks in, and only ONE session is created per task.
+    """
+    return f"agent:{agent_id}:openai:wf-{project_id[:8]}-{task_id[:8]}"
+
+
+def _wf_extract_session_activity(agent_id, project_id, task_id):
+    """Extract file activity and tool usage from a workflow task's session JSONL.
+
+    Returns a dict with:
+      files_read: list of file paths read
+      files_edited: list of file paths edited/written
+      files_written: list of file paths created/written
+      exec_commands: list of commands run
+      browser_actions: list of browser actions taken
+      tool_call_count: total number of tool calls
+    """
+    home_path = VO_CONFIG.get("openclaw", {}).get("homePath", os.path.expanduser("~/.openclaw"))
+    sessions_dir = os.path.join(home_path, "agents", agent_id, "sessions")
+    sessions_json_path = os.path.join(sessions_dir, "sessions.json")
+    session_key = _wf_task_session_key(agent_id, project_id, task_id)
+
+    activity = {
+        "files_read": [],
+        "files_edited": [],
+        "files_written": [],
+        "exec_commands": [],
+        "browser_actions": [],
+        "tool_call_count": 0,
+    }
+
+    try:
+        if not os.path.exists(sessions_json_path):
+            return activity
+        with open(sessions_json_path, "r") as f:
+            sessions_data = json.load(f)
+        session_info = sessions_data.get(session_key)
+        if not session_info:
+            return activity
+        session_id = session_info.get("sessionId", "")
+        if not session_id:
+            return activity
+
+        jsonl_path = os.path.join(sessions_dir, f"{session_id}.jsonl")
+        if not os.path.exists(jsonl_path):
+            return activity
+
+        seen_files_read = set()
+        seen_files_edit = set()
+        seen_files_write = set()
+
+        with open(jsonl_path, "r") as f:
+            for line in f:
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg = entry.get("message", entry)
+                content = msg.get("content", [])
+                if not isinstance(content, list):
+                    continue
+                for c in content:
+                    if not isinstance(c, dict):
+                        continue
+                    if c.get("type") != "toolCall":
+                        continue
+                    activity["tool_call_count"] += 1
+                    name = c.get("name", "")
+                    args = c.get("arguments", {})
+                    # Extract file path from various param names
+                    fpath = args.get("path") or args.get("file") or args.get("filePath") or args.get("file_path") or ""
+
+                    if name.lower() in ("read",):
+                        if fpath and fpath not in seen_files_read:
+                            seen_files_read.add(fpath)
+                            activity["files_read"].append(fpath)
+                    elif name.lower() in ("edit",):
+                        if fpath and fpath not in seen_files_edit:
+                            seen_files_edit.add(fpath)
+                            activity["files_edited"].append(fpath)
+                    elif name.lower() in ("write",):
+                        if fpath and fpath not in seen_files_write:
+                            seen_files_write.add(fpath)
+                            activity["files_written"].append(fpath)
+                    elif name.lower() == "exec":
+                        cmd = args.get("command", "")
+                        if cmd:
+                            activity["exec_commands"].append(cmd[:200])
+                    elif name.lower() == "browser":
+                        action = args.get("action", "")
+                        url = args.get("url", "")
+                        if action:
+                            desc = action
+                            if url:
+                                desc += f" → {url}"
+                            activity["browser_actions"].append(desc[:200])
+    except Exception as e:
+        print(f"[WORKFLOW] Activity extraction error: {e}")
+
+    return activity
+
+
+def _wf_format_activity_summary(activity):
+    """Format extracted session activity as markdown for the task file."""
+    lines = []
+
+    if activity["tool_call_count"] == 0:
+        lines.append("⚠️ NO TOOL CALLS DETECTED — agent produced text only, no real changes made.")
+        return "\n".join(lines)
+
+    lines.append(f"**Tool calls:** {activity['tool_call_count']}")
+
+    if activity["files_read"]:
+        lines.append(f"\n**Files read ({len(activity['files_read'])}):**")
+        for f in activity["files_read"]:
+            lines.append(f"  - `{f}`")
+
+    if activity["files_edited"]:
+        lines.append(f"\n**Files edited ({len(activity['files_edited'])}):**")
+        for f in activity["files_edited"]:
+            lines.append(f"  - `{f}`")
+
+    if activity["files_written"]:
+        lines.append(f"\n**Files created/written ({len(activity['files_written'])}):**")
+        for f in activity["files_written"]:
+            lines.append(f"  - `{f}`")
+
+    if activity["browser_actions"]:
+        lines.append(f"\n**Browser verification ({len(activity['browser_actions'])}):**")
+        for b in activity["browser_actions"]:
+            lines.append(f"  - {b}")
+
+    if activity["exec_commands"]:
+        lines.append(f"\n**Commands run ({len(activity['exec_commands'])}):**")
+        for cmd in activity["exec_commands"][:20]:  # cap at 20 to avoid huge logs
+            lines.append(f"  - `{cmd}`")
+        if len(activity["exec_commands"]) > 20:
+            lines.append(f"  - ... and {len(activity['exec_commands']) - 20} more")
+
+    return "\n".join(lines)
+
+
+def _wf_cleanup_task_sessions(agent_id, project_id, task_id):
+    """Delete the single session created for this workflow task."""
+    session_key = _wf_task_session_key(agent_id, project_id, task_id)
+
+    # Clean up session files directly (works inside Docker without openclaw CLI)
+    home_path = VO_CONFIG.get("openclaw", {}).get("homePath", os.path.expanduser("~/.openclaw"))
+    sessions_dir = os.path.join(home_path, "agents", agent_id, "sessions")
+    sessions_json_path = os.path.join(sessions_dir, "sessions.json")
+
+    try:
+        if not os.path.exists(sessions_json_path):
+            return
+
+        with open(sessions_json_path, "r") as f:
+            sessions_data = json.load(f)
+
+        if session_key not in sessions_data:
+            return
+
+        # Get session ID to delete the JSONL file
+        session_id = sessions_data[session_key].get("sessionId", "")
+        del sessions_data[session_key]
+
+        with open(sessions_json_path, "w") as f:
+            json.dump(sessions_data, f)
+
+        # Delete session JSONL and lock files
+        if session_id:
+            for ext in [".jsonl", ".jsonl.lock"]:
+                fpath = os.path.join(sessions_dir, f"{session_id}{ext}")
+                if os.path.exists(fpath):
+                    os.remove(fpath)
+
+        print(f"[WORKFLOW] Cleaned up session for agent={agent_id} task={task_id[:8]}: {session_key}")
+    except Exception as e:
+        print(f"[WORKFLOW] Session cleanup error: {e}")
+
+
+def _wf_call_agent(agent_id, message, timeout=600, project_id=None, task_id=None):
+    """Call an agent and return its response text.
+
+    All calls for the same task reuse ONE session key, so the agent keeps
+    context across work → review → rework cycles, prompt caching works,
+    and only one session exists per task (cleaned up when task is done).
+
+    Strategy:
+    1. Try the OpenClaw Gateway HTTP API (/v1/chat/completions) — synchronous,
+       works when the gateway has openaiHttp enabled.
+    2. Fall back to `openclaw agent` CLI — always available when OpenClaw is installed.
+
+    Both are portable — no hardcoded paths or tokens. Config comes from vo-config.json.
+    """
+    # Use a stable session key per task — reused across all calls for this task
+    session_key = None
+    if project_id and task_id:
+        session_key = _wf_task_session_key(agent_id, project_id, task_id)
+
+    # Try gateway HTTP API first
+    result = _wf_call_agent_http(agent_id, message, timeout, session_key=session_key)
+    if result is not None:
+        return result
+
+    # Fall back to CLI (also pass session key if available)
+    return _wf_call_agent_cli(agent_id, message, timeout, session_key=session_key)
+
+
+def _wf_call_agent_http(agent_id, message, timeout, session_key=None):
+    """Try calling agent via gateway /v1/chat/completions. Returns None if not available.
+    If session_key is provided, uses it for session routing (enables cleanup later)."""
+    import urllib.request
+    import urllib.error
+
+    gateway_http = VO_CONFIG.get("openclaw", {}).get("gatewayHttp", "http://127.0.0.1:18789")
+    token = _get_gateway_token()
+    if not token:
+        return None
+
+    url = f"{gateway_http}/v1/chat/completions"
+    payload = json.dumps({
+        "model": f"openclaw/{agent_id}",
+        "messages": [{"role": "user", "content": message}],
+    })
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {token}",
+    }
+    if session_key:
+        headers["x-openclaw-session-key"] = session_key
+
+    try:
+        req = urllib.request.Request(url, data=payload.encode("utf-8"), headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout + 30) as resp:
+            content_type = resp.headers.get("Content-Type", "")
+            if "application/json" not in content_type:
+                # Gateway returned HTML (endpoint not enabled) — fall back to CLI
+                return None
+            data = json.loads(resp.read().decode("utf-8"))
+            choices = data.get("choices", [])
+            if choices:
+                msg = choices[0].get("message", {})
+                return msg.get("content", "")
+            return data.get("reply", data.get("text", str(data)))
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 405):
+            # Endpoint not available — fall back to CLI
+            return None
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        return f"[ERROR] Gateway returned HTTP {e.code}: {body}"
+    except Exception:
+        return None  # Fall back to CLI
+
+
+def _wf_call_agent_cli(agent_id, message, timeout, session_key=None):
+    """Call agent via `openclaw agent` CLI — always available when OpenClaw is installed."""
+    import subprocess
+    import shutil
+
+    openclaw_bin = shutil.which("openclaw")
+    if not openclaw_bin:
+        return "[ERROR] openclaw CLI not found in PATH"
+
+    cmd = [openclaw_bin, "agent", "--agent", agent_id, "--message", message, "--timeout", str(timeout), "--json"]
+    if session_key:
+        cmd.extend(["--session-id", session_key])
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 60)
+        if result.returncode == 0:
+            try:
+                data = json.loads(result.stdout)
+                return data.get("reply", data.get("text", result.stdout))
+            except json.JSONDecodeError:
+                return result.stdout.strip()
+        else:
+            return f"[ERROR] Agent returned code {result.returncode}: {result.stderr.strip()[:500]}"
+    except subprocess.TimeoutExpired:
+        return "[ERROR] Agent call timed out"
+    except Exception as e:
+        return f"[ERROR] Agent call failed: {str(e)}"
+
+def _wf_build_project_context(project, task):
+    """Build project and task metadata context string."""
+    lines = []
+    proj_title = project.get("title") or project.get("name") or "Untitled Project"
+    proj_desc = project.get("description", "")
+    proj_tags = project.get("tags", [])
+    task_tags = task.get("tags", [])
+    task_priority = task.get("priority", "medium")
+    task_assignee = task.get("assignee", "unassigned")
+
+    lines.append(f"PROJECT: {proj_title}")
+    if proj_desc:
+        lines.append(f"PROJECT DESCRIPTION: {proj_desc}")
+    if proj_tags:
+        lines.append(f"PROJECT TAGS: {', '.join(proj_tags)}")
+    if task_tags:
+        lines.append(f"TASK TAGS: {', '.join(task_tags)}")
+    lines.append(f"PRIORITY: {task_priority}")
+    lines.append(f"ASSIGNED TO: {task_assignee}")
+    return "\n".join(lines)
+
+
+def _wf_build_task_prompt(task, task_file_content=None, project=None):
+    """Build the autonomous work prompt for an agent."""
+    project_context = ""
+    if project:
+        project_context = _wf_build_project_context(project, task) + "\n\n"
+
+    checklist_text = ""
+    if task.get("checklist"):
+        checklist_text = "\n\nChecklist (you must complete ALL items):\n"
+        for i, item in enumerate(task["checklist"], 1):
+            status = "✅ DONE" if item.get("done") else "⬜ TODO"
+            checklist_text += f"  {i}. [{status}] {item.get('text', '')}\n"
+
+    previous_work = ""
+    if task_file_content:
+        previous_work = f"\n\n--- PREVIOUS WORK LOG ---\n{task_file_content}\n--- END PREVIOUS WORK LOG ---\n\nContinue from where you left off. Do NOT redo work that was already completed."
+
+    return f"""You have been assigned a task. Complete it fully on your own. Do NOT ask for clarification, followups, or user input.
+
+{project_context}TASK: {task.get('title', 'Untitled')}
+
+DESCRIPTION:
+{task.get('description', 'No description provided.')}
+{checklist_text}
+{previous_work}
+
+MANDATORY RULES — VIOLATIONS WILL FAIL REVIEW:
+1. You MUST use tools (read, edit, exec, browser) to make REAL changes to actual files. Text-only responses WILL BE REJECTED.
+2. Read the relevant source files FIRST to understand the codebase before making changes.
+3. Use the edit tool to modify files. Use exec to run commands, test, or verify.
+4. After making changes, verify them yourself — run the app, check the output, confirm it works.
+5. Use the browser tool to visually verify UI changes on the running app/site if applicable.
+6. In your final report, list EVERY file you modified and what you changed.
+
+A reviewer will independently verify your work by reading the actual files and browsing the app. If no real file changes are found, ALL items will be marked DID_NOT_PASS.
+
+WARNING: Do NOT run 'docker restart' on this app's container — it will kill the workflow pipeline managing this task. If you need to reload server changes, the app live-mounts /app so file edits take effect on the next HTTP request for static files. For server.py changes that need a process reload, note what needs restarting in your report and the reviewer will handle it."""
+
+def _wf_build_review_prompt(task, task_file_content=None, project=None):
+    """Build the self-review prompt for an agent."""
+    project_context = ""
+    if project:
+        project_context = _wf_build_project_context(project, task) + "\n\n"
+
+    items_text = ""
+    if task.get("checklist"):
+        for i, item in enumerate(task["checklist"], 1):
+            items_text += f"  {i}. {item.get('text', '')}\n"
+
+    return f"""{project_context}Review your completed work on: {task.get('title', 'Untitled')}
+
+You must INDEPENDENTLY VERIFY each checklist item. Do NOT trust your previous claims — verify by actually checking.
+
+MANDATORY REVIEW STEPS:
+1. Use the read tool to open the actual source files that were supposed to be modified. Confirm the changes exist in the code.
+2. Use exec to run any tests, linters, or verification commands.
+3. Use the browser tool to load the running app/site and visually confirm UI changes are working. Take snapshots.
+4. If you cannot find real file changes for an item, mark it DID_NOT_PASS regardless of what was claimed earlier.
+
+For EACH checklist item, respond with one of these statuses:
+- PASS — verified in the actual files AND confirmed working in the browser/app
+- NEEDS_MORE_WORK — partially implemented but has issues you can identify in the code
+- DID_NOT_PASS — no real changes found in files, or changes don't work
+- REQUIRES_USER_REVIEW — involves destructive operations, out of scope, or needs human judgment
+
+Respond in this EXACT format (one line per item, after your verification):
+REVIEW_ITEM_1: <status>
+REVIEW_ITEM_2: <status>
+...
+
+Checklist items to review:
+{items_text}
+
+CRITICAL: You MUST use tools (read, exec, browser) during this review. A text-only review with no tool calls will be considered invalid."""
+
+def _wf_build_rework_prompt(task, failed_items, task_file_content=None, project=None):
+    """Build a rework prompt for failed review items."""
+    # project context not repeated in rework — agent already has it from the same session
+    items_text = ""
+    for i, item in enumerate(failed_items, 1):
+        items_text += f"  {i}. {item.get('text', '')} — Status: {item.get('reviewStatus', 'needs_more_work')}\n"
+
+    previous_work = ""
+    if task_file_content:
+        previous_work = f"\n\n--- PREVIOUS WORK LOG ---\n{task_file_content}\n--- END PREVIOUS WORK LOG ---"
+
+    return f"""These items need more work on: {task.get('title', 'Untitled')}
+
+The following checklist items did NOT pass review. Fix them yourself. Do not ask for help.
+
+Items that need work:
+{items_text}
+{previous_work}
+
+MANDATORY RULES:
+1. You MUST use tools (read, edit, exec, browser) to make REAL changes to actual files.
+2. Read the relevant files first, then use edit to fix the issues.
+3. After fixing, verify your changes work — use exec to test and browser to visually confirm UI changes.
+4. Only fix the items listed above. Do NOT redo work that already passed.
+5. In your report, list EVERY file you modified and what you changed.
+
+A reviewer will independently verify your fixes by reading the actual files and browsing the app."""
+
+def _wf_parse_review_response(response_text, checklist):
+    """Parse the agent's review response into structured results.
+
+    Handles formats like:
+      REVIEW_ITEM_1: PASS
+      REVIEW_ITEM_2: NEEDS_MORE_WORK
+    Or:
+      1. PASS
+      Item 3: DID_NOT_PASS
+    Or freeform lines containing status keywords.
+
+    Important: checks longer status strings first to avoid "PASS" matching "DID_NOT_PASS".
+    """
+    results = []
+    lines = response_text.strip().split("\n")
+
+    # Ordered longest-first to prevent "pass" from matching "did_not_pass"
+    status_patterns = [
+        ("requires_user_review", "requires_user_review"),
+        ("requires user review", "requires_user_review"),
+        ("needs_more_work", "needs_more_work"),
+        ("needs more work", "needs_more_work"),
+        ("did_not_pass", "did_not_pass"),
+        ("did not pass", "did_not_pass"),
+        ("pass", "pass"),
+    ]
+
+    item_idx = 0
+    for line in lines:
+        line_stripped = line.strip()
+        if not line_stripped or item_idx >= len(checklist):
+            continue
+
+        line_lower = line_stripped.lower()
+
+        # Skip lines that don't look like review items (pure prose, headers, etc.)
+        # Accept lines with REVIEW_ITEM_, numbered items, or containing a status keyword
+        is_review_line = (
+            "review_item" in line_lower
+            or re_module.match(r'^\d+[\.\):\s]', line_stripped)
+            or "item " in line_lower
+        )
+
+        matched_status = None
+        for pattern, status_val in status_patterns:
+            if pattern in line_lower:
+                matched_status = status_val
+                break
+
+        if matched_status and (is_review_line or item_idx == 0 or len(checklist) == 1):
+            results.append({
+                "id": checklist[item_idx].get("id"),
+                "text": checklist[item_idx].get("text", ""),
+                "status": matched_status,
+            })
+            item_idx += 1
+        elif matched_status and not is_review_line:
+            # Heuristic: if we're already matching items and this line has a status,
+            # it's probably a continuation
+            if len(results) > 0:
+                results.append({
+                    "id": checklist[item_idx].get("id"),
+                    "text": checklist[item_idx].get("text", ""),
+                    "status": matched_status,
+                })
+                item_idx += 1
+
+    # If parsing failed or incomplete, default remaining to needs_more_work
+    for i in range(len(results), len(checklist)):
+        results.append({
+            "id": checklist[i].get("id"),
+            "text": checklist[i].get("text", ""),
+            "status": "needs_more_work",
+        })
+
+    return results
+
+def _wf_run_pipeline(project_id, single_task=False):
+    """Main workflow pipeline — runs in a background thread."""
+    with _WORKFLOW_LOCK:
+        wf = _WORKFLOW_STATE.get(project_id)
+        if not wf:
+            return
+
+    stop_flag = wf["stopFlag"]
+
+    try:
+      _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag)
+    except Exception as e:
+        print(f"[WORKFLOW ERROR] Pipeline crashed for {project_id}: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        # Always clean up state
+        with _WORKFLOW_LOCK:
+            if project_id in _WORKFLOW_STATE:
+                _WORKFLOW_STATE[project_id]["active"] = False
+                _WORKFLOW_STATE[project_id]["thread"] = None
+        _wf_persist_state(project_id)
+        _wf_clear_persisted_state(project_id)
+
+
+def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
+    """Inner pipeline logic — wrapped by _wf_run_pipeline for error safety."""
+    while not stop_flag.is_set():
+        # Load fresh project data
+        data = _load_projects()
+        project = next((x for x in data["projects"] if x["id"] == project_id), None)
+        if not project:
+            break
+
+        # Check for an active task (in-progress or review) before pulling from backlog.
+        # This prevents backlog tasks from jumping ahead of tasks sent back for rework.
+        active_task = _wf_get_active_task(project)
+        if active_task:
+            # There's already a task being worked on — do NOT pull from backlog.
+            # The pipeline should not start a new task while one is still active.
+            with _WORKFLOW_LOCK:
+                wf["phase"] = "blocked_by_active_task"
+                wf["error"] = f"Task '{active_task.get('title', '')}' is still in progress. Backlog tasks will not start until it is fully done or moved to backlog/done."
+                wf["currentTaskId"] = active_task["id"]
+                wf["active"] = False
+            _wf_persist_state(project_id)
+            break
+
+        # Find next backlog task
+        task = _wf_next_backlog_task(project)
+        if not task:
+            # No more backlog tasks
+            with _WORKFLOW_LOCK:
+                wf["phase"] = "idle"
+                wf["currentTaskId"] = None
+                wf["active"] = False
+            break
+
+        task_id = task["id"]
+        assignee = task.get("assignee")
+        if not assignee:
+            # Skip unassigned tasks
+            with _WORKFLOW_LOCK:
+                wf["phase"] = "error"
+                wf["error"] = f"Task '{task.get('title')}' has no assignee"
+                wf["active"] = False
+            break
+
+        with _WORKFLOW_LOCK:
+            wf["currentTaskId"] = task_id
+            wf["phase"] = "dispatching"
+            wf["error"] = None
+        _wf_persist_state(project_id)
+
+        if stop_flag.is_set():
+            break
+
+        # Step 1: Move straight to In Progress
+        inprogress_col = _wf_get_inprogress_col(project)
+        if not inprogress_col:
+            with _WORKFLOW_LOCK:
+                wf["phase"] = "error"
+                wf["error"] = "No 'In Progress' column found"
+                wf["active"] = False
+            break
+
+        _wf_move_task(project_id, task_id, inprogress_col["id"], by="workflow")
+        _wf_write_task_file(project_id, task, "in_progress", work_log_entry="Sent to agent for work")
+
+        with _WORKFLOW_LOCK:
+            wf["phase"] = "in_progress"
+        _wf_persist_state(project_id)
+
+        if stop_flag.is_set():
+            break
+
+        task_file = _wf_read_task_file(project_id, task_id)
+        prompt = _wf_build_task_prompt(task, task_file, project=project)
+        agent_response = _wf_call_agent(assignee, prompt, project_id=project_id, task_id=task_id)
+
+        if stop_flag.is_set():
+            break
+
+        # Update task file with agent response + file activity
+        work_activity = _wf_extract_session_activity(assignee, project_id, task_id)
+        work_activity_text = _wf_format_activity_summary(work_activity)
+        _wf_write_task_file(project_id, task, "in_progress", work_log_entry=f"Agent response:\n{agent_response[:2000]}\n\n**Activity:**\n{work_activity_text}")
+
+        # Step 3: Move to Review
+        review_col = _wf_get_review_col(project)
+        if not review_col:
+            with _WORKFLOW_LOCK:
+                wf["phase"] = "error"
+                wf["error"] = "No 'Review' column found"
+                wf["active"] = False
+            break
+
+        _wf_move_task(project_id, task_id, review_col["id"], by="workflow")
+
+        # Review loop
+        max_review_cycles = 5
+        review_cycle = 0
+        task_done = False
+
+        while review_cycle < max_review_cycles and not stop_flag.is_set():
+            review_cycle += 1
+            with _WORKFLOW_LOCK:
+                wf["phase"] = "reviewing"
+                wf["reviewCycle"] = review_cycle
+            _wf_persist_state(project_id)
+
+            # Reload task for fresh checklist
+            data = _load_projects()
+            project = next((x for x in data["projects"] if x["id"] == project_id), None)
+            if not project:
+                break
+            task = next((t for t in project["tasks"] if t["id"] == task_id), None)
+            if not task:
+                break
+
+            checklist = task.get("checklist", [])
+            if not checklist:
+                # No checklist = auto-pass
+                task_done = True
+                break
+
+            task_file = _wf_read_task_file(project_id, task_id)
+            review_prompt = _wf_build_review_prompt(task, task_file, project=project)
+            review_response = _wf_call_agent(assignee, review_prompt, project_id=project_id, task_id=task_id)
+
+            if stop_flag.is_set():
+                break
+
+            # Parse review results
+            review_results = _wf_parse_review_response(review_response, checklist)
+
+            # Save review results to task
+            _wf_update_task_field(project_id, task_id, "reviewCheck", review_results)
+            review_activity = _wf_extract_session_activity(assignee, project_id, task_id)
+            review_activity_text = _wf_format_activity_summary(review_activity)
+            _wf_write_task_file(project_id, task, "review", review_results=review_results, work_log_entry=f"Review cycle {review_cycle}:\n{review_response[:2000]}\n\n**Review verification activity:**\n{review_activity_text}")
+
+            # Check results
+            all_pass = all(r.get("status") == "pass" for r in review_results)
+            needs_user = any(r.get("status") == "requires_user_review" for r in review_results)
+            failed_items = [r for r in review_results if r.get("status") in ("needs_more_work", "did_not_pass")]
+
+            if all_pass:
+                task_done = True
+                break
+
+            if needs_user:
+                # Pause workflow — user must intervene
+                with _WORKFLOW_LOCK:
+                    wf["phase"] = "awaiting_user_review"
+                    wf["error"] = "Task requires user review for some items"
+                _wf_persist_state(project_id)
+                _wf_write_task_file(project_id, task, "review", review_results=review_results, work_log_entry="Workflow paused — requires user review")
+                # Wait until user resolves or stop
+                while not stop_flag.is_set():
+                    _time.sleep(5)
+                    # Check if user resolved review items
+                    data = _load_projects()
+                    project = next((x for x in data["projects"] if x["id"] == project_id), None)
+                    if not project:
+                        break
+                    task = next((t for t in project["tasks"] if t["id"] == task_id), None)
+                    if not task:
+                        break
+                    current_review = task.get("reviewCheck", [])
+                    still_needs_user = any(r.get("status") == "requires_user_review" for r in current_review)
+                    if not still_needs_user:
+                        # User resolved — check if all pass now
+                        all_resolved_pass = all(r.get("status") == "pass" for r in current_review)
+                        if all_resolved_pass:
+                            task_done = True
+                            break
+                        else:
+                            # Some items still need work — continue review loop
+                            failed_items = [r for r in current_review if r.get("status") in ("needs_more_work", "did_not_pass")]
+                            break
+                if task_done or stop_flag.is_set():
+                    break
+
+            if failed_items and not stop_flag.is_set():
+                # Move back to In Progress for rework
+                with _WORKFLOW_LOCK:
+                    wf["phase"] = "reworking"
+                _wf_persist_state(project_id)
+
+                # Clear stale reviewCheck so next cycle starts clean
+                _wf_update_task_field(project_id, task_id, "reviewCheck", [])
+
+                _wf_move_task(project_id, task_id, inprogress_col["id"], by="workflow")
+                _wf_write_task_file(project_id, task, "in_progress", work_log_entry=f"Back to In Progress — {len(failed_items)} items need rework")
+
+                task_file = _wf_read_task_file(project_id, task_id)
+                rework_prompt = _wf_build_rework_prompt(task, failed_items, task_file)
+                rework_response = _wf_call_agent(assignee, rework_prompt, project_id=project_id, task_id=task_id)
+
+                if stop_flag.is_set():
+                    break
+
+                rework_activity = _wf_extract_session_activity(assignee, project_id, task_id)
+                rework_activity_text = _wf_format_activity_summary(rework_activity)
+                _wf_write_task_file(project_id, task, "in_progress", work_log_entry=f"Rework response:\n{rework_response[:2000]}\n\n**Rework activity:**\n{rework_activity_text}")
+
+                # Move back to Review
+                _wf_move_task(project_id, task_id, review_col["id"], by="workflow")
+
+        # End of review loop
+        if stop_flag.is_set():
+            break
+
+        if task_done:
+            # Extract session activity BEFORE cleanup (needs the session files)
+            activity = _wf_extract_session_activity(assignee, project_id, task_id)
+            activity_summary = _wf_format_activity_summary(activity)
+
+            # Move to Done
+            done_col = _wf_get_done_col(project)
+            if done_col:
+                _wf_move_task(project_id, task_id, done_col["id"], by="workflow")
+
+                # Write completion with activity summary
+                completion_entry = f"Task completed — all review checks passed\n\n### Task Completion Summary\n{activity_summary}"
+                _wf_write_task_file(project_id, task, "done", work_log_entry=completion_entry)
+
+                # Mark all checklist items as done
+                data = _load_projects()
+                project = next((x for x in data["projects"] if x["id"] == project_id), None)
+                if project:
+                    task = next((t for t in project["tasks"] if t["id"] == task_id), None)
+                    if task and task.get("checklist"):
+                        for item in task["checklist"]:
+                            item["done"] = True
+                        task["updatedAt"] = _proj_now()
+                        _save_projects(data)
+
+            # Clean up workflow sessions for this task (AFTER activity extraction)
+            _wf_cleanup_task_sessions(assignee, project_id, task_id)
+
+            with _WORKFLOW_LOCK:
+                wf["phase"] = "task_done"
+                wf["currentTaskId"] = None
+            _wf_persist_state(project_id)
+
+            if single_task:
+                # Auto Mode OFF — stop after one task
+                with _WORKFLOW_LOCK:
+                    wf["active"] = False
+                break
+            else:
+                # Auto Mode ON — continue to next task
+                _time.sleep(2)  # Brief pause between tasks
+                continue
+        else:
+            # Task did NOT pass review after max cycles — do NOT pull next backlog task.
+            # Keep this task in progress and pause for human intervention.
+            _wf_move_task(project_id, task_id, inprogress_col["id"], by="workflow")
+            _wf_write_task_file(project_id, task, "in_progress",
+                work_log_entry=f"Review failed after {max_review_cycles} cycles — paused for human intervention. Backlog tasks will NOT proceed until this task passes or is manually resolved.")
+
+            with _WORKFLOW_LOCK:
+                wf["phase"] = "awaiting_human_intervention"
+                wf["error"] = f"Task '{task.get('title', '')}' failed review after {max_review_cycles} cycles. Resolve manually or retry."
+            _wf_persist_state(project_id)
+
+            # Wait until human resolves (moves task to done/backlog, or restarts workflow)
+            while not stop_flag.is_set():
+                _time.sleep(5)
+                # Check if task was manually moved to done or back to backlog
+                data = _load_projects()
+                project = next((x for x in data["projects"] if x["id"] == project_id), None)
+                if not project:
+                    break
+                task = next((t for t in project["tasks"] if t["id"] == task_id), None)
+                if not task:
+                    break
+                done_col = _wf_get_done_col(project)
+                backlog_col = _wf_get_backlog_col(project)
+                current_col = task.get("columnId")
+                if done_col and current_col == done_col["id"]:
+                    # Human moved to done — clean up and continue
+                    _wf_cleanup_task_sessions(assignee, project_id, task_id)
+                    break
+                if backlog_col and current_col == backlog_col["id"]:
+                    # Human moved back to backlog — skip this task
+                    _wf_cleanup_task_sessions(assignee, project_id, task_id)
+                    break
+
+            if stop_flag.is_set():
+                break
+
+            # If single_task mode, stop; otherwise loop will re-check backlog
+            if single_task:
+                with _WORKFLOW_LOCK:
+                    wf["active"] = False
+                break
+            else:
+                _time.sleep(2)
+                continue
+
+    # Pipeline ended (cleanup handled by wrapper in _wf_run_pipeline)
+
+
+WORKFLOW_STATE_FILE = os.path.join(STATUS_DIR, "workflow-state.json")
+
+def _wf_persist_state(project_id):
+    """Persist workflow state to disk so it survives page refreshes and container restarts."""
+    with _WORKFLOW_LOCK:
+        wf = _WORKFLOW_STATE.get(project_id, {})
+    state_data = {}
+    try:
+        if os.path.isfile(WORKFLOW_STATE_FILE):
+            with open(WORKFLOW_STATE_FILE, "r") as f:
+                state_data = json.load(f)
+    except Exception:
+        state_data = {}
+    state_data[project_id] = {
+        "active": wf.get("active", False),
+        "autoMode": wf.get("autoMode", False),
+        "currentTaskId": wf.get("currentTaskId"),
+        "currentAssignee": wf.get("currentAssignee"),
+        "currentTaskTitle": wf.get("currentTaskTitle"),
+        "phase": wf.get("phase", "idle"),
+        "error": wf.get("error"),
+        "reviewCycle": wf.get("reviewCycle", 0),
+    }
+    try:
+        os.makedirs(os.path.dirname(WORKFLOW_STATE_FILE), exist_ok=True)
+        with open(WORKFLOW_STATE_FILE, "w") as f:
+            json.dump(state_data, f, indent=2)
+    except Exception:
+        pass
+    # Also write shared project-work signal file so OTHER VO instances
+    # (e.g. the personal office on 8085) can show project work indicators.
+    # This file lives in ~/.openclaw/shared/ which is mounted by all VOs.
+    _wf_update_shared_project_work()
+
+
+def _wf_update_shared_project_work():
+    """Write active project-work data to a shared file readable by all VO instances.
+    Maps agent IDs to their active project task info."""
+    import time as _t
+    active_phases = ("in_progress", "dispatching", "reviewing", "rework")
+    shared = {}
+    with _WORKFLOW_LOCK:
+        for pid, wf in _WORKFLOW_STATE.items():
+            if not wf.get("active") or wf.get("phase") not in active_phases:
+                continue
+            agent_id = wf.get("currentAssignee")
+            if not agent_id:
+                continue
+            shared[agent_id] = {
+                "projectId": pid,
+                "taskId": wf.get("currentTaskId", ""),
+                "taskTitle": wf.get("currentTaskTitle", ""),
+                "phase": wf.get("phase", ""),
+                "updatedAt": int(_t.time() * 1000),
+            }
+    try:
+        shared_path = os.path.join(WORKSPACE_BASE, "shared", "project-work.json")
+        os.makedirs(os.path.dirname(shared_path), exist_ok=True)
+        with open(shared_path, "w") as f:
+            json.dump(shared, f)
+    except Exception:
+        pass
+
+
+def _wf_load_persisted_state(project_id):
+    """Load persisted workflow state from disk."""
+    try:
+        if os.path.isfile(WORKFLOW_STATE_FILE):
+            with open(WORKFLOW_STATE_FILE, "r") as f:
+                state_data = json.load(f)
+            return state_data.get(project_id, {})
+    except Exception:
+        pass
+    return {}
+
+def _wf_clear_persisted_state(project_id):
+    """Clear persisted state when workflow ends."""
+    try:
+        if os.path.isfile(WORKFLOW_STATE_FILE):
+            with open(WORKFLOW_STATE_FILE, "r") as f:
+                state_data = json.load(f)
+            state_data.pop(project_id, None)
+            with open(WORKFLOW_STATE_FILE, "w") as f:
+                json.dump(state_data, f, indent=2)
+    except Exception:
+        pass
+
+
+def _handle_workflow_chat(project_id):
+    """GET /api/projects/{id}/workflow/chat — get the active workflow agent's session messages.
+
+    ONLY reads from the task-specific workflow session (wf-<project>-<task>),
+    never from the agent's main session or other sessions.
+    """
+    with _WORKFLOW_LOCK:
+        wf = _WORKFLOW_STATE.get(project_id, {})
+
+    # Also check persisted state if in-memory is empty
+    persisted = _wf_load_persisted_state(project_id)
+    current_task_id = wf.get("currentTaskId") or persisted.get("currentTaskId")
+    phase = wf.get("phase") or persisted.get("phase", "idle")
+
+    # Find the assigned agent — check current task or find any in-progress/review task
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"ok": True, "messages": [], "agent": None}
+
+    agent_key = None
+    task_id = current_task_id
+
+    # First try the tracked current task
+    if task_id:
+        task = next((t for t in p["tasks"] if t["id"] == task_id), None)
+        if task:
+            agent_key = task.get("assignee")
+
+    # If no tracked task, find the most recently active task (in progress or review)
+    if not agent_key:
+        ip_cols = [c["id"] for c in p.get("columns", []) if c.get("title", "").lower() in ("in progress", "review", "to do")]
+        active_tasks = [t for t in p.get("tasks", []) if t.get("columnId") in ip_cols]
+        if active_tasks:
+            active_tasks.sort(key=lambda t: t.get("updatedAt", ""), reverse=True)
+            task_id = active_tasks[0]["id"]
+            agent_key = active_tasks[0].get("assignee")
+
+    if not agent_key or not task_id:
+        return {"ok": True, "messages": [], "agent": None, "phase": phase}
+
+    # Read ONLY from the task-specific workflow session — not the agent's main session
+    msgs = _wf_get_task_session_messages(agent_key, project_id, task_id)
+
+    # Check if the workflow session is still actively running
+    session_active = _wf_is_task_session_active(agent_key, project_id, task_id)
+
+    return {
+        "ok": True,
+        "messages": msgs,
+        "agent": agent_key,
+        "taskId": task_id,
+        "phase": phase,
+        "sessionActive": session_active,
+    }
+
+
+def _wf_get_task_session_messages(agent_id, project_id, task_id, max_messages=50):
+    """Read messages from the task-specific workflow session JSONL only."""
+    session_key = _wf_task_session_key(agent_id, project_id, task_id)
+    home_path = VO_CONFIG.get("openclaw", {}).get("homePath", os.path.expanduser("~/.openclaw"))
+    sessions_dir = os.path.join(home_path, "agents", agent_id, "sessions")
+    sessions_json_path = os.path.join(sessions_dir, "sessions.json")
+
+    try:
+        with open(sessions_json_path, "r") as f:
+            sessions_data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+    session_info = sessions_data.get(session_key)
+    if not session_info:
+        return []
+
+    session_id = session_info.get("sessionId", "")
+    if not session_id:
+        return []
+
+    jsonl_path = os.path.join(sessions_dir, f"{session_id}.jsonl")
+    if not os.path.exists(jsonl_path):
+        return []
+
+    messages = []
+    try:
+        # Read tail of file — use a larger buffer to handle long lines (tool results
+        # can be 100KB+). Read last 256KB to ensure we capture multiple complete lines.
+        TAIL_BYTES = 256 * 1024
+        with open(jsonl_path, "rb") as fb:
+            fb.seek(0, 2)
+            fsize = fb.tell()
+            start = max(0, fsize - TAIL_BYTES)
+            fb.seek(start)
+            tail_data = fb.read().decode("utf-8", errors="replace")
+        if start > 0:
+            nl = tail_data.find("\n")
+            if nl >= 0:
+                tail_data = tail_data[nl + 1:]
+        for line in tail_data.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            msg = entry.get("message", entry)
+            role = msg.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            content = msg.get("content", [])
+            text = ""
+            tool_info = []
+            if isinstance(content, str):
+                text = content
+            elif isinstance(content, list):
+                for c in content:
+                    if isinstance(c, dict):
+                        if c.get("type") == "text":
+                            text += c.get("text", "")
+                        elif c.get("type") == "toolCall":
+                            name = c.get("name", "?")
+                            args = c.get("arguments", {})
+                            tool_info.append({"name": name, "args_preview": str(args)[:100]})
+                        elif c.get("type") == "toolResult":
+                            pass  # skip tool results for chat display
+            if text or tool_info:
+                m = {"role": role, "timestamp": msg.get("timestamp", entry.get("timestamp", 0))}
+                if text:
+                    m["text"] = text[:2000]
+                if tool_info:
+                    m["tools"] = tool_info[:5]  # cap tool display
+                messages.append(m)
+        messages = messages[-max_messages:]
+    except Exception:
+        pass
+    return messages
+
+
+def _wf_is_task_session_active(agent_id, project_id, task_id):
+    """Check if the task-specific workflow session is still actively running."""
+    session_key = _wf_task_session_key(agent_id, project_id, task_id)
+    home_path = VO_CONFIG.get("openclaw", {}).get("homePath", os.path.expanduser("~/.openclaw"))
+    sessions_dir = os.path.join(home_path, "agents", agent_id, "sessions")
+    sessions_json_path = os.path.join(sessions_dir, "sessions.json")
+
+    try:
+        with open(sessions_json_path, "r") as f:
+            sessions_data = json.load(f)
+        session_info = sessions_data.get(session_key, {})
+        status = session_info.get("status", "")
+        return status == "running"
+    except Exception:
+        return False
+
+
+def _handle_workflow_start(project_id, body=None):
+    """POST /api/projects/{id}/workflow/start — start the workflow pipeline."""
+    body = body or {}
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"error": "Project not found", "_status": 404}
+
+    with _WORKFLOW_LOCK:
+        wf = _WORKFLOW_STATE.get(project_id)
+        if wf and wf.get("active"):
+            return {"error": "Workflow already running for this project", "_status": 409}
+
+        auto_mode = body.get("autoMode", False)
+        stop_flag = threading.Event()
+        wf = {
+            "active": True,
+            "autoMode": auto_mode,
+            "currentTaskId": None,
+            "phase": "starting",
+            "error": None,
+            "reviewCycle": 0,
+            "stopFlag": stop_flag,
+            "thread": None,
+        }
+        _WORKFLOW_STATE[project_id] = wf
+
+    # Update project workflow settings
+    p["workflowActive"] = True
+    p["autoMode"] = auto_mode
+    p["updatedAt"] = _proj_now()
+    _save_projects(data)
+    _log_activity(p, "workflow_started", "user", f"Workflow started (autoMode: {auto_mode})")
+
+    _wf_persist_state(project_id)
+
+    # Launch background thread
+    single_task = not auto_mode
+    t = threading.Thread(target=_wf_run_pipeline, args=(project_id, single_task), daemon=True)
+    with _WORKFLOW_LOCK:
+        wf["thread"] = t
+    t.start()
+
+    return {"ok": True, "status": "started", "autoMode": auto_mode}
+
+
+def _handle_workflow_stop(project_id):
+    """POST /api/projects/{id}/workflow/stop — stop the workflow."""
+    with _WORKFLOW_LOCK:
+        wf = _WORKFLOW_STATE.get(project_id)
+        if not wf or not wf.get("active"):
+            return {"ok": True, "status": "already_stopped"}
+        wf["stopFlag"].set()
+        wf["active"] = False
+        wf["phase"] = "stopped"
+
+    _wf_persist_state(project_id)
+    _wf_clear_persisted_state(project_id)
+
+    # Update project
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if p:
+        p["workflowActive"] = False
+        p["updatedAt"] = _proj_now()
+        _save_projects(data)
+        _log_activity(p, "workflow_stopped", "user", "Workflow stopped by user")
+
+    return {"ok": True, "status": "stopped"}
+
+
+def _handle_workflow_auto_mode(project_id, body):
+    """PUT /api/projects/{id}/workflow/auto-mode — toggle auto mode."""
+    auto_mode = body.get("autoMode", False)
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"error": "Project not found", "_status": 404}
+    p["autoMode"] = auto_mode
+    p["updatedAt"] = _proj_now()
+    _save_projects(data)
+
+    with _WORKFLOW_LOCK:
+        wf = _WORKFLOW_STATE.get(project_id)
+        if wf:
+            wf["autoMode"] = auto_mode
+
+    return {"ok": True, "autoMode": auto_mode}
+
+
+def _handle_workflow_status(project_id):
+    """GET /api/projects/{id}/workflow/status — get workflow state."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"error": "Project not found", "_status": 404}
+
+    with _WORKFLOW_LOCK:
+        wf = _WORKFLOW_STATE.get(project_id, {})
+        # Detect stale state: persisted says active but thread is dead
+        thread = wf.get("thread")
+        thread_alive = thread is not None and thread.is_alive() if thread else False
+
+    # Merge with persisted state (for page refresh resilience)
+    persisted = _wf_load_persisted_state(project_id)
+    in_memory_active = wf.get("active", False)
+    persisted_active = persisted.get("active", False)
+
+    # If persisted says active but no thread is running, it's stale — clean up
+    if persisted_active and not in_memory_active and not thread_alive:
+        _wf_clear_persisted_state(project_id)
+        persisted_active = False
+        persisted["phase"] = persisted.get("phase", "idle")
+        # If the phase was a working phase, mark it as stalled
+        if persisted.get("phase") in ("in_progress", "reviewing", "reworking", "dispatching"):
+            persisted["phase"] = "stalled"
+
+    active = in_memory_active or persisted_active
+    phase = wf.get("phase") or persisted.get("phase", "idle")
+    current_task = wf.get("currentTaskId") or persisted.get("currentTaskId")
+    error = wf.get("error") or persisted.get("error")
+    review_cycle = wf.get("reviewCycle", 0) or persisted.get("reviewCycle", 0)
+
+    # Check if the task-specific session is still actively running in OpenClaw
+    # This catches cases where the workflow thread is mid-API-call (active=True in session)
+    # but the in-memory state hasn't been updated yet
+    session_active = False
+    if current_task and not active:
+        # Find the assignee for the current task
+        task = next((t for t in p.get("tasks", []) if t["id"] == current_task), None)
+        if task and task.get("assignee"):
+            session_active = _wf_is_task_session_active(task["assignee"], project_id, current_task)
+            if session_active:
+                # Session is running but workflow state says inactive — the thread
+                # is mid-API-call. Report as active so UI shows progress.
+                active = True
+                if phase in ("idle", "stalled", "blocked_by_active_task"):
+                    phase = "working"
+
+    return {
+        "ok": True,
+        "active": active,
+        "autoMode": p.get("autoMode", False),
+        "currentTaskId": current_task,
+        "phase": phase,
+        "error": error,
+        "reviewCycle": review_cycle,
+        "sessionActive": session_active,
+    }
+
+
+def _handle_review_check_update(project_id, task_id, body):
+    """PUT /api/projects/{id}/tasks/{taskId}/review-check — update review status."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return {"error": "Project not found", "_status": 404}
+    task = next((t for t in p["tasks"] if t["id"] == task_id), None)
+    if not task:
+        return {"error": "Task not found", "_status": 404}
+
+    review_check = body.get("reviewCheck", [])
+    task["reviewCheck"] = review_check
+    task["updatedAt"] = _proj_now()
+    p["updatedAt"] = _proj_now()
+    by = body.get("by", "user")
+    _log_activity(p, "review_updated", by, "Review check updated", task_id)
+    _save_projects(data)
+    # Update task markdown file with review results
+    current_col = next((c["title"] for c in p.get("columns", []) if c["id"] == task.get("columnId")), "review")
+    _wf_write_task_file(project_id, task, current_col.lower().replace(" ", "_"), review_results=review_check, work_log_entry=f"Review check updated by {by}")
+    return {"ok": True, "task": task}
+
+
+def _handle_template_delete(template_id):
+    """DELETE /api/projects/templates/{id}."""
+    data = _load_projects()
+    before = len(data.get("templates", []))
+    data["templates"] = [t for t in data.get("templates", []) if t["id"] != template_id]
+    if len(data["templates"]) == before:
+        return {"error": "Template not found", "_status": 404}
+    _save_projects(data)
+    return {"ok": True, "id": template_id}
+
+
 def _handle_agent_delete(body):
     """Delete an OpenClaw agent — removes from config, agent dir, and workspace."""
     agent_id = (body.get("id") or "").strip()
@@ -1047,9 +3287,9 @@ def get_agent_messages(agent_key, max_messages=500):
                 if ts:
                     try:
                         from datetime import datetime, timezone
-                        import zoneinfo
                         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        et = dt.astimezone(zoneinfo.ZoneInfo("America/New_York"))
+                        # Use system local timezone (portable — no hardcoded tz)
+                        et = dt.astimezone()
                         short_ts = et.strftime("%I:%M %p").lstrip("0")
                     except Exception:
                         short_ts = ""
@@ -1525,6 +3765,11 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True, "status": "running"}).encode())
+        elif self.path == "/e2e-health":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"status": "ok", "test": "e2e"}).encode())
         elif self.path == "/status":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -1602,6 +3847,150 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 msgs = get_agent_messages(agent_key, max_messages=500)
                 if msgs:
                     result[agent_key] = msgs
+            # Build project-work map: which agents are currently working on project tasks
+            # Primary detection: check each agent's most recently active session key
+            # for the "wf-" prefix (workflow sessions created by the project system).
+            # This works across all VO instances since they read the same session files.
+            project_work = {}
+            for agent_key, agent_id in AGENT_SESSION_IDS.items():
+                try:
+                    sdir = os.path.join(WORKSPACE_BASE, f"agents/{agent_id}/sessions")
+                    sjson = os.path.join(sdir, "sessions.json")
+                    with open(sjson, "r") as _sf:
+                        sdata = json.load(_sf)
+                    best_ts = 0
+                    best_key = ""
+                    for skey, sval in sdata.items():
+                        if not isinstance(sval, dict):
+                            continue
+                        sts = sval.get("updatedAt", 0)
+                        if sts > best_ts:
+                            best_ts = sts
+                            best_key = skey
+                    # Detect workflow session: key contains ":wf-"
+                    if best_key and ":wf-" in best_key:
+                        import time as _time_mod
+                        if _time_mod.time() - best_ts / 1000 < 300:
+                            project_work[agent_key] = {
+                                "projectId": "",
+                                "taskId": "",
+                                "taskTitle": "Project task",
+                                "phase": "in_progress",
+                            }
+                except Exception:
+                    pass
+            # Enrich with in-memory workflow state / persisted state (has task titles etc.)
+            active_phases = ("in_progress", "dispatching", "reviewing", "rework")
+            # 1) Collect from in-memory workflow state
+            wf_entries = {}
+            with _WORKFLOW_LOCK:
+                for pid, wf in _WORKFLOW_STATE.items():
+                    wf_entries[pid] = dict(wf)
+            # 2) Merge persisted state for workflows not in memory
+            try:
+                if os.path.isfile(WORKFLOW_STATE_FILE):
+                    with open(WORKFLOW_STATE_FILE, "r") as _pwf:
+                        persisted_wfs = json.load(_pwf)
+                    for pid, pwf in persisted_wfs.items():
+                        if pid not in wf_entries:
+                            wf_entries[pid] = pwf
+                        else:
+                            for k in ("currentAssignee", "currentTaskTitle", "currentTaskId"):
+                                if not wf_entries[pid].get(k) and pwf.get(k):
+                                    wf_entries[pid][k] = pwf[k]
+            except Exception:
+                pass
+            # Build from workflow entries
+            proj_data = None
+            for pid, wf in wf_entries.items():
+                if not wf.get("active") or wf.get("phase") not in active_phases:
+                    continue
+                agent_id = wf.get("currentAssignee")
+                task_title = wf.get("currentTaskTitle", "")
+                task_id = wf.get("currentTaskId", "")
+                if not agent_id and task_id:
+                    if not proj_data:
+                        proj_data = _load_projects()
+                    p = next((x for x in proj_data.get("projects", []) if x["id"] == pid), None)
+                    if p:
+                        task = next((t for t in p.get("tasks", []) if t["id"] == task_id), None)
+                        if task:
+                            agent_id = task.get("assignee")
+                            if not task_title:
+                                task_title = task.get("title", "")
+                if not agent_id:
+                    continue
+                for sk, aid in AGENT_SESSION_IDS.items():
+                    if aid == agent_id:
+                        project_work[sk] = {
+                            "projectId": pid,
+                            "taskId": task_id,
+                            "taskTitle": task_title,
+                            "phase": wf.get("phase", ""),
+                        }
+                        break
+            # 3) Fallback: scan projects.json for workflowActive projects with
+            #    tasks sitting in "In Progress" or "Review" columns — covers the
+            #    case where the workflow thread died or the container restarted
+            #    but the task was never moved back.
+            if not proj_data:
+                proj_data = _load_projects()
+            for p in proj_data.get("projects", []):
+                pid = p["id"]
+                if pid in project_work:
+                    continue  # already found via workflow state
+                if not p.get("workflowActive"):
+                    continue
+                active_col_ids = set()
+                for c in p.get("columns", []):
+                    ct = c.get("title", "").lower()
+                    if ct in ("in progress", "review"):
+                        active_col_ids.add(c["id"])
+                if not active_col_ids:
+                    continue
+                for task in p.get("tasks", []):
+                    if task.get("columnId") not in active_col_ids:
+                        continue
+                    assignee = task.get("assignee")
+                    if not assignee:
+                        continue
+                    col_title = ""
+                    for c in p.get("columns", []):
+                        if c["id"] == task.get("columnId"):
+                            col_title = c.get("title", "")
+                            break
+                    phase = "in_progress" if col_title.lower() == "in progress" else "reviewing"
+                    for sk, aid in AGENT_SESSION_IDS.items():
+                        if aid == assignee and sk not in project_work:
+                            project_work[sk] = {
+                                "projectId": pid,
+                                "taskId": task["id"],
+                                "taskTitle": task.get("title", ""),
+                                "phase": phase,
+                            }
+                            break
+            # Update shared file so other VO instances can see project work
+            if project_work:
+                try:
+                    import time as _t
+                    shared = {}
+                    now_ms = int(_t.time() * 1000)
+                    for sk, info in project_work.items():
+                        agent_id = AGENT_SESSION_IDS.get(sk, sk)
+                        shared[agent_id] = {
+                            "projectId": info.get("projectId", ""),
+                            "taskId": info.get("taskId", ""),
+                            "taskTitle": info.get("taskTitle", ""),
+                            "phase": info.get("phase", ""),
+                            "updatedAt": now_ms,
+                        }
+                    shared_path = os.path.join(WORKSPACE_BASE, "shared", "project-work.json")
+                    os.makedirs(os.path.dirname(shared_path), exist_ok=True)
+                    with open(shared_path, "w") as _spf:
+                        json.dump(shared, _spf)
+                except Exception:
+                    pass
+            result["_projectWork"] = project_work
             self.wfile.write(json.dumps(result).encode())
         elif self.path == "/browser-controller":
             # Return which agent currently has browser control
@@ -1969,6 +4358,68 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
+        # ── PROJECTS API ────────────────────────────────────────────
+        elif self.path == "/api/projects" or self.path.startswith("/api/projects?"):
+            qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+            result = _handle_projects_list(qs)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path == "/api/projects/scores":
+            result = _handle_scores_leaderboard()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path == "/api/projects/templates":
+            result = _handle_projects_templates()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/projects/") and self.path.endswith("/workflow/chat"):
+            proj_id = self.path.split("/api/projects/")[1].rsplit("/workflow/chat", 1)[0]
+            result = _handle_workflow_chat(proj_id)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/projects/") and self.path.endswith("/workflow/status"):
+            proj_id = self.path.split("/api/projects/")[1].rsplit("/workflow/status", 1)[0]
+            result = _handle_workflow_status(proj_id)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/projects/") and self.path.endswith("/report"):
+            proj_id = self.path.split("/api/projects/")[1].rsplit("/report", 1)[0]
+            result = _handle_project_report(proj_id)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/projects/") and "/tasks" not in self.path and "/report" not in self.path and "/workflow" not in self.path:
+            proj_id = self.path.split("/api/projects/")[1].strip("/")
+            if proj_id and proj_id != "templates":
+                result = _handle_project_get(proj_id)
+                self.send_response(result.get("_status", 200))
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                result.pop("_status", None)
+                self.wfile.write(json.dumps(result).encode())
+            else:
+                self.send_response(404)
+                self.end_headers()
         else:
             super().do_GET()
 
@@ -2685,6 +5136,58 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         request = {"type": "set-model", "agent_id": agent_id, "model": model_id, "status_key": status_key}
         return self._send_watcher_request(request)
 
+    def do_PUT(self):
+        length = int(self.headers.get('Content-Length', 0))
+        body = json.loads(self.rfile.read(length)) if length else {}
+        # ── PROJECTS PUT ─────────────────────────────────────────────
+        if self.path.startswith("/api/projects/") and self.path.endswith("/workflow/auto-mode"):
+            proj_id = self.path.split("/api/projects/")[1].rsplit("/workflow/auto-mode", 1)[0]
+            result = _handle_workflow_auto_mode(proj_id, body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/projects/") and "/tasks/" in self.path and self.path.endswith("/review-check"):
+            rest = self.path.split("/api/projects/")[1]
+            parts = rest.split("/tasks/")
+            proj_id = parts[0]
+            task_id = parts[1].rsplit("/review-check", 1)[0] if len(parts) > 1 else ""
+            result = _handle_review_check_update(proj_id, task_id, body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/projects/"):
+            parts = self.path.split("/api/projects/")[1].strip("/").split("/")
+            proj_id = parts[0]
+            if len(parts) == 1:
+                # PUT /api/projects/{id}
+                result = _handle_project_update(proj_id, body)
+            elif len(parts) == 2 and parts[1] == "columns":
+                # PUT /api/projects/{id}/columns
+                result = _handle_columns_update(proj_id, body)
+            elif len(parts) == 3 and parts[1] == "tasks" and parts[2] == "reorder":
+                # PUT /api/projects/{id}/tasks/reorder
+                result = _handle_tasks_reorder(proj_id, body)
+            elif len(parts) == 3 and parts[1] == "tasks":
+                # PUT /api/projects/{id}/tasks/{taskId}
+                result = _handle_task_update(proj_id, parts[2], body)
+            else:
+                result = {"error": "Not found", "_status": 404}
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def do_DELETE(self):
         if self.path == "/api/agent/delete":
             length = int(self.headers.get('Content-Length', 0))
@@ -2729,6 +5232,38 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
+        # ── PROJECTS DELETE ──────────────────────────────────────────
+        elif self.path.startswith("/api/projects/templates/"):
+            tpl_id = self.path.split("/api/projects/templates/")[1].strip("/")
+            result = _handle_template_delete(tpl_id)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/projects/") and "/tasks/" in self.path:
+            # DELETE /api/projects/{id}/tasks/{taskId}
+            rest = self.path.split("/api/projects/")[1]
+            parts = rest.split("/tasks/")
+            proj_id = parts[0]
+            task_id = parts[1].strip("/") if len(parts) > 1 else ""
+            result = _handle_task_delete(proj_id, task_id)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/projects/"):
+            proj_id = self.path.split("/api/projects/")[1].strip("/")
+            result = _handle_project_delete(proj_id)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -2736,7 +5271,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
@@ -3127,6 +5662,93 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
+        # ── PROJECTS POST ────────────────────────────────────────────
+        elif self.path == "/api/projects":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_project_create(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path == "/api/projects/scores/award":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_score_award(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path == "/api/projects/from-template":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_project_from_template(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path == "/api/projects/templates":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_save_as_template(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/projects/") and self.path.endswith("/workflow/start"):
+            proj_id = self.path.split("/api/projects/")[1].rsplit("/workflow/start", 1)[0]
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_workflow_start(proj_id, body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/projects/") and self.path.endswith("/workflow/stop"):
+            proj_id = self.path.split("/api/projects/")[1].rsplit("/workflow/stop", 1)[0]
+            result = _handle_workflow_stop(proj_id)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/projects/") and "/tasks" in self.path and "/comments" in self.path:
+            # POST /api/projects/{id}/tasks/{taskId}/comments
+            rest = self.path.split("/api/projects/")[1]
+            parts = rest.split("/tasks/")
+            proj_id = parts[0]
+            task_rest = parts[1].split("/comments")[0].strip("/") if len(parts) > 1 else ""
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_task_comment(proj_id, task_rest, body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif self.path.startswith("/api/projects/") and self.path.endswith("/tasks"):
+            # POST /api/projects/{id}/tasks
+            proj_id = self.path.split("/api/projects/")[1].rsplit("/tasks", 1)[0]
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_task_create(proj_id, body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
         else:
             self.send_response(404)
             self.end_headers()
@@ -3451,6 +6073,65 @@ def start_http_server():
     server.serve_forever()
 
 
+def _wf_auto_resume_on_startup():
+    """Check for workflows that were interrupted by a container restart and resume them.
+
+    Looks for tasks stuck in 'In Progress' or 'Review' columns that have an active
+    or done workflow session, indicating the pipeline was mid-execution when killed.
+    """
+    import time as _startup_time
+    _startup_time.sleep(3)  # Let the server fully start first
+
+    try:
+        data = _load_projects()
+        for p in data.get("projects", []):
+            project_id = p["id"]
+            # Find tasks in active columns
+            ip_cols = [c["id"] for c in p.get("columns", []) if c.get("title", "").lower() in ("in progress", "review")]
+            stuck_tasks = [t for t in p.get("tasks", []) if t.get("columnId") in ip_cols and t.get("assignee")]
+
+            for task in stuck_tasks:
+                task_id = task["id"]
+                assignee = task["assignee"]
+                session_key = _wf_task_session_key(assignee, project_id, task_id)
+
+                # Check if there's a workflow session for this task
+                home_path = VO_CONFIG.get("openclaw", {}).get("homePath", os.path.expanduser("~/.openclaw"))
+                sessions_json_path = os.path.join(home_path, "agents", assignee, "sessions", "sessions.json")
+                try:
+                    with open(sessions_json_path, "r") as f:
+                        sessions_data = json.load(f)
+                    if session_key in sessions_data:
+                        session_status = sessions_data[session_key].get("status", "")
+                        if session_status in ("done", "running", "failed"):
+                            print(f"[WORKFLOW AUTO-RESUME] Found interrupted task: '{task.get('title', '?')}' (project={project_id[:8]}, session={session_status})")
+                            # Resume the workflow for this project
+                            with _WORKFLOW_LOCK:
+                                if project_id not in _WORKFLOW_STATE or not _WORKFLOW_STATE.get(project_id, {}).get("active"):
+                                    auto_mode = p.get("autoMode", False)
+                                    stop_flag = threading.Event()
+                                    wf = {
+                                        "active": True,
+                                        "autoMode": auto_mode,
+                                        "currentTaskId": task_id,
+                                        "phase": "resuming",
+                                        "error": None,
+                                        "reviewCycle": 0,
+                                        "stopFlag": stop_flag,
+                                        "thread": None,
+                                    }
+                                    _WORKFLOW_STATE[project_id] = wf
+                                    t = threading.Thread(target=_wf_run_pipeline, args=(project_id, not auto_mode), daemon=True)
+                                    wf["thread"] = t
+                                    t.start()
+                                    print(f"[WORKFLOW AUTO-RESUME] Resumed pipeline for project {project_id[:8]} (autoMode={auto_mode})")
+                            break  # One resume per project
+                except (FileNotFoundError, json.JSONDecodeError):
+                    pass
+    except Exception as e:
+        print(f"[WORKFLOW AUTO-RESUME] Error: {e}")
+
+
 if __name__ == "__main__":
     # Start API usage collector background thread
     _api_usage_collector.start()
@@ -3459,6 +6140,10 @@ if __name__ == "__main__":
     # Start WS proxy in a background thread
     ws_thread = threading.Thread(target=start_ws_server, daemon=True)
     ws_thread.start()
+
+    # Auto-resume interrupted workflows (in background, after server starts)
+    resume_thread = threading.Thread(target=_wf_auto_resume_on_startup, daemon=True, name="wf-auto-resume")
+    resume_thread.start()
 
     # Start HTTP server in main thread
     start_http_server()

@@ -2498,6 +2498,8 @@ button:active { transform: translateY(3px); box-shadow: none; }
 /* Sidebar meetings widget */
 .meetings-sidebar h4 { cursor: pointer; font-size: 10px; color: var(--gold); padding: 8px 12px; margin: 0; }
 .skills-library-sidebar h4 { cursor: pointer; font-size: 10px; color: var(--gold); padding: 8px 12px; margin: 0; }
+.projects-sidebar h4 { cursor: pointer; font-size: 10px; color: var(--gold); padding: 8px 12px; margin: 0; }
+.projects-leaderboard h4 { cursor: pointer; font-size: 10px; color: var(--gold); padding: 8px 12px; margin: 0; }
 .sidebar-mtg-list { padding: 0 8px; }
 .sidebar-mtg-item { background: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 6px; padding: 8px 10px; margin-bottom: 6px; cursor: pointer; transition: border-color 0.2s; }
 .sidebar-mtg-item:hover { border-color: var(--gold); }
