@@ -6,7 +6,7 @@ A self-hosted retro pixel-art AI workspace for [OpenClaw](https://openclaw.ai). 
 
 ![My Virtual Office](screenshot.png)
 
-[![Watch the Demo](screenshot.png)]([https://drive.google.com/file/d/1aR4KgaX-s2rvVzfNpreItV7trtvqlm-A/view](https://youtu.be/2Pruzq65Pow))
+([https://drive.google.com/file/d/1aR4KgaX-s2rvVzfNpreItV7trtvqlm-A/view](https://youtu.be/2Pruzq65Pow))
 
 ▶️ **[Watch the full demo]([https://drive.google.com/file/d/1aR4KgaX-s2rvVzfNpreItV7trtvqlm-A/view](https://youtu.be/2Pruzq65Pow))**
 
