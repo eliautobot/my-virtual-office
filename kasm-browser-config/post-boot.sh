@@ -36,4 +36,17 @@ fi
 # Fix kasm_viewer write permissions (for Take Control)
 sed -i 's/kasm_viewer:.*:r$/kasm_viewer:'"$(grep kasm_user /home/kasm-user/.kasmpasswd | cut -d: -f2)"':wo/' /home/kasm-user/.kasmpasswd 2>/dev/null || true
 
+# Suppress "--no-sandbox" infobar via Chrome enterprise policy
+mkdir -p /etc/opt/chrome/policies/managed
+cat > /etc/opt/chrome/policies/managed/suppress.json << 'POLICY'
+{
+    "CommandLineFlagSecurityWarningsEnabled": false
+}
+POLICY
+echo "Chrome policy installed (suppress command-line warnings)"
+
+# Remove stock Chromium binary so only Chrome is used
+rm -f /usr/bin/chromium-orig /usr/lib/chromium/chromium 2>/dev/null
+echo "Stock Chromium binaries removed (Chrome only)"
+
 echo "Post-boot complete."

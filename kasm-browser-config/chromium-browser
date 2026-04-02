@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
 # Wrapper that replaces Kasm's default Chromium launcher.
-# Launches Google Chrome if installed, falls back to Chromium otherwise.
+# Launches Google Chrome exclusively. Run post-boot.sh to install Chrome first.
 
 CHROME_BIN="/opt/google/chrome/google-chrome"
-CHROMIUM_BIN="/usr/bin/chromium-orig"
-[ -f "$CHROMIUM_BIN" ] || CHROMIUM_BIN="/usr/bin/chromium-browser-orig"
 
-# Pick the browser
-if [ -f "$CHROME_BIN" ]; then
-    BROWSER="$CHROME_BIN"
-    PROFILE_DIR="$HOME/.config/google-chrome"
-    echo "Launching Google Chrome"
-else
-    BROWSER="$CHROMIUM_BIN"
-    PROFILE_DIR="$HOME/.config/chromium"
-    echo "Launching Chromium (Chrome not installed)"
+if [ ! -f "$CHROME_BIN" ]; then
+    echo "ERROR: Google Chrome is not installed."
+    echo "Run: docker exec --user root <container> bash /tmp/post-boot.sh"
+    exit 1
 fi
+
+BROWSER="$CHROME_BIN"
+PROFILE_DIR="$HOME/.config/google-chrome"
+echo "Launching Google Chrome"
 
 # Clean up stale locks
 if ! pgrep -f "$BROWSER" > /dev/null; then
@@ -37,6 +34,7 @@ fi
 
 RENDER_FLAGS="--use-gl=swiftshader --disable-smooth-scrolling"
 WINDOW_FLAGS="--start-maximized --window-position=0,0 --window-size=1600,900"
+SUPPRESS_FLAGS="--disable-notifications --disable-infobars --no-default-browser-check"
 
 # Stealth flags - anti-bot-detection
 STEALTH_FLAGS="--disable-blink-features=AutomationControlled"
@@ -56,4 +54,4 @@ exec $BROWSER \
     --ignore-gpu-blocklist \
     --no-first-run \
     --simulate-outdated-no-au="Tue, 31 Dec 2099 23:59:59 GMT" \
-    $CDP_FLAGS $RENDER_FLAGS $WINDOW_FLAGS $STEALTH_FLAGS "$@"
+    $CDP_FLAGS $RENDER_FLAGS $WINDOW_FLAGS $STEALTH_FLAGS $SUPPRESS_FLAGS "$@"

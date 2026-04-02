@@ -47,6 +47,7 @@ services:
   #   container_name: agent-browser
   #   entrypoint: /dockerstartup/kasm_default_profile.sh
   #   command: ["/tmp/override-startup.sh", "/dockerstartup/kasm_startup.sh", "--wait"]
+  #   shm_size: 1g   # Prevents Chromium crashes from insufficient shared memory
   #   ports:
   #     - "6901:6901"   # KasmVNC viewer
   #     - "9222:9222"   # CDP endpoint
@@ -61,6 +62,7 @@ services:
   #     - ./kasm-browser-config/start-cdp-proxy.sh:/tmp/start-cdp-proxy.sh
   #     - ./kasm-browser-config/post-boot.sh:/tmp/post-boot.sh
   #     - ./kasm-browser-config/install-chrome.sh:/tmp/install-chrome.sh
+  #     - ./kasm-browser-config/browser-supervisor.sh:/tmp/browser-supervisor.sh
   #   restart: unless-stopped
   #   # Configure in Virtual Office Settings → Agent Browser:
   #   #   CDP URL: http://host.docker.internal:9222
