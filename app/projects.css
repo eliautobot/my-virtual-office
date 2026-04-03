@@ -1599,8 +1599,20 @@
     font-size: 10px;
     font-style: italic;
 }
+.proj-chat-msg-time {
+    font-size: 9px;
+    color: #888;
+    float: right;
+    margin-left: 8px;
+}
 .proj-chat-msg-text {
     white-space: pre-wrap;
+}
+.proj-chat-msg-tools {
+    font-size: 9px;
+    color: #aaa;
+    font-style: italic;
+    margin-top: 2px;
 }
 .proj-wf-chat-live {
     width: 8px;

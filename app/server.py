@@ -141,6 +141,9 @@ AUTH_PROFILES_PATH = os.path.join(WORKSPACE_BASE, "agents/main/agent/auth-profil
 # ─── DYNAMIC AGENT DISCOVERY ─────────────────────────────────
 from discovery import discover_agents, get_agent_workspace_dir, get_agent_session_id
 from license import get_license_status, activate_license, deactivate_license, check_feature, get_agent_limit
+from project_store import MarkdownProjectStore
+
+PROJECT_STORE = MarkdownProjectStore(STATUS_DIR)
 
 _discovered_roster = discover_agents(WORKSPACE_BASE)
 _discovered_at = time.time() if 'time' in dir() else 0
@@ -970,37 +973,13 @@ SCORE_CHECKLIST_BONUS = 2       # Per checklist item completed
 _PROJECTS_FILE_LOCK = threading.Lock()
 
 def _load_projects():
-    """Load projects.json from STATUS_DIR. Thread-safe via lock."""
-    with _PROJECTS_FILE_LOCK:
-        try:
-            with open(PROJECTS_FILE, "r") as f:
-                data = json.load(f)
-            if not isinstance(data, dict):
-                data = {}
-            if not isinstance(data.get("projects"), list):
-                data["projects"] = []
-            if not isinstance(data.get("templates"), list):
-                data["templates"] = []
-            return data
-        except FileNotFoundError:
-            return {"projects": [], "templates": []}
-        except json.JSONDecodeError:
-            return {"projects": [], "templates": []}
+    """Load projects from the markdown-backed store."""
+    return PROJECT_STORE.load_all()
 
 
 def _save_projects(data):
-    """Persist projects.json with permissive mode. Thread-safe via lock."""
-    with _PROJECTS_FILE_LOCK:
-        os.makedirs(os.path.dirname(PROJECTS_FILE), exist_ok=True)
-        # Write to temp file first, then atomic rename to prevent corruption
-        tmp_path = PROJECTS_FILE + ".tmp"
-        with open(tmp_path, "w") as f:
-            json.dump(data, f, indent=2)
-        os.replace(tmp_path, PROJECTS_FILE)
-        try:
-            os.chmod(PROJECTS_FILE, 0o666)
-        except Exception:
-            pass
+    """Persist projects to the markdown-backed store."""
+    PROJECT_STORE.save_all(data)
 
 
 def _proj_uuid():
@@ -1580,12 +1559,11 @@ def _handle_tasks_reorder(project_id, body):
 
 def _handle_project_delete(project_id):
     """DELETE /api/projects/{id}."""
-    data = _load_projects()
-    before = len(data["projects"])
-    data["projects"] = [p for p in data["projects"] if p["id"] != project_id]
-    if len(data["projects"]) == before:
+    # Delete through the store so both markdown-backed projects and legacy
+    # JSON-only projects are removed correctly.
+    deleted = PROJECT_STORE.delete_project(project_id)
+    if not deleted:
         return {"error": "Project not found", "_status": 404}
-    _save_projects(data)
     return {"ok": True, "id": project_id}
 
 
@@ -1601,13 +1579,6 @@ def _handle_task_delete(project_id, task_id):
         return {"error": "Task not found", "_status": 404}
     p["updatedAt"] = _proj_now()
     _save_projects(data)
-    # Clean up task markdown file
-    try:
-        md_path = os.path.join(TASK_FILES_DIR, project_id, f"{task_id}.md")
-        if os.path.isfile(md_path):
-            os.remove(md_path)
-    except Exception:
-        pass
     return {"ok": True, "id": task_id}
 
 
@@ -1622,7 +1593,7 @@ import time as _time
 _WORKFLOW_STATE = {}
 _WORKFLOW_LOCK = threading.Lock()
 
-# Task markdown files directory
+# Legacy task markdown files directory (kept for backward compatibility if present)
 TASK_FILES_DIR = os.path.join(STATUS_DIR, "project-tasks")
 
 def _wf_find_column(project, title_lower):
@@ -1785,74 +1756,66 @@ def _wf_update_task_field(project_id, task_id, field, value):
     return task
 
 def _wf_write_task_file(project_id, task, status_text, review_results=None, work_log_entry=None):
-    """Write/update a task's markdown file."""
-    task_dir = os.path.join(TASK_FILES_DIR, project_id)
-    os.makedirs(task_dir, exist_ok=True)
-    filepath = os.path.join(task_dir, f"{task['id']}.md")
-
-    # Read existing file if present (to preserve work log)
-    existing_log = []
-    if os.path.isfile(filepath):
-        with open(filepath, "r") as f:
-            in_log = False
-            for line in f:
-                if line.strip() == "## Work Log":
-                    in_log = True
-                    continue
-                if in_log:
-                    existing_log.append(line.rstrip())
-
-    checklist = task.get("checklist", [])
-    lines = [
-        f"# Task: {task.get('title', 'Untitled')}",
-        f"**Status:** {status_text} | **Assignee:** {task.get('assignee', 'unassigned')} | **Priority:** {task.get('priority', 'medium')}",
-        "",
-        "## Description",
-        task.get("description", "_No description_"),
-        "",
-    ]
-
-    if checklist:
-        lines.append("## Checklist")
-        for item in checklist:
-            check = "x" if item.get("done") else " "
-            review_status = ""
-            if review_results:
-                for rr in review_results:
-                    if rr.get("id") == item.get("id"):
-                        review_status = f" — {rr.get('status', '')}"
-                        break
-            lines.append(f"- [{check}] {item.get('text', '')}{review_status}")
-        lines.append("")
-
-    if review_results:
-        lines.append("## Review Check")
-        for rr in review_results:
-            icon = {"pass": "✅", "needs_more_work": "⚠️", "did_not_pass": "❌", "requires_user_review": "👤"}.get(rr.get("status"), "❓")
-            lines.append(f"- {icon} **{rr.get('text', '')}**: {rr.get('status', 'pending')}")
-        lines.append("")
-
-    lines.append("## Work Log")
-    lines.extend(existing_log)
+    """Update canonical markdown-backed task state, preserving compatibility with workflow logging."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return
+    live_task = next((t for t in p.get("tasks", []) if t.get("id") == task.get("id")), None)
+    if not live_task:
+        return
+    if review_results is not None:
+        live_task["reviewCheck"] = review_results
     if work_log_entry:
-        from datetime import datetime, timezone
-        ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-        lines.append(f"### {ts} — {work_log_entry}")
+        comments = live_task.setdefault("comments", [])
+        comments.append({
+            "id": _proj_uuid(),
+            "author": "workflow",
+            "text": work_log_entry,
+            "createdAt": _proj_now(),
+        })
+        if len(comments) > 200:
+            live_task["comments"] = comments[-200:]
+    live_task["updatedAt"] = _proj_now()
+    p["updatedAt"] = _proj_now()
+    _save_projects(data)
 
-    with open(filepath, "w") as f:
-        f.write("\n".join(lines) + "\n")
-    try:
-        os.chmod(filepath, 0o666)
-    except Exception:
-        pass
 
 def _wf_read_task_file(project_id, task_id):
-    """Read task markdown file if it exists."""
-    filepath = os.path.join(TASK_FILES_DIR, project_id, f"{task_id}.md")
-    if os.path.isfile(filepath):
-        with open(filepath, "r") as f:
-            return f.read()
-    return None
+    """Read canonical task content from the markdown-backed store and render it into prompt-friendly markdown."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return None
+    task = next((t for t in p.get("tasks", []) if t.get("id") == task_id), None)
+    if not task:
+        return None
+    lines = [
+        f"# Task: {task.get('title', 'Untitled')}",
+        f"**Assignee:** {task.get('assignee', 'unassigned')} | **Priority:** {task.get('priority', 'medium')}",
+        "",
+        "## Description",
+        task.get("description", "_No description_") or "_No description_",
+        "",
+        "## Checklist",
+    ]
+    checklist = task.get("checklist", [])
+    if checklist:
+        review_map = {item.get('text', ''): item.get('status', '') for item in (task.get('reviewCheck') or [])}
+        for item in checklist:
+            check = "x" if item.get("done") else " "
+            suffix = f" — {review_map.get(item.get('text', ''), '')}" if review_map.get(item.get('text', '')) else ""
+            lines.append(f"- [{check}] {item.get('text', '')}{suffix}")
+    else:
+        lines.append("- No checklist items")
+    comments = task.get("comments", [])
+    if comments:
+        lines.extend(["", "## Work Log"])
+        for comment in comments[-20:]:
+            lines.append(f"### {comment.get('createdAt', '')} — {comment.get('author', 'user')}")
+            lines.append(comment.get("text", ""))
+            lines.append("")
+    return "\n".join(lines).strip() + "\n"
 
 
 # Track workflow sessions for cleanup: { project_id: { task_id: set(session_keys) } }
@@ -3282,18 +3245,16 @@ def get_agent_messages(agent_key, max_messages=500):
                         if _da["id"] in source or _da["statusKey"] in source:
                             from_agent = _da["name"].lower()
                             break
-                # Format timestamp for display
-                short_ts = ""
+                # Send raw epoch ms to client — browser converts to local timezone
+                epoch_ms = 0
                 if ts:
                     try:
                         from datetime import datetime, timezone
                         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                        # Use system local timezone (portable — no hardcoded tz)
-                        et = dt.astimezone()
-                        short_ts = et.strftime("%I:%M %p").lstrip("0")
+                        epoch_ms = int(dt.timestamp() * 1000)
                     except Exception:
-                        short_ts = ""
-                messages.append({"role": role, "text": text[:500], "ts": ts, "time": short_ts, "from": from_agent})
+                        pass
+                messages.append({"role": role, "text": text[:500], "ts": ts, "epochMs": epoch_ms, "from": from_agent})
     except Exception as e:
         return []
     return messages[-max_messages:]

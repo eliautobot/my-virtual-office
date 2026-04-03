@@ -2069,8 +2069,27 @@
             if (text.length > 500) text = text.substring(0, 500) + '…';
             text = escHtml(text);
 
+            // Format timestamp in user's local timezone
+            let timeStr = '';
+            if (m.timestamp) {
+                const d = new Date(m.timestamp);
+                if (!isNaN(d.getTime())) {
+                    timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                }
+            }
+            const timeHtml = timeStr ? `<span class="proj-chat-msg-time">${timeStr}</span>` : '';
+
+            // Show tool calls as activity indicators
+            let toolHtml = '';
+            if (m.tools && m.tools.length > 0) {
+                const toolNames = m.tools.map(t => '🔧 ' + escHtml(t.name)).join(', ');
+                toolHtml = `<div class="proj-chat-msg-tools">${toolNames}</div>`;
+            }
+
             return `<div class="${cls}">
+                ${timeHtml}
                 <div class="proj-chat-msg-text">${text}</div>
+                ${toolHtml}
             </div>`;
         }).join('');
 

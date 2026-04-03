@@ -7259,7 +7259,16 @@ function pollAgentChat() {
             for (var mi = 0; mi < msgs.length; mi++) {
                 var msg = msgs[mi];
                 var isUser = (msg.role === 'user');
-                var timeTag = msg.time ? '[' + msg.time + '] ' : '';
+                var timeTag = '';
+                if (msg.epochMs) {
+                    var d = new Date(msg.epochMs);
+                    var h = d.getHours(); var mn = d.getMinutes();
+                    var ampm = h >= 12 ? 'PM' : 'AM';
+                    h = h % 12 || 12;
+                    timeTag = '[' + h + ':' + (mn < 10 ? '0' : '') + mn + ' ' + ampm + '] ';
+                } else if (msg.time) {
+                    timeTag = '[' + msg.time + '] ';
+                }
                 var prefix = timeTag + (isUser ? (msg.from ? msg.from + ': ' : 'IN: ') : '');
                 if (mi < msgs.length - 1) {
                     // Non-last messages: pre-wrap now (they never change)

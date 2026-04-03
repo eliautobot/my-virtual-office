@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multi-Chat Window Review</title>
+  <link rel="stylesheet" href="style.css?v=1775000800">
+  <style>
+    html, body {
+      overflow: auto;
+      background: #0a0a0f;
+      font-family: Arial, sans-serif;
+    }
+    .review-wrap {
+      min-height: 100vh;
+      padding: 20px;
+      background: radial-gradient(circle at top, rgba(255,215,0,0.08), transparent 35%), #0a0a0f;
+    }
+    .review-card {
+      max-width: 1100px;
+      margin: 0 auto 16px;
+      background: #131322;
+      border: 1px solid #2a2a3e;
+      border-radius: 14px;
+      padding: 16px 18px;
+      color: #e8e8f0;
+      box-shadow: 0 12px 40px rgba(0,0,0,.35);
+    }
+    .review-card h1 { margin: 0 0 8px; color: #ffd700; font-size: 24px; }
+    .review-card p, .review-card li { line-height: 1.5; font-size: 14px; }
+    .review-card code { color: #90caf9; }
+    .review-stage {
+      position: relative;
+      max-width: 1100px;
+      height: 760px;
+      margin: 0 auto;
+      border: 1px solid #2a2a3e;
+      border-radius: 16px;
+      overflow: hidden;
+      background: linear-gradient(180deg, #101020, #090910);
+    }
+    .review-stage .chat-toggle-btn { display: none !important; }
+    .review-stage .chat-panel,
+    .review-stage .chat-panel-secondary {
+      top: 96px !important;
+      bottom: 20px !important;
+      height: auto !important;
+    }
+    .review-stage .chat-panel {
+      display: flex !important;
+      right: 20px !important;
+    }
+    .review-stage .chat-panel.open {
+      display: flex !important;
+    }
+    .review-note {
+      max-width: 1100px;
+      margin: 14px auto 0;
+      color: #98a2b3;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="review-wrap">
+    <div class="review-card">
+      <h1>Multi-Chat Window Review</h1>
+      <p>This page is a lightweight reviewer surface for the shared chat UI. Open it with <code>?chatView=all&amp;chatAgents=auto</code> to force all four windows open and assign different agents to each one.</p>
+      <ul>
+        <li>Primary + 3 secondary windows are rendered by the same <code>chat.js</code>.</li>
+        <li>Each window owns its own selected agent/session state.</li>
+        <li>Selections persist per window after explicit changes.</li>
+        <li>Message/history routing stays scoped by window session/run ownership.</li>
+      </ul>
+    </div>
+
+    <div class="review-stage">
+      <button id="chat-toggle" class="chat-toggle-btn">💬</button>
+      <div id="chat-panel" class="chat-panel open">
+        <div id="chat-resize-handle-top-left"      class="chat-resize-handle top-left"></div>
+        <div id="chat-resize-handle-top"           class="chat-resize-handle top"></div>
+        <div id="chat-resize-handle-top-right"     class="chat-resize-handle top-right"></div>
+        <div id="chat-resize-handle-right"         class="chat-resize-handle right"></div>
+        <div id="chat-resize-handle-bottom-right"  class="chat-resize-handle bottom-right"></div>
+        <div id="chat-resize-handle-bottom"        class="chat-resize-handle bottom"></div>
+        <div id="chat-resize-handle-bottom-left"   class="chat-resize-handle bottom-left"></div>
+        <div id="chat-resize-handle-left"          class="chat-resize-handle left"></div>
+        <div class="chat-header">
+          <select id="chat-agent-select" class="chat-agent-select" title="Switch agent">
+            <option value="main" data-emoji="🤖" data-name="Main Agent" selected>🤖 Main Agent</option>
+          </select>
+          <span id="chat-status" class="chat-status">Offline</span>
+          <div id="chat-secondary-controls" class="chat-secondary-controls" title="Toggle secondary chat windows">
+            <button type="button" class="chat-slot-toggle" data-chat-slot-toggle="1" aria-pressed="false">1</button>
+            <button type="button" class="chat-slot-toggle" data-chat-slot-toggle="2" aria-pressed="false">2</button>
+            <button type="button" class="chat-slot-toggle" data-chat-slot-toggle="3" aria-pressed="false">3</button>
+          </div>
+          <span style="flex:1"></span>
+          <div class="chat-header-btns">
+            <button id="chat-new-session" class="chat-new-session" title="New Session">🔄</button>
+            <button id="chat-move" class="chat-move-btn" title="Move/snap chat window">⇱</button>
+            <button id="chat-close" class="chat-close">&times;</button>
+          </div>
+        </div>
+        <div id="chat-model-bar" class="chat-model-bar">
+          <span id="chat-model-name" class="chat-model-name">—</span>
+          <span id="chat-context-info" class="chat-context-info">— / —</span>
+        </div>
+        <div id="chat-messages" class="chat-messages"></div>
+        <div id="chat-attachments-preview" class="chat-attachments-preview"></div>
+        <div class="chat-input-row">
+          <button id="chat-attach" class="chat-attach-btn" title="Attach file">📎</button>
+          <input type="file" id="chat-file-input" multiple accept="image/*,.pdf,.txt,.csv,.json,.md,.py,.js" style="display:none">
+          <textarea id="chat-input" class="chat-input" placeholder="Type a message..." rows="1"></textarea>
+          <button id="chat-mic" class="chat-mic-btn" title="Voice input (Whisper)">🎙️</button>
+          <button id="chat-stop" class="chat-stop-btn" title="Stop current model response">⏹</button>
+          <button id="chat-send" class="chat-send-btn">▶</button>
+        </div>
+      </div>
+
+      <div id="chat-secondary-1" class="chat-panel-secondary-placeholder" data-chat-slot-placeholder="1"></div>
+      <div id="chat-secondary-2" class="chat-panel-secondary-placeholder" data-chat-slot-placeholder="2"></div>
+      <div id="chat-secondary-3" class="chat-panel-secondary-placeholder" data-chat-slot-placeholder="3"></div>
+    </div>
+
+    <div class="review-note">
+      Tip: use <code>/chat-multi-window-review.html?chatView=all&amp;chatAgents=auto</code> for visual verification.
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="chat.js?v=1775001200"></script>
+</body>
+</html>

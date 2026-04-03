@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Multi-Chat Architecture</title>
+  <link rel="stylesheet" href="style.css?v=1774736671">
+  <style>
+    body { overflow:auto; background:#0a0a0f; }
+    .arch-wrap { max-width: 980px; margin: 0 auto; padding: 24px; color: #e8e8f0; line-height: 1.65; }
+    .arch-card { background:#131322; border:1px solid #2a2a3e; border-radius:12px; padding:20px; margin-bottom:18px; box-shadow:0 10px 30px rgba(0,0,0,.25); }
+    .arch-wrap h1, .arch-wrap h2, .arch-wrap h3 { color:#ffd700; margin:0 0 12px; }
+    .arch-wrap h1 { font-size: 22px; }
+    .arch-wrap h2 { font-size: 16px; margin-top: 8px; }
+    .arch-wrap h3 { font-size: 13px; }
+    .arch-wrap p, .arch-wrap li { font-family: Arial, sans-serif; font-size: 14px; }
+    .arch-wrap ul, .arch-wrap ol { margin: 10px 0 0 22px; }
+    .arch-wrap code, .arch-wrap pre { font-family: 'Courier New', monospace; }
+    .arch-wrap pre { background:#0b0b14; border:1px solid #2a2a3e; border-radius:10px; padding:14px; overflow:auto; font-size:12px; }
+    .slot-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-top: 14px; }
+    .slot-box { border:1px solid #3a3a5e; border-radius:10px; background:#0d0d1e; padding:14px; }
+    .slot-box strong { display:block; color:#ffd700; margin-bottom:8px; }
+    .mini-toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+    .mini-btn { border:1px solid #4a4a6e; background:#1d1d30; color:#fff; border-radius:8px; padding:8px 12px; font-size:12px; }
+    .mini-btn.active { border-color:#ffd700; box-shadow:0 0 0 1px rgba(255,215,0,.2) inset; }
+    .back-link { display:inline-block; margin-bottom:16px; color:#90caf9; text-decoration:none; font-family:Arial,sans-serif; }
+    .checklist li { margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <div class="arch-wrap">
+    <a class="back-link" href="/">← Back to Virtual Office</a>
+    <div class="arch-card">
+      <h1>Shared Multi-Chat Window Architecture</h1>
+      <p>This locks down how the existing chat window grows into one shared system that supports the main window plus <strong>3 additional slide-out windows</strong> without forking the UI into four separate implementations.</p>
+    </div>
+
+    <div class="arch-card">
+      <h2>1. Window model</h2>
+      <div class="slot-grid">
+        <div class="slot-box"><strong>primary</strong>Main chat window. Always exists. Keeps the current anchor/toggle behavior.</div>
+        <div class="slot-box"><strong>secondary-1</strong>First optional slide-out instance. Controlled by button <b>1</b>.</div>
+        <div class="slot-box"><strong>secondary-2</strong>Second optional slide-out instance. Controlled by button <b>2</b>.</div>
+        <div class="slot-box"><strong>secondary-3</strong>Third optional slide-out instance. Controlled by button <b>3</b>.</div>
+      </div>
+      <ul class="checklist">
+        <li>Max windows at once: <strong>4 total</strong> = 1 primary + 3 secondary.</li>
+        <li>Secondary slots are fixed and deterministic. No dynamic renumbering.</li>
+        <li>Closing a window only closes that slot UI, not the OpenClaw session history behind it.</li>
+      </ul>
+    </div>
+
+    <div class="arch-card">
+      <h2>2. Per-window state</h2>
+      <p>Every chat slot owns its own target/session state. That means selected agent, session key, draft text, attachments, unread count, and streaming metadata all live per window instead of in page-global singletons.</p>
+<pre>const chatWindows = {
+  primary: {
+    slotId: 'primary',
+    selectedAgentKey: 'main',
+    sessionKey: 'agent:main:main',
+    draft: '',
+    attachments: [],
+    pendingRunId: null,
+    unread: 0,
+    layoutMode: 'docked-right'
+  },
+  'secondary-1': null,
+  'secondary-2': null,
+  'secondary-3': null
+};</pre>
+      <ul class="checklist">
+        <li>Agent/session state is per slot, not global.</li>
+        <li>Two windows can point at the same session if that is useful.</li>
+        <li>Local draft/layout can still differ even when the same session is rendered twice.</li>
+      </ul>
+    </div>
+
+    <div class="arch-card">
+      <h2>3. One shared chat UI system</h2>
+      <p>All windows must come from one reusable chat component/template. The current single-instance code needs to be migrated so each window renders from the same logic with a slot-scoped state object.</p>
+<pre>createChatWindow(slotId, containerEl)
+renderChatWindow(slotState)
+bindChatWindowEvents(slotState, elements)
+loadChatHistory(slotState)
+connectChatStream(slotState)
+sendChatMessage(slotState)
+resetChatSession(slotState)
+destroyChatWindow(slotId)</pre>
+      <ul class="checklist">
+        <li>Keep one shared template and one shared CSS system.</li>
+        <li>Use <code>data-chat-slot</code> on each window root.</li>
+        <li>Resolve events from the nearest slot root instead of hard-coded global ids.</li>
+      </ul>
+    </div>
+
+    <div class="arch-card">
+      <h2>4. Shared transport, isolated windows</h2>
+      <p>Do <strong>not</strong> create four separate websocket stacks. Use one shared gateway connection and route events to the correct window by <code>slotId</code> and <code>sessionKey</code>.</p>
+      <ul class="checklist">
+        <li>One token fetch.</li>
+        <li>One websocket manager.</li>
+        <li>Shared RPC helpers.</li>
+        <li>Run/stream mapping goes to the owning slot.</li>
+      </ul>
+    </div>
+
+    <div class="arch-card">
+      <h2>5. Buttons 1, 2, and 3</h2>
+      <p>Buttons map to fixed secondary slots and act as toggles.</p>
+      <div class="mini-toolbar">
+        <span class="mini-btn active">1 → secondary-1</span>
+        <span class="mini-btn active">2 → secondary-2</span>
+        <span class="mini-btn active">3 → secondary-3</span>
+      </div>
+      <ul class="checklist">
+        <li>If the slot is closed, clicking its button opens that exact slot.</li>
+        <li>If the slot is open, clicking its button closes that exact slot.</li>
+        <li>Default open target = whatever the primary window is currently viewing.</li>
+        <li>Closing one secondary slot never affects the others.</li>
+        <li>The hard cap is already enforced by the fixed 3-button model.</li>
+      </ul>
+    </div>
+
+    <div class="arch-card">
+      <h2>6. Layout behavior</h2>
+      <ul class="checklist">
+        <li>Primary stays the anchor window and keeps dock/snap behavior.</li>
+        <li>Secondary windows slide out to the left of the primary chat stack.</li>
+        <li>Focused window gets active input + top z-index.</li>
+        <li>Unfocused windows still stream and increment unread counts.</li>
+        <li>Mobile fallback: show one chat at a time and use buttons 1/2/3 as slot switchers.</li>
+      </ul>
+    </div>
+
+    <div class="arch-card">
+      <h2>7. Acceptance checklist</h2>
+      <ul class="checklist">
+        <li>✅ Main chat + 3 secondary windows are defined as one system.</li>
+        <li>✅ Each window has its own selected agent/session state.</li>
+        <li>✅ All windows use the same shared component logic.</li>
+        <li>✅ Max-window rules and toggle behavior for buttons 1, 2, and 3 are defined.</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>
