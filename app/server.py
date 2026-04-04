@@ -4265,12 +4265,18 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     self.wfile.write(json.dumps(tabs).encode())
                 except Exception as e:
                     self.wfile.write(json.dumps({"available": False, "error": str(e)}).encode())
-        elif self.path == "/session-info":
+        elif self.path == "/session-info" or self.path.startswith("/session-info?"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
-            info = self._get_session_info()
+            qs = self.path.split("?", 1)[1] if "?" in self.path else ""
+            agent_id = None
+            for part in qs.split("&"):
+                if part.startswith("agent="):
+                    agent_id = part[6:]
+                    break
+            info = self._get_session_info(agent_id=agent_id)
             self.wfile.write(json.dumps(info).encode())
         elif self.path == "/models":
             self.send_response(200)
@@ -4784,8 +4790,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
 
         return models
 
-    def _get_session_info(self):
-        """Return current model name and context window for the main session."""
+    def _get_session_info(self, agent_id=None):
+        """Return model name and context window for a specific agent (or default).
+
+        When agent_id is provided, resolves that agent's configured model
+        (per-agent override or default). Otherwise returns the main/default agent model.
+        """
         # Known context windows for built-in models
         KNOWN_CONTEXT = {
             "anthropic/claude-opus-4-6": 1000000,
@@ -4796,8 +4806,11 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             "google/gemini-2.5-flash": 1048576,
             "google/gemini-2.5-pro": 1048576,
             "google/gemini-2.0-flash": 1048576,
+            "google/gemini-3-flash-preview": 1048576,
+            "google/gemini-3.1-pro-preview": 1048576,
             "openai/gpt-4o": 128000,
             "openai/gpt-4o-mini": 128000,
+            "openai/gpt-5.4": 200000,
             "openai/o3": 200000,
             "openai/o4-mini": 200000,
         }
@@ -4807,14 +4820,24 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             return {"model": "unknown", "contextWindow": 0, "error": str(e)}
 
-        # Get default model
-        model = cfg.get("agents", {}).get("defaults", {}).get("model", {}).get("primary", "unknown")
+        # Get default model (global fallback)
+        default_model = cfg.get("agents", {}).get("defaults", {}).get("model", {}).get("primary", "unknown")
 
-        # Check main agent override
+        # Check main/default agent override
         for a in cfg.get("agents", {}).get("list", []):
             if a.get("default") and a.get("model"):
-                model = a["model"]
+                default_model = a["model"]
                 break
+
+        model = default_model
+
+        # If a specific agent was requested, look up its model override
+        if agent_id:
+            for a in cfg.get("agents", {}).get("list", []):
+                if a.get("id") == agent_id:
+                    if a.get("model"):
+                        model = a["model"]
+                    break
 
         # Context window: check custom providers first, then known map
         context_window = KNOWN_CONTEXT.get(model, 0)

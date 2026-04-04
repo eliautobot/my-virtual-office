@@ -245,8 +245,15 @@
       }
     }
 
+    getSelectedAgentId() {
+      if (!this.agentSelect) return null;
+      const opt = this.agentSelect.selectedOptions[0];
+      return opt?.dataset?.agentId || null;
+    }
+
     async fetchSessionInfo() {
       let gatewayContext = 0;
+      let gotModelFromGateway = false;
       try {
         const res = await rpc('sessions.list', {});
         if (res.ok && res.payload?.sessions?.length) {
@@ -254,7 +261,10 @@
           if (s) {
             if (s.totalTokens > 0) this.contextUsed = s.totalTokens;
             if (s.contextTokens > 0) gatewayContext = s.contextTokens;
-            if (s.model) this.sessionModel = (s.modelProvider ? s.modelProvider + '/' : '') + s.model;
+            if (s.model) {
+              this.sessionModel = (s.modelProvider ? s.modelProvider + '/' : '') + s.model;
+              gotModelFromGateway = true;
+            }
           }
         }
       } catch (e) {
@@ -262,9 +272,14 @@
       }
       let serverContext = 0;
       try {
-        const res = await fetch('/session-info');
+        // Pass current agent ID so server returns the correct model for this agent
+        const agentId = this.getSelectedAgentId();
+        const qs = agentId ? `?agent=${encodeURIComponent(agentId)}` : '';
+        const res = await fetch('/session-info' + qs);
         const data = await res.json();
-        if (!this.sessionModel && data.model) this.sessionModel = data.model;
+        // Use server model as fallback when gateway didn't provide one
+        // (new session, no messages yet, or session not found)
+        if (!gotModelFromGateway && data.model) this.sessionModel = data.model;
         if (data.contextWindow) serverContext = data.contextWindow;
       } catch (e) {
         console.warn('[chat] /session-info failed:', e);
