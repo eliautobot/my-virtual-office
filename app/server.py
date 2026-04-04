@@ -3204,7 +3204,34 @@ def _wf_get_task_session_messages(agent_id, project_id, task_id, max_messages=50
                         elif c.get("type") == "toolCall":
                             name = c.get("name", "?")
                             args = c.get("arguments", {})
-                            tool_info.append({"name": name, "args_preview": str(args)[:100]})
+                            # Build a human-readable summary instead of bare tool name
+                            summary = name
+                            if isinstance(args, dict):
+                                if name in ("read", "Read") and (args.get("file") or args.get("path") or args.get("file_path")):
+                                    fpath = args.get("file") or args.get("path") or args.get("file_path") or ""
+                                    summary = f"Reading {fpath.split('/')[-1] if '/' in fpath else fpath}"
+                                elif name in ("edit", "Edit"):
+                                    fpath = args.get("file") or args.get("path") or args.get("file_path") or ""
+                                    summary = f"Editing {fpath.split('/')[-1] if '/' in fpath else fpath}"
+                                elif name in ("write", "Write"):
+                                    fpath = args.get("file") or args.get("path") or args.get("file_path") or ""
+                                    summary = f"Writing {fpath.split('/')[-1] if '/' in fpath else fpath}"
+                                elif name == "exec":
+                                    cmd = args.get("command", "")
+                                    summary = f"Running: {cmd[:80]}" if cmd else "exec"
+                                elif name == "web_search":
+                                    query = args.get("query", "")
+                                    summary = f"Searching: {query[:60]}" if query else "web_search"
+                                elif name == "web_fetch":
+                                    url = args.get("url", "")
+                                    summary = f"Fetching: {url[:60]}" if url else "web_fetch"
+                                elif name == "browser":
+                                    action = args.get("action", "")
+                                    summary = f"Browser: {action}" if action else "browser"
+                                elif name == "sessions_send":
+                                    target = args.get("sessionKey") or args.get("label") or ""
+                                    summary = f"Messaging: {target[:40]}" if target else "sessions_send"
+                            tool_info.append({"name": summary, "args_preview": ""})
                         elif c.get("type") == "toolResult":
                             pass  # skip tool results for chat display
             if text or tool_info:
