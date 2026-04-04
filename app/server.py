@@ -2374,7 +2374,8 @@ MANDATORY REVIEW STEPS:
 1. Use the read tool to open the actual source files that were supposed to be modified. Confirm the changes exist in the code.
 2. Use exec to run any tests, linters, or verification commands.
 3. Use the browser tool to load the running app/site and visually confirm UI changes are working. Take snapshots.
-4. If you cannot find real file changes for an item, mark it DID_NOT_PASS regardless of what was claimed earlier.
+4. If you open any browser/session for review, you MUST close it before finishing your review response. Do not leave browser instances running after review.
+5. If you cannot find real file changes for an item, mark it DID_NOT_PASS regardless of what was claimed earlier.
 
 For EACH checklist item, respond with one of these statuses:
 - PASS — verified in the actual files AND confirmed working in the browser/app
@@ -2415,8 +2416,9 @@ MANDATORY RULES:
 1. You MUST use tools (read, edit, exec, browser) to make REAL changes to actual files.
 2. Read the relevant files first, then use edit to fix the issues.
 3. After fixing, verify your changes work — use exec to test and browser to visually confirm UI changes.
-4. Only fix the items listed above. Do NOT redo work that already passed.
-5. In your report, list EVERY file you modified and what you changed.
+4. If you open any browser/session during rework or verification, you MUST close it before finishing your response. Do not leave browser instances running.
+5. Only fix the items listed above. Do NOT redo work that already passed.
+6. In your report, list EVERY file you modified and what you changed.
 
 A reviewer will independently verify your fixes by reading the actual files and browsing the app."""
 
