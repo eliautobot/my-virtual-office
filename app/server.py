@@ -4801,24 +4801,44 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         When agent_id is provided, resolves that agent's configured model
         (per-agent override or default). Otherwise returns the main/default agent model.
         """
-        # Known context windows for built-in models
+        # Known context windows — keyed by full provider/model AND by model name alone.
+        # The model-name-only keys act as fallbacks for alternative providers
+        # (e.g. openai-codex/gpt-5.4-pro matches via "gpt-5.4-pro" → "gpt-5" family).
         KNOWN_CONTEXT = {
+            # Anthropic
             "anthropic/claude-opus-4-6": 1000000,
             "anthropic/claude-sonnet-4-6": 1000000,
             "anthropic/claude-sonnet-4-20250514": 200000,
             "anthropic/claude-haiku-3-5-20241022": 200000,
             "anthropic/claude-3-5-sonnet-20241022": 200000,
+            # Google
             "google/gemini-2.5-flash": 1048576,
             "google/gemini-2.5-pro": 1048576,
             "google/gemini-2.0-flash": 1048576,
             "google/gemini-3-flash-preview": 1048576,
             "google/gemini-3.1-pro-preview": 1048576,
+            "google/gemini-3.1-flash-lite-preview": 1048576,
+            # OpenAI
             "openai/gpt-4o": 128000,
             "openai/gpt-4o-mini": 128000,
             "openai/gpt-5.4": 200000,
             "openai/o3": 200000,
             "openai/o4-mini": 200000,
         }
+        # Model-name prefix → context window (matches any provider)
+        KNOWN_CONTEXT_PREFIXES = [
+            ("claude-opus", 1000000),
+            ("claude-sonnet-4", 1000000),
+            ("claude-sonnet", 200000),
+            ("claude-haiku", 200000),
+            ("gemini-3", 1048576),
+            ("gemini-2.5", 1048576),
+            ("gemini-2.0", 1048576),
+            ("gpt-5", 200000),
+            ("gpt-4o", 128000),
+            ("o3", 200000),
+            ("o4-mini", 200000),
+        ]
         try:
             with open(CONFIG_PATH, "r") as f:
                 cfg = json.load(f)
@@ -4844,13 +4864,32 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                         model = a["model"]
                     break
 
-        # Context window: check custom providers first, then known map
-        context_window = KNOWN_CONTEXT.get(model, 0)
+        # Context window resolution (in priority order):
+        # 1. Custom provider config with explicit contextWindow
+        # 2. Exact match in KNOWN_CONTEXT (provider/model)
+        # 3. Prefix match on model name (handles alternative providers like openai-codex/)
+        context_window = 0
+
+        # 1. Check custom providers in config
         for prov_name, prov_data in cfg.get("models", {}).get("providers", {}).items():
             for m in prov_data.get("models", []):
                 full_id = f"{prov_name}/{m['id']}"
                 if full_id == model and m.get("contextWindow"):
                     context_window = m["contextWindow"]
+                    break
+            if context_window > 0:
+                break
+
+        # 2. Exact match in known map
+        if context_window == 0:
+            context_window = KNOWN_CONTEXT.get(model, 0)
+
+        # 3. Prefix match on model name (after the /)
+        if context_window == 0 and "/" in model:
+            model_name = model.split("/", 1)[1]
+            for prefix, ctx in KNOWN_CONTEXT_PREFIXES:
+                if model_name.startswith(prefix):
+                    context_window = ctx
                     break
 
         return {"model": model, "contextWindow": context_window}
