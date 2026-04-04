@@ -1957,11 +1957,120 @@ def _wf_format_activity_summary(activity):
     return "\n".join(lines)
 
 
+def _wf_delete_session_via_gateway(session_key):
+    """Delete a session from the gateway's in-memory state via WebSocket RPC.
+
+    File-level cleanup alone is not enough — the gateway keeps sessions in memory
+    and will keep retrying (with "Continue where you left off") on stale sessions.
+    This sends a sessions.delete RPC to properly terminate the session.
+    """
+    import asyncio as _asyncio
+
+    async def _do_delete():
+        try:
+            gw_url = VO_CONFIG["openclaw"]["gatewayUrl"]
+            origin = f"http://127.0.0.1:{PORT}"
+            token = _get_gateway_token()
+            if not token:
+                print(f"[WORKFLOW] No gateway token — skipping session delete via gateway for {session_key}")
+                return False
+
+            import websockets as _ws
+            from websockets.asyncio.client import connect as _ws_connect
+
+            async with _asyncio.timeout(15):
+                ws = await _ws_connect(
+                    gw_url,
+                    max_size=1024 * 1024,
+                    additional_headers={"Origin": origin},
+                    close_timeout=3,
+                )
+                async with ws:
+                    # Wait for challenge
+                    raw = await _asyncio.wait_for(ws.recv(), timeout=5)
+                    msg = json.loads(raw)
+                    if msg.get("event") != "connect.challenge":
+                        return False
+
+                    # Authenticate
+                    connect_msg = {
+                        "type": "req",
+                        "id": "wf-cleanup-1",
+                        "method": "connect",
+                        "params": {
+                            "minProtocol": 3, "maxProtocol": 3,
+                            "client": {"id": "vo-workflow", "version": "1.0", "platform": "server", "mode": "webchat"},
+                            "role": "operator",
+                            "scopes": ["operator.read", "operator.write"],
+                            "caps": [], "commands": [], "permissions": {},
+                            "auth": {"token": token}
+                        }
+                    }
+                    await ws.send(json.dumps(connect_msg))
+                    raw2 = await _asyncio.wait_for(ws.recv(), timeout=5)
+                    res = json.loads(raw2)
+                    if not res.get("ok"):
+                        print(f"[WORKFLOW] Gateway auth failed for session delete: {res.get('error', {}).get('message', 'unknown')}")
+                        return False
+
+                    # Send sessions.delete
+                    delete_msg = {
+                        "type": "req",
+                        "id": "wf-cleanup-2",
+                        "method": "sessions.delete",
+                        "params": {
+                            "key": session_key,
+                            "deleteTranscript": True,
+                            "emitLifecycleHooks": False
+                        }
+                    }
+                    await ws.send(json.dumps(delete_msg))
+                    raw3 = await _asyncio.wait_for(ws.recv(), timeout=5)
+                    res3 = json.loads(raw3)
+                    if res3.get("ok"):
+                        print(f"[WORKFLOW] Gateway session deleted: {session_key}")
+                        return True
+                    else:
+                        # Session may not exist in gateway memory — that's fine
+                        err = res3.get("error", {}).get("message", "unknown")
+                        print(f"[WORKFLOW] Gateway session delete response: {err} (key={session_key})")
+                        return False
+
+        except Exception as e:
+            print(f"[WORKFLOW] Gateway session delete failed for {session_key}: {e}")
+            return False
+
+    # Run the async delete — handle both threaded and event-loop contexts
+    try:
+        loop = _asyncio.get_running_loop()
+        # We're inside an async context — schedule as a task
+        # Since workflow runs in a sync thread, this shouldn't happen,
+        # but handle it gracefully
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(_asyncio.run, _do_delete())
+            return future.result(timeout=20)
+    except RuntimeError:
+        # No running loop — safe to use asyncio.run
+        return _asyncio.run(_do_delete())
+
+
 def _wf_cleanup_task_sessions(agent_id, project_id, task_id):
-    """Delete the single session created for this workflow task."""
+    """Delete the single session created for this workflow task.
+
+    Two-phase cleanup:
+    1. Tell the gateway to drop the session from memory (prevents retry loops)
+    2. Delete session files from disk (cleanup storage)
+
+    Phase 1 is critical — without it, the gateway keeps the session alive and
+    fires "Continue where you left off" retries that loop forever.
+    """
     session_key = _wf_task_session_key(agent_id, project_id, task_id)
 
-    # Clean up session files directly (works inside Docker without openclaw CLI)
+    # Phase 1: Delete from gateway's in-memory state
+    _wf_delete_session_via_gateway(session_key)
+
+    # Phase 2: Clean up session files on disk
     home_path = VO_CONFIG.get("openclaw", {}).get("homePath", os.path.expanduser("~/.openclaw"))
     sessions_dir = os.path.join(home_path, "agents", agent_id, "sessions")
     sessions_json_path = os.path.join(sessions_dir, "sessions.json")
@@ -1990,9 +2099,9 @@ def _wf_cleanup_task_sessions(agent_id, project_id, task_id):
                 if os.path.exists(fpath):
                     os.remove(fpath)
 
-        print(f"[WORKFLOW] Cleaned up session for agent={agent_id} task={task_id[:8]}: {session_key}")
+        print(f"[WORKFLOW] Cleaned up session files for agent={agent_id} task={task_id[:8]}: {session_key}")
     except Exception as e:
-        print(f"[WORKFLOW] Session cleanup error: {e}")
+        print(f"[WORKFLOW] Session file cleanup error: {e}")
 
 
 def _wf_call_agent(agent_id, message, timeout=600, project_id=None, task_id=None):
