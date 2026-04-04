@@ -1206,10 +1206,6 @@ function drawAmbientOverlay() {
     ctx.restore();
 }
 
-function drawLightGlows() {
-    // Disabled: remove leftover glow/shaded appliance shapes
-}
-
 // Option G helper: check if a world-space point is visible in current viewport
 function _isInView(wx, wy, margin) {
     var base = Math.max(displayW / W, displayH / H);
@@ -1220,11 +1216,6 @@ function _isInView(wx, wy, margin) {
     var camTop = H / 2 + camera.y - viewH / 2 - margin;
     return wx >= camLeft && wx <= camLeft + viewW + margin * 2 &&
            wy >= camTop && wy <= camTop + viewH + margin * 2;
-}
-
-// Option F: simplified desk lamp glows — 1 cone + 1 bulb glow (was 3 cones + clip + 4 arcs)
-function drawDeskLampGlows() {
-    // Disabled: remove leftover desk glow shapes
 }
 
 // Rim light — calculated per agent, cached every _RIM_INTERVAL frames
@@ -1243,9 +1234,6 @@ function _getRimLightInner(agent) {
     return null;
 }
 
-// No-op — rim is now drawn inside agent draw()
-function drawAgentLampBounce() {}
-
 // Helper: set warm lamp shadow for furniture near a light source
 function _setFurnitureLampShadow(objX, objY) {
     // Hardcoded light sources removed — no-op until dynamic light system
@@ -1255,17 +1243,6 @@ function _clearFurnitureShadow() {
     ctx.shadowBlur = 0;
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
-}
-
-// Extra light sources around the office (non-desk lamps)
-// Lamps (draw hardware + glow)
-// Light sources cleared — lighting is now dynamic/user-configured, not hardcoded
-var officeLights = [];
-var ambientLightSources = [];
-var DESK_LAMP_RANGE = 100;
-
-function drawOfficeLamps() {
-    // Disabled: remove leftover original lamp drawings
 }
 
 // Neon signs (drawn after ambient overlay so they glow through darkness)
@@ -1279,11 +1256,6 @@ var _NEON_COLORS = {
     'branch-red':    '#ff6d00',
     'branch-gray':   '#90a4ae',
 };
-
-function drawNeonSigns() {
-    // Neon signs are now rendered as branchSign furniture items — this function is a no-op.
-    // The glow effect is handled in drawBranchSign() which runs during furniture rendering.
-}
 
 // Cached desk position lookup — rebuilt when furniture changes
 var _deskPosCache = null;
@@ -1299,11 +1271,6 @@ function _getDeskPositions() {
     });
     _deskPosCacheKey = key;
     return _deskPosCache;
-}
-
-// Draw physical lamp hardware on each desk that has an agent assigned
-function drawDeskLamps() {
-    // Disabled: remove leftover desk lamp drawings
 }
 
 // Dynamic canvas sizing — match display size, no stretching
@@ -10183,15 +10150,10 @@ function loop() {
     });
     // Ambient overlay AFTER wall occluders + redrawn furniture — everything gets uniform tint
     _perfStart('ambient'); drawAmbientOverlay(); _perfEnd('ambient');
-    // Lights/neon drawn after ambient so they glow through darkness
-    _perfStart('neon'); drawNeonSigns(); _perfEnd('neon');
-    _perfStart('deskLamps'); drawDeskLamps(); _perfEnd('deskLamps');
-    _perfStart('deskGlows'); drawDeskLampGlows(); _perfEnd('deskGlows');
-    _perfStart('officeLamps'); drawOfficeLamps(); _perfEnd('officeLamps');
-    _perfStart('lightGlows'); drawLightGlows(); _perfEnd('lightGlows');
+    // (Legacy lamp/glow/neon functions removed — all now handled by furniture renderers)
     // Front agents drawn after ambient (they appear in front, un-tinted like before)
     _perfStart('agentsFront'); _frontWalls.forEach(function(a) { a.draw(); }); _perfEnd('agentsFront');
-    _perfStart('lampBounce'); drawAgentLampBounce(); _perfEnd('lampBounce');
+    // (drawAgentLampBounce removed — rim light now drawn inside agent draw())
     _perfStart('airplanes'); updateAirplanes(); drawAirplanes(); _perfEnd('airplanes');
     _perfStart('rps'); updateRPS(); drawRPS(); _perfEnd('rps');
     _perfStart('social'); updateSocialInteractions(); drawSocialInteractions(); _perfEnd('social');

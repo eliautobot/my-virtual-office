@@ -3,14 +3,27 @@
 Serves static files, status JSON, and proxies WebSocket to the OpenClaw gateway.
 """
 import asyncio
+import base64
 import http.server
 import json
 import os
+import sys
 import threading
+import traceback
+import uuid
+import urllib.error
+import urllib.parse
+import urllib.request
 import websockets
+from datetime import datetime, timezone, timedelta
 from websockets.asyncio.client import connect as ws_connect
 import glob
-import re as re_module
+import hashlib
+import re
+import shutil
+import signal
+import subprocess
+import time
 import gateway_presence
 
 
@@ -146,17 +159,15 @@ from project_store import MarkdownProjectStore
 PROJECT_STORE = MarkdownProjectStore(STATUS_DIR)
 
 _discovered_roster = discover_agents(WORKSPACE_BASE)
-_discovered_at = time.time() if 'time' in dir() else 0
-import time as _time_mod
-_discovered_at = _time_mod.time()
+_discovered_at = time.time()
 DISCOVERY_REFRESH_SEC = 300  # re-discover every 5 min
 
 def _refresh_discovery():
     """Refresh agent roster if stale."""
     global _discovered_roster, _discovered_at
-    if _time_mod.time() - _discovered_at > DISCOVERY_REFRESH_SEC:
+    if time.time() - _discovered_at > DISCOVERY_REFRESH_SEC:
         _discovered_roster = discover_agents(WORKSPACE_BASE)
-        _discovered_at = _time_mod.time()
+        _discovered_at = time.time()
 
 def get_roster():
     """Get current discovered agent roster."""
@@ -192,7 +203,6 @@ def _patch_default_config_agents(config_str):
     if not roster:
         return config_str
     # Build agent entries from roster with random/seeded appearances
-    import hashlib
     patched_agents = []
     for a in roster:
         agent_id = a.get("statusKey") or a.get("id", "main")
@@ -247,7 +257,6 @@ def refresh_agent_maps():
 
 def _sanitize_agent_id(name):
     """Convert a display name into a safe agent ID."""
-    import re
     s = name.lower().strip()
     s = re.sub(r'[^a-z0-9\s-]', '', s)
     s = re.sub(r'[\s]+', '-', s)
@@ -393,7 +402,6 @@ You ALWAYS start with tool calls before responding with text. Every task require
         }
 
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return {"error": str(e), "_status": 500}
 
@@ -406,7 +414,6 @@ def _write_template(workspace_dir, filename, content):
 
 def _signal_gateway_reload():
     """Send SIGUSR1 to the OpenClaw gateway process to reload config."""
-    import signal
     try:
         # Find gateway PID from proc
         for pid_dir in os.listdir("/proc"):
@@ -496,7 +503,6 @@ def _handle_skill_write(agent_key, skill_name, body):
         return {"error": "Skill name is required", "_status": 400}
 
     # Sanitize name
-    import re
     safe_name = re.sub(r'[^a-zA-Z0-9_-]', '-', name).strip('-')
     if not safe_name:
         return {"error": "Invalid skill name", "_status": 400}
@@ -585,7 +591,6 @@ def _handle_skills_library_get(skill_name):
 
 def _handle_skills_library_create(body):
     """POST /api/skills-library — create or update a library skill."""
-    import re
     name = body.get("name", "").strip()
     content = body.get("content", "")
     if not name:
@@ -607,7 +612,6 @@ def _handle_skills_library_create(body):
 
 def _handle_skills_library_delete(skill_name):
     """DELETE /api/skills-library/<name> — delete a library skill."""
-    import shutil
     lib_dir = _get_skills_library_dir()
     skill_dir = os.path.join(lib_dir, skill_name)
     if not os.path.isdir(skill_dir):
@@ -641,15 +645,12 @@ def _handle_skills_library_apply(body):
     if os.path.isfile(dest_file) and not overwrite:
         return {"ok": False, "warning": f"Agent '{agent_id}' already has skill '{skill_name}'. Set overwrite=true to replace.", "exists": True}
     os.makedirs(dest_dir, exist_ok=True)
-    import shutil
     shutil.copy2(src_file, dest_file)
     return {"ok": True, "skill": skill_name, "agentId": agent_id, "path": dest_file, "overwritten": os.path.isfile(dest_file) and overwrite}
 
 
 def _handle_skills_library_upload(body):
     """POST /api/skills-library/upload — upload a SKILL.md to library."""
-    import base64
-    import re
     filename = body.get("filename", "").strip()
     content_b64 = body.get("content", "")
     if not content_b64:
@@ -691,7 +692,6 @@ def _handle_skill_delete(agent_key, skill_name):
     skill_folder = os.path.join(skills_dir, skill_name)
     skill_file = os.path.join(skills_dir, f"{skill_name}.md")
 
-    import shutil
     if os.path.isdir(skill_folder):
         shutil.rmtree(skill_folder)
         return {"ok": True, "deleted": skill_name}
@@ -730,7 +730,6 @@ def _handle_meeting_create(body):
     topic = (body.get("topic") or "").strip()
     meet_id = (body.get("id") or "").strip()
     if not meet_id:
-        import uuid
         meet_id = str(uuid.uuid4())[:8]
     meet_type = (body.get("type") or "").strip()
     agents = body.get("agents") or body.get("participants") or []
@@ -812,7 +811,6 @@ def _handle_meeting_end(body):
         return {"error": f"Meeting '{meet_id}' not found", "_status": 404}
 
     # Build completed meeting record
-    import time as _time_end
     completed = dict(ended_meeting)
     completed["status"] = "completed"
     completed["endedBy"] = ended_by or completed.get("organizer", "unknown")
@@ -820,7 +818,7 @@ def _handle_meeting_end(body):
     completed["resolution"] = resolution
     completed["actionItems"] = action_items if isinstance(action_items, list) else []
     completed["responses"] = responses if isinstance(responses, dict) else {}
-    completed["endedAt"] = int(_time_end.time())
+    completed["endedAt"] = int(time.time())
 
     # Remove from active meetings
     meetings = [m for m in meetings if m.get("id") != meet_id]
@@ -895,7 +893,6 @@ def _award_points(agent_key, points, reason="task_completed"):
     data = _load_scores()
     agent = data["agents"].get(agent_key, {"score": 0, "completed": 0, "streak": 0, "lastCompleted": None, "history": []})
 
-    from datetime import datetime, timezone, timedelta
     now = datetime.now(timezone.utc)
     now_str = now.isoformat()
 
@@ -984,13 +981,11 @@ def _save_projects(data):
 
 def _proj_uuid():
     """Generate a UUID4 string."""
-    import uuid
     return str(uuid.uuid4())
 
 
 def _proj_now():
     """ISO-8601 timestamp."""
-    from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -1139,7 +1134,6 @@ def _handle_project_report(project_id):
         return {"error": "Project not found", "_status": 404}
     tasks = p.get("tasks", [])
     now_str = _proj_now()
-    from datetime import datetime, timezone
     def _is_overdue(t):
         dd = t.get("dueDate")
         if not dd or t.get("completedAt"):
@@ -1450,7 +1444,6 @@ def _handle_task_update(project_id, task_id, body):
                 dd = task.get("dueDate")
                 if dd:
                     try:
-                        from datetime import datetime, timezone
                         due = datetime.fromisoformat(dd.replace("Z", "+00:00"))
                         if datetime.now(timezone.utc) <= due:
                             pts += SCORE_ON_TIME_BONUS
@@ -1587,7 +1580,6 @@ def _handle_task_delete(project_id, task_id):
 # Uses `openclaw agent` CLI or Gateway HTTP API to dispatch tasks and reviews to agents.
 ##############################################################################
 
-import time as _time
 
 # Global workflow state: { projectId: { "active": bool, "autoMode": bool, "currentTaskId": str, "phase": str, "thread": Thread, "stopFlag": Event } }
 _WORKFLOW_STATE = {}
@@ -2034,8 +2026,6 @@ def _wf_call_agent(agent_id, message, timeout=600, project_id=None, task_id=None
 def _wf_call_agent_http(agent_id, message, timeout, session_key=None):
     """Try calling agent via gateway /v1/chat/completions. Returns None if not available.
     If session_key is provided, uses it for session routing (enables cleanup later)."""
-    import urllib.request
-    import urllib.error
 
     gateway_http = VO_CONFIG.get("openclaw", {}).get("gatewayHttp", "http://127.0.0.1:18789")
     token = _get_gateway_token()
@@ -2083,8 +2073,6 @@ def _wf_call_agent_http(agent_id, message, timeout, session_key=None):
 
 def _wf_call_agent_cli(agent_id, message, timeout, session_key=None):
     """Call agent via `openclaw agent` CLI — always available when OpenClaw is installed."""
-    import subprocess
-    import shutil
 
     openclaw_bin = shutil.which("openclaw")
     if not openclaw_bin:
@@ -2233,7 +2221,21 @@ MANDATORY RULES:
 
 A reviewer will independently verify your fixes by reading the actual files and browsing the app."""
 
-def _wf_parse_review_response(response_text, checklist):
+def _wf_review_had_structured_match(review_results):
+    """Check if any review results came from structured line parsing (not defaults/fallbacks).
+
+    Returns True if at least one result was explicitly parsed from a structured
+    review line (marked with _parsed=True) or from a freeform-positive fallback.
+    Returns False if all results came from the default needs_more_work fill-in
+    (marked with _default=True) — indicating the parser couldn't understand the response.
+    """
+    for r in review_results:
+        if r.get("_parsed") or r.get("_fallback"):
+            return True
+    return False
+
+
+def _wf_parse_review_response(response_text, checklist, review_cycle=0):
     """Parse the agent's review response into structured results.
 
     Handles formats like:
@@ -2245,6 +2247,11 @@ def _wf_parse_review_response(response_text, checklist):
     Or freeform lines containing status keywords.
 
     Important: checks longer status strings first to avoid "PASS" matching "DID_NOT_PASS".
+
+    Fallback behavior for freeform/unstructured responses:
+    - If no structured review lines matched, performs sentiment analysis on the full text.
+    - If sentiment is positive (pass keywords, no fail keywords), treats as all-pass.
+    - If review_cycle >= 3 and all checklist items are marked done, auto-passes.
     """
     results = []
     lines = response_text.strip().split("\n")
@@ -2272,7 +2279,7 @@ def _wf_parse_review_response(response_text, checklist):
         # Accept lines with REVIEW_ITEM_, numbered items, or containing a status keyword
         is_review_line = (
             "review_item" in line_lower
-            or re_module.match(r'^\d+[\.\):\s]', line_stripped)
+            or re.match(r'^\d+[\.\):\s]', line_stripped)
             or "item " in line_lower
         )
 
@@ -2287,6 +2294,7 @@ def _wf_parse_review_response(response_text, checklist):
                 "id": checklist[item_idx].get("id"),
                 "text": checklist[item_idx].get("text", ""),
                 "status": matched_status,
+                "_parsed": True,
             })
             item_idx += 1
         elif matched_status and not is_review_line:
@@ -2297,8 +2305,74 @@ def _wf_parse_review_response(response_text, checklist):
                     "id": checklist[item_idx].get("id"),
                     "text": checklist[item_idx].get("text", ""),
                     "status": matched_status,
+                    "_parsed": True,
                 })
                 item_idx += 1
+
+    # --- Freeform fallback: if no structured lines matched at all ---
+    if not results:
+        response_lower = response_text.lower()
+
+        # Positive sentiment keywords (agent says everything is good)
+        positive_keywords = [
+            "all items verified", "all items are done", "all items pass",
+            "everything looks good", "everything is working", "all checks pass",
+            "all tasks completed", "all completed", "all done", "looks great",
+            "fully implemented", "all requirements met", "verified and working",
+            "all items look good", "no issues found", "nothing to fix",
+            "approved", "lgtm", "ship it",
+        ]
+        # Negative sentiment keywords (agent says something is wrong)
+        negative_keywords = [
+            "needs work", "needs more work", "did not pass", "not working",
+            "failed", "missing", "incomplete", "broken", "issues found",
+            "not implemented", "needs fix", "needs rework", "does not work",
+            "errors", "bugs found", "not done", "partially done",
+        ]
+
+        # Count occurrences of positive vs negative keywords in the response.
+        # This gives a quantitative signal: if positive_count > 0 and
+        # negative_count == 0, the agent is clearly approving.
+        positive_count = sum(1 for kw in positive_keywords if kw in response_lower)
+        negative_count = sum(1 for kw in negative_keywords if kw in response_lower)
+
+        if negative_count > 0:
+            # Negative keywords found — don't auto-pass, fall through to defaults.
+            # The agent explicitly flagged issues; treat as needs_more_work.
+            pass
+        else:
+            # No structured lines AND zero negative keywords → treat as all-pass.
+            # This covers: (a) positive sentiment ("all items verified"), and
+            # (b) neutral/ambiguous text with no negatives ("code looks ready").
+            # The spec says: empty results = all-pass, not all-fail.
+            if positive_count > 0:
+                fallback_reason = "freeform_positive_sentiment"
+            else:
+                fallback_reason = "freeform_no_negatives"
+            for i, item in enumerate(checklist):
+                results.append({
+                    "id": item.get("id"),
+                    "text": item.get("text", ""),
+                    "status": "pass",
+                    "_fallback": fallback_reason,
+                    "_positive_count": positive_count,
+                    "_negative_count": negative_count,
+                })
+            return results
+
+        # Cycle-based fallback: if review_cycle >= 3 and all checklist items
+        # are already marked done in the project data, auto-pass even with negatives
+        if review_cycle >= 3:
+            all_checklist_done = all(item.get("done", False) for item in checklist)
+            if all_checklist_done:
+                for i, item in enumerate(checklist):
+                    results.append({
+                        "id": item.get("id"),
+                        "text": item.get("text", ""),
+                        "status": "pass",
+                        "_fallback": "cycle_3_checklist_done",
+                    })
+                return results
 
     # If parsing failed or incomplete, default remaining to needs_more_work
     for i in range(len(results), len(checklist)):
@@ -2306,6 +2380,7 @@ def _wf_parse_review_response(response_text, checklist):
             "id": checklist[i].get("id"),
             "text": checklist[i].get("text", ""),
             "status": "needs_more_work",
+            "_default": True,
         })
 
     return results
@@ -2323,7 +2398,6 @@ def _wf_run_pipeline(project_id, single_task=False):
       _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag)
     except Exception as e:
         print(f"[WORKFLOW ERROR] Pipeline crashed for {project_id}: {e}")
-        import traceback
         traceback.print_exc()
     finally:
         # Always clean up state
@@ -2433,6 +2507,8 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
         max_review_cycles = 5
         review_cycle = 0
         task_done = False
+        wf["_parseFailCount"] = 0  # Track consecutive parse failures for safety cap
+        wf["_reworkCount"] = 0     # Track total consecutive rework cycles for safety cap
 
         while review_cycle < max_review_cycles and not stop_flag.is_set():
             review_cycle += 1
@@ -2463,8 +2539,8 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
             if stop_flag.is_set():
                 break
 
-            # Parse review results
-            review_results = _wf_parse_review_response(review_response, checklist)
+            # Parse review results (pass review_cycle for freeform fallback logic)
+            review_results = _wf_parse_review_response(review_response, checklist, review_cycle=review_cycle)
 
             # Save review results to task
             _wf_update_task_field(project_id, task_id, "reviewCheck", review_results)
@@ -2472,12 +2548,48 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
             review_activity_text = _wf_format_activity_summary(review_activity)
             _wf_write_task_file(project_id, task, "review", review_results=review_results, work_log_entry=f"Review cycle {review_cycle}:\n{review_response[:2000]}\n\n**Review verification activity:**\n{review_activity_text}")
 
+            # ── TOOL-CALL VERIFICATION ──────────────────────────────
+            # A valid review MUST include actual tool usage (read, exec,
+            # or browser) to verify the work. Text-only reviews are not
+            # trustworthy — the agent may claim PASS without checking.
+            # Minimum: at least 1 file read OR 1 exec OR 1 browser action.
+            # Exception: cycle >= 4 with all checklist done bypasses this
+            # to prevent infinite loops when the agent refuses to use tools.
+            review_tool_count = review_activity.get("tool_call_count", 0)
+            review_has_reads = len(review_activity.get("files_read", [])) > 0
+            review_has_exec = len(review_activity.get("exec_commands", [])) > 0
+            review_has_browser = len(review_activity.get("browser_actions", [])) > 0
+            review_verified = review_has_reads or review_has_exec or review_has_browser
+
+            # Track whether the original parse had structured matches (before
+            # tool-verification may override the result). This is used by the
+            # safety cap below to detect repeated parse failures even when
+            # freeform-fallback temporarily marks everything as pass.
+            original_had_structured = _wf_review_had_structured_match(review_results)
+
             # Check results
             all_pass = all(r.get("status") == "pass" for r in review_results)
             needs_user = any(r.get("status") == "requires_user_review" for r in review_results)
             failed_items = [r for r in review_results if r.get("status") in ("needs_more_work", "did_not_pass")]
 
+            # Reject text-only reviews that claim all-pass but used no tools
+            if all_pass and not review_verified:
+                all_checklist_done = all(item.get("done", False) for item in checklist)
+                if review_cycle >= 4 and all_checklist_done:
+                    # Safety valve: after 4 cycles with all items done, accept
+                    # to prevent infinite loops. Log for visibility.
+                    _wf_write_task_file(project_id, task, "review",
+                        work_log_entry=f"⚠️ Review cycle {review_cycle}: accepted without tool verification (all checklist items done, cycle limit reached)")
+                else:
+                    # Reject — force rework so the agent actually verifies
+                    all_pass = False
+                    failed_items = review_results  # treat all as needing rework
+                    _wf_write_task_file(project_id, task, "review",
+                        work_log_entry=f"❌ Review cycle {review_cycle}: REJECTED — agent claimed PASS but used no tools (read/exec/browser) to verify. {review_tool_count} total tool calls.")
+
             if all_pass:
+                wf["_reworkCount"] = 0
+                wf["_parseFailCount"] = 0
                 task_done = True
                 break
 
@@ -2490,7 +2602,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
                 _wf_write_task_file(project_id, task, "review", review_results=review_results, work_log_entry="Workflow paused — requires user review")
                 # Wait until user resolves or stop
                 while not stop_flag.is_set():
-                    _time.sleep(5)
+                    time.sleep(5)
                     # Check if user resolved review items
                     data = _load_projects()
                     project = next((x for x in data["projects"] if x["id"] == project_id), None)
@@ -2515,6 +2627,49 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
                     break
 
             if failed_items and not stop_flag.is_set():
+                # Safety cap: track consecutive rework cycles where the parser
+                # couldn't extract structured review lines. Uses original_had_structured
+                # (computed BEFORE tool-verification may override all_pass→failed)
+                # so that freeform-positive responses that get rejected by tool-check
+                # still count as parse failures.
+                if not original_had_structured:
+                    parse_fail_count = wf.get("_parseFailCount", 0) + 1
+                    wf["_parseFailCount"] = parse_fail_count
+                else:
+                    wf["_parseFailCount"] = 0
+                    parse_fail_count = 0
+
+                # Also track total consecutive rework cycles (regardless of parse
+                # success) to catch loops where the agent keeps failing for any reason.
+                rework_count = wf.get("_reworkCount", 0) + 1
+                wf["_reworkCount"] = rework_count
+
+                # Escalate at 3 consecutive parse failures OR 3 total reworks with
+                # the same pattern (prevents loops from any cause, not just parse).
+                should_escalate = parse_fail_count >= 3 or rework_count >= 3
+                if should_escalate:
+                    reason_parts = []
+                    if parse_fail_count >= 3:
+                        reason_parts.append(f"parser failed to match structured output for {parse_fail_count} consecutive cycles")
+                    if rework_count >= 3:
+                        reason_parts.append(f"task has been reworked {rework_count} consecutive times")
+                    reason = "; ".join(reason_parts)
+
+                    with _WORKFLOW_LOCK:
+                        wf["phase"] = "awaiting_human_intervention"
+                        wf["error"] = (
+                            f"Review loop safety cap triggered: {reason}. "
+                            f"The reviewing agent may be responding with freeform text "
+                            f"or the task may be stuck. Please review manually."
+                        )
+                    _wf_persist_state(project_id)
+                    _wf_write_task_file(
+                        project_id, task, "review",
+                        review_results=review_results,
+                        work_log_entry=f"⚠️ Escalated to user — {reason}. Last response:\n{review_response[:1000]}"
+                    )
+                    break
+
                 # Move back to In Progress for rework
                 with _WORKFLOW_LOCK:
                     wf["phase"] = "reworking"
@@ -2584,7 +2739,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
                 break
             else:
                 # Auto Mode ON — continue to next task
-                _time.sleep(2)  # Brief pause between tasks
+                time.sleep(2)  # Brief pause between tasks
                 continue
         else:
             # Task did NOT pass review after max cycles — do NOT pull next backlog task.
@@ -2600,7 +2755,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
 
             # Wait until human resolves (moves task to done/backlog, or restarts workflow)
             while not stop_flag.is_set():
-                _time.sleep(5)
+                time.sleep(5)
                 # Check if task was manually moved to done or back to backlog
                 data = _load_projects()
                 project = next((x for x in data["projects"] if x["id"] == project_id), None)
@@ -2630,7 +2785,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
                     wf["active"] = False
                 break
             else:
-                _time.sleep(2)
+                time.sleep(2)
                 continue
 
     # Pipeline ended (cleanup handled by wrapper in _wf_run_pipeline)
@@ -2674,7 +2829,6 @@ def _wf_persist_state(project_id):
 def _wf_update_shared_project_work():
     """Write active project-work data to a shared file readable by all VO instances.
     Maps agent IDs to their active project task info."""
-    import time as _t
     active_phases = ("in_progress", "dispatching", "reviewing", "rework")
     shared = {}
     with _WORKFLOW_LOCK:
@@ -2689,7 +2843,7 @@ def _wf_update_shared_project_work():
                 "taskId": wf.get("currentTaskId", ""),
                 "taskTitle": wf.get("currentTaskTitle", ""),
                 "phase": wf.get("phase", ""),
-                "updatedAt": int(_t.time() * 1000),
+                "updatedAt": int(time.time() * 1000),
             }
     try:
         shared_path = os.path.join(WORKSPACE_BASE, "shared", "project-work.json")
@@ -2927,10 +3081,12 @@ def _handle_workflow_start(project_id, body=None):
 
 def _handle_workflow_stop(project_id):
     """POST /api/projects/{id}/workflow/stop — stop the workflow."""
+    current_task_id = None
     with _WORKFLOW_LOCK:
         wf = _WORKFLOW_STATE.get(project_id)
         if not wf or not wf.get("active"):
             return {"ok": True, "status": "already_stopped"}
+        current_task_id = wf.get("currentTaskId")
         wf["stopFlag"].set()
         wf["active"] = False
         wf["phase"] = "stopped"
@@ -2946,6 +3102,12 @@ def _handle_workflow_stop(project_id):
         p["updatedAt"] = _proj_now()
         _save_projects(data)
         _log_activity(p, "workflow_stopped", "user", "Workflow stopped by user")
+
+    # Clean up session files for the active task (if any)
+    if current_task_id and p:
+        task = next((t for t in p.get("tasks", []) if t["id"] == current_task_id), None)
+        if task and task.get("assignee"):
+            _wf_cleanup_task_sessions(task["assignee"], project_id, current_task_id)
 
     return {"ok": True, "status": "stopped"}
 
@@ -3099,7 +3261,6 @@ def _handle_agent_delete(body):
             json.dump(config, f, indent=2)
 
         # 2. Remove agent directory (~/.openclaw/agents/<id>/)
-        import shutil
         agent_dir = os.path.join(WORKSPACE_BASE, f"agents/{agent_id}")
         if os.path.isdir(agent_dir):
             shutil.rmtree(agent_dir, ignore_errors=True)
@@ -3123,7 +3284,6 @@ def _handle_agent_delete(body):
         }
 
     except Exception as e:
-        import traceback
         traceback.print_exc()
         return {"error": str(e), "_status": 500}
 
@@ -3213,8 +3373,8 @@ def get_agent_messages(agent_key, max_messages=500):
                                     if "office.py" in cmd:
                                         tool_calls.append(f"\u2699\ufe0f {cmd.split('office.py')[1].strip()[:80]}")
                                     elif "openclaw agent" in cmd:
-                                        m_agent = re_module.search(r'--agent\s+(\S+)', cmd)
-                                        m_msg = re_module.search(r'--message\s+"([^"]*)"', cmd)
+                                        m_agent = re.search(r'--agent\s+(\S+)', cmd)
+                                        m_msg = re.search(r'--message\s+"([^"]*)"', cmd)
                                         aname = m_agent.group(1) if m_agent else "?"
                                         mtxt = m_msg.group(1)[:60] if m_msg else ""
                                         tool_calls.append(f"\ud83d\udce1 \u2192 {aname}: {mtxt}")
@@ -3249,7 +3409,6 @@ def get_agent_messages(agent_key, max_messages=500):
                 epoch_ms = 0
                 if ts:
                     try:
-                        from datetime import datetime, timezone
                         dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                         epoch_ms = int(dt.timestamp() * 1000)
                     except Exception:
@@ -3331,7 +3490,6 @@ def _auto_configure_gateway_origin():
             json.dump(cfg, f, indent=2)
 
         # Signal gateway to reload config
-        import subprocess
         try:
             r = subprocess.run(["systemctl", "--user", "kill", "-s", "USR1", "openclaw-gateway.service"],
                                capture_output=True, timeout=5)
@@ -3342,7 +3500,6 @@ def _auto_configure_gateway_origin():
             pass
 
         # Fallback: scan /proc for gateway process and send SIGUSR1
-        import signal as _signal
         try:
             for entry in os.listdir("/proc"):
                 if not entry.isdigit():
@@ -3351,7 +3508,7 @@ def _auto_configure_gateway_origin():
                     with open(f"/proc/{entry}/cmdline", "r") as f:
                         cmdline = f.read()
                     if "openclaw" in cmdline and "gateway" in cmdline:
-                        os.kill(int(entry), _signal.SIGUSR1)
+                        os.kill(int(entry), signal.SIGUSR1)
                         print(f"✅ Gateway auto-config: added origin {origin}, signaled PID {entry}")
                         return
                 except (PermissionError, FileNotFoundError, ProcessLookupError):
@@ -3428,8 +3585,7 @@ class ApiUsageCollector:
             return dict(self._data)
 
     def _run_loop(self):
-        import time as _time
-        _time.sleep(3)  # let server start
+        time.sleep(3)  # let server start
         while True:
             try:
                 data = self._collect()
@@ -3437,8 +3593,8 @@ class ApiUsageCollector:
                     self._data = data
             except Exception as e:
                 with self._lock:
-                    self._data = {"providers": [], "timestamp": _time.time(), "error": str(e), "source": "error"}
-            _time.sleep(self.INTERVAL)
+                    self._data = {"providers": [], "timestamp": time.time(), "error": str(e), "source": "error"}
+            time.sleep(self.INTERVAL)
 
     def _read_profiles(self):
         """Read auth profiles and return {profileId: profileData} for supported providers."""
@@ -3451,8 +3607,7 @@ class ApiUsageCollector:
 
     def _collect(self):
         """Run one collection cycle across all configured providers."""
-        import time as _time
-        now = _time.time()
+        now = time.time()
         profiles = self._read_profiles()
         if not profiles:
             return {"providers": [], "timestamp": now, "source": "no-profiles"}
@@ -3493,8 +3648,6 @@ class ApiUsageCollector:
 
     def _http_get(self, url, headers):
         """Make an HTTP GET request. Returns (status, response_body_dict_or_None)."""
-        import urllib.request
-        import urllib.error
         req = urllib.request.Request(url, headers=headers, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=self.REQUEST_TIMEOUT) as resp:
@@ -3690,7 +3843,6 @@ class ApiUsageCollector:
         if isinstance(val, (int, float)):
             return val * 1000 if val < 1e12 else val
         try:
-            from datetime import datetime, timezone
             dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
             return dt.timestamp() * 1000
         except Exception:
@@ -3830,8 +3982,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                             best_key = skey
                     # Detect workflow session: key contains ":wf-"
                     if best_key and ":wf-" in best_key:
-                        import time as _time_mod
-                        if _time_mod.time() - best_ts / 1000 < 300:
+                        if time.time() - best_ts / 1000 < 300:
                             project_work[agent_key] = {
                                 "projectId": "",
                                 "taskId": "",
@@ -3933,9 +4084,8 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             # Update shared file so other VO instances can see project work
             if project_work:
                 try:
-                    import time as _t
                     shared = {}
-                    now_ms = int(_t.time() * 1000)
+                    now_ms = int(time.time() * 1000)
                     for sk, info in project_work.items():
                         agent_id = AGENT_SESSION_IDS.get(sk, sk)
                         shared[agent_id] = {
@@ -3963,7 +4113,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 with open(os.path.join(STATUS_DIR, "browser-controller.json"), "r") as f:
                     data = json.loads(f.read())
                 # Stale if older than 120 seconds
-                import time
                 if time.time() - data.get("ts", 0) > 120:
                     data = {"agent": None}
                 self.wfile.write(json.dumps(data).encode())
@@ -3981,7 +4130,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             cdp_available = False
             if enabled and cdp_url:
                 try:
-                    import urllib.request
                     urllib.request.urlopen(cdp_url.rstrip("/") + "/json", timeout=2)
                     cdp_available = True
                 except Exception:
@@ -4003,7 +4151,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(json.dumps({"available": False}).encode())
             else:
                 try:
-                    import urllib.request
                     req = urllib.request.urlopen(cdp_url.rstrip("/") + "/json", timeout=2)
                     tabs = json.loads(req.read().decode())
                     self.wfile.write(json.dumps(tabs).encode())
@@ -4032,7 +4179,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(json.dumps(data).encode())
         elif self.path == "/pc-metrics":
             # Proxy PC metrics from remote machine (configurable)
-            import urllib.request
             _pc_url = VO_CONFIG["pcMetrics"].get("url")
             if not _pc_url or not VO_CONFIG["features"]["pcMetrics"]:
                 self.send_response(404)
@@ -4097,7 +4243,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 mode_path = os.path.join(STATUS_DIR, "sms-mode.json")
                 with open(mode_path) as f:
                     mode = json.load(f)
-            except:
+            except Exception:
                 mode = {"active": "agent"}
             self.wfile.write(json.dumps(mode).encode())
         elif self.path == "/sms-contacts":
@@ -4288,8 +4434,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(b'{"error":"Weather location not configured. Set weather.location in vo-config.json"}')
                 return
             try:
-                import urllib.request
-                import urllib.parse
                 _wloc_encoded = urllib.parse.quote(_wloc, safe='')
                 req = urllib.request.Request(f"https://wttr.in/{_wloc_encoded}?format=j1", headers={"User-Agent": "curl/7.68"})
                 with urllib.request.urlopen(req, timeout=10) as resp:
@@ -4386,8 +4530,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
 
     def _get_api_usage(self):
         """Return the latest API usage data collected by the background thread."""
-        import time as _time
-        now = _time.time()
+        now = time.time()
         data = dict(_api_usage_collector.get_data())
         data["ageSeconds"] = round(now - data.get("timestamp", 0), 1)
         return data
@@ -4430,11 +4573,10 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
 
     _model_cache = {}  # {provider: {models: [...], ts: timestamp}}
     _CACHE_TTL = 300  # 5 minutes
+    _MAX_CACHE_SIZE = 50  # max entries per cache dict
 
     def _fetch_provider_models(self, provider, api_key):
         """Fetch live model list from a cloud provider's API."""
-        import urllib.request
-        import time
 
         # Check cache
         cached = self.__class__._model_cache.get(provider)
@@ -4462,8 +4604,8 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                         models.append(mid)
 
             elif provider == "google":
-                url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-                req = urllib.request.Request(url)
+                url = "https://generativelanguage.googleapis.com/v1beta/models"
+                req = urllib.request.Request(url, headers={"x-goog-api-key": api_key})
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     data = json.loads(resp.read())
                 for m in data.get("models", []):
@@ -4480,7 +4622,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                         models.append(mid)
 
             models.sort()
-            self.__class__._model_cache[provider] = {"models": models, "ts": time.time()}
+            cache = self.__class__._model_cache
+            cache[provider] = {"models": models, "ts": time.time()}
+            # Evict oldest entries if cache exceeds max size
+            if len(cache) > self.__class__._MAX_CACHE_SIZE:
+                oldest = min(cache, key=lambda k: cache[k]["ts"])
+                del cache[oldest]
         except Exception as e:
             # Return cached if available, even if stale
             if cached:
@@ -4496,7 +4643,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         """Fetch models for a provider from configured models in openclaw.json.
         Provider may be "anthropic-token" but we search for "anthropic/" prefix.
         """
-        import time
 
         cached = self.__class__._registry_cache.get(provider)
         if cached and (time.time() - cached["ts"]) < self.__class__._REGISTRY_TTL:
@@ -4516,7 +4662,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     short_id = model_id[len(prefix):]
                     models.append(short_id)
             models.sort()
-            self.__class__._registry_cache[provider] = {"models": models, "ts": time.time()}
+            cache = self.__class__._registry_cache
+            cache[provider] = {"models": models, "ts": time.time()}
+            # Evict oldest entries if cache exceeds max size
+            if len(cache) > self.__class__._MAX_CACHE_SIZE:
+                oldest = min(cache, key=lambda k: cache[k]["ts"])
+                del cache[oldest]
         except Exception as e:
             if cached:
                 return cached["models"]
@@ -4603,7 +4754,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     # Subscription/OAuth entry - use separate provider name
                     sub_provider = f"{base_provider}-token" if token and not access else f"{base_provider}-oauth"
                     expires = profile.get("expires", 0)
-                    import time
                     if expires:
                         remaining = (expires / 1000 - time.time()) if expires > 1e12 else (expires - time.time())
                         days = max(0, int(remaining / 86400))
@@ -4891,8 +5041,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         Config changes are persisted to disk regardless — gateway picks them up
         on next restart/heartbeat even if signaling fails.
         """
-        import subprocess
-        import signal as _signal
 
         # Method 1: systemctl (works on host or with systemd access)
         try:
@@ -4916,7 +5064,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     with open(f"/proc/{pid_dir}/cmdline", "rb") as f:
                         cmdline = f.read().decode("utf-8", errors="ignore")
                     if "openclaw" in cmdline and ("gateway" in cmdline or "serve" in cmdline):
-                        os.kill(int(pid_dir), _signal.SIGUSR2 if restart else _signal.SIGUSR1)
+                        os.kill(int(pid_dir), signal.SIGUSR2 if restart else signal.SIGUSR1)
                         return True
                 except (PermissionError, ProcessLookupError, FileNotFoundError):
                     continue
@@ -4929,7 +5077,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                                     capture_output=True, text=True, timeout=5)
             for pid in result.stdout.strip().split("\n"):
                 if pid.strip():
-                    os.kill(int(pid.strip()), _signal.SIGUSR1)
+                    os.kill(int(pid.strip()), signal.SIGUSR1)
                     return True
         except Exception:
             pass
@@ -4966,7 +5114,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                         full_id = f"{provider}/{m}"
                         if full_id != default_model and not any(x["id"] == full_id for x in models):
                             models.append({"id": full_id, "label": full_id, "provider": provider})
-        except:
+        except Exception:
             pass
 
         # Add configured models from agents.defaults.models (includes OAuth providers like openai-codex)
@@ -4980,7 +5128,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     if alias:
                         label = f"{mid} ({alias})"
                     models.append({"id": mid, "label": label, "provider": provider})
-        except:
+        except Exception:
             pass
 
         # Add subscription/OAuth models from configured models
@@ -5014,9 +5162,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                             subscription_models.append(sub_model)
             models.extend(subscription_models)
         except Exception as e:
-            import sys, traceback
             pass  # silently ignore subscription model errors
-            traceback.print_exc(file=sys.stderr)
 
         # Ollama models from config
         for prov_name, prov_data in cfg.get("models", {}).get("providers", {}).items():
@@ -5058,12 +5204,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     else:
                         display_prov = f"{base_prov}-oauth"
                     sub_providers[display_prov] = True
-        except:
+        except Exception:
             pass
         try:
             for mid, mdata in cfg.get("agents", {}).get("defaults", {}).get("models", {}).items():
                 configured_models_map[mid] = True
-        except:
+        except Exception:
             pass
 
         return {"models": models, "agentModels": agent_models, "defaultModel": default_model, "subProviders": sub_providers, "configuredModels": configured_models_map}
@@ -5278,7 +5424,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 _reload_gateway_globals()
                 if WORKSPACE_BASE != old_path:
                     _discovered_roster = discover_agents(WORKSPACE_BASE)
-                    _discovered_at = _time_mod.time()
+                    _discovered_at = time.time()
                     refresh_agent_maps()
                 # Restart gateway presence listener if URL or token changed
                 new_token = _get_gateway_token()
@@ -5401,7 +5547,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             return
         elif self.path == "/transcribe":
             # Proxy to host whisper server
-            import urllib.request
             length = int(self.headers.get('Content-Length', 0))
             audio = self.rfile.read(length) if length else b''
             try:
@@ -5557,7 +5702,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
 
         elif self.path == "/upload":
             # Self-contained file upload — saves to STATUS_DIR/uploads/
-            import base64 as _b64, time as _time
             MAX_UPLOAD = 50 * 1024 * 1024  # 50MB
             length = int(self.headers.get('Content-Length', 0))
             if length > MAX_UPLOAD:
@@ -5570,7 +5714,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 body = json.loads(self.rfile.read(length)) if length else {}
                 filename = os.path.basename(body.get("filename", "upload"))
-                content = _b64.b64decode(body.get("content", ""))
+                content = base64.b64decode(body.get("content", ""))
             except Exception as e:
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json")
@@ -5583,7 +5727,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             dest = os.path.join(upload_dir, filename)
             if os.path.exists(dest):
                 stem, ext = os.path.splitext(filename)
-                dest = os.path.join(upload_dir, f"{stem}_{int(_time.time())}{ext}")
+                dest = os.path.join(upload_dir, f"{stem}_{int(time.time())}{ext}")
             with open(dest, "wb") as f:
                 f.write(content)
             self.send_response(200)
@@ -5837,7 +5981,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             for line in lines[-limit:]:
                 try:
                     entries.append(json.loads(line.strip()))
-                except:
+                except Exception:
                     pass
             return {"ok": True, "messages": entries}
         except FileNotFoundError:
@@ -5865,7 +6009,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         FROM_NUMBER = sms_cfg.get("fromNumber")
         if not ACCOUNT_SID or not AUTH_TOKEN or not FROM_NUMBER:
             return {"ok": False, "error": "SMS not configured. Set Twilio credentials in Settings or /setup."}
-        import urllib.request, urllib.parse, base64
         sms_log_path = os.path.join(self._sms_data_dir(), "sms-log.jsonl")
         contacts_path = os.path.join(self._sms_data_dir(), "sms-contacts.json")
         try:
@@ -5877,13 +6020,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             req.add_header("Content-Type", "application/x-www-form-urlencoded")
             with urllib.request.urlopen(req) as resp:
                 result = json.loads(resp.read().decode())
-            import time
             entry = {"type": "intervention", "phone": to, "name": name or "Unknown", "body": body, "sid": result.get("sid"), "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")}
             with open(sms_log_path, 'a') as f:
                 f.write(json.dumps(entry) + '\n')
             try:
                 contacts = json.load(open(contacts_path))
-            except:
+            except Exception:
                 contacts = {}
             if to not in contacts:
                 contacts[to] = {"name": name or "Unknown", "added": time.strftime("%Y-%m-%d"), "note": "Added via Virtual Office"}
@@ -5894,7 +6036,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             err = e.read().decode()
             try:
                 return {"ok": False, "error": json.loads(err).get("message", err[:200])}
-            except:
+            except Exception:
                 return {"ok": False, "error": err[:200]}
         except Exception as e:
             return {"ok": False, "error": str(e)}
@@ -6021,7 +6163,6 @@ def start_http_server():
 
     # Start periodic snapshot saver (every 30s)
     def snapshot_loop():
-        import time
         while True:
             time.sleep(30)
             gateway_presence.save_snapshot(snapshot_path)
@@ -6040,8 +6181,7 @@ def _wf_auto_resume_on_startup():
     Looks for tasks stuck in 'In Progress' or 'Review' columns that have an active
     or done workflow session, indicating the pipeline was mid-execution when killed.
     """
-    import time as _startup_time
-    _startup_time.sleep(3)  # Let the server fully start first
+    time.sleep(3)  # Let the server fully start first
 
     try:
         data = _load_projects()

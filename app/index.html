@@ -9,8 +9,8 @@
     <link rel="apple-touch-icon" href="icon-192.png">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a1a2e">
-    <link rel="stylesheet" href="style.css?v=1775250000">
-    <link rel="stylesheet" href="projects.css?v=2">
+    <link rel="stylesheet" href="style.css?v=0">
+    <link rel="stylesheet" href="projects.css?v=0">
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -610,7 +610,7 @@
         <div id="chat-attachments-preview" class="chat-attachments-preview"></div>
         <div class="chat-input-row">
             <button id="chat-attach" class="chat-attach-btn" title="Attach file">📎</button>
-            <input type="file" id="chat-file-input" multiple accept="image/*,.pdf,.txt,.csv,.json,.md,.py,.js" style="display:none">
+            <input type="file" id="chat-file-input" class="chat-file-input" multiple accept="image/*,.pdf,.txt,.csv,.json,.md,.py,.js" style="display:none">
             <textarea id="chat-input" class="chat-input" placeholder="Type a message..." rows="1"></textarea>
             <button id="chat-mic" class="chat-mic-btn" title="Voice input (Whisper)">🎙️</button>
             <button id="chat-stop" class="chat-stop-btn" title="Stop current model response">⏹</button>
@@ -705,9 +705,9 @@
         setTimeout(resizeCanvas, 320);
     }
     </script>
-    <script src="game.js?v=1774736671"></script>
-    <script src="browser-panel.js?v=1773812451"></script>
-    <script src="projects.js?v=2"></script>
+    <script src="game.js?v=0"></script>
+    <script src="browser-panel.js?v=0"></script>
+    <script src="projects.js?v=0"></script>
     <script>
     // Bio sections for agent modal
     let _bioCache = {};
@@ -949,11 +949,12 @@
         }
     }
     </script>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="chat.js?v=1775263000"></script>
-    <script src="sms-panel.js?v=6"></script>
-    <script src="pc-monitor.js?v=4"></script>
-    <script src="api-usage.js?v=1774026900"></script>
+    <!-- marked.js v15.0.12 - bundled locally for airgapped/offline use -->
+    <script src="marked.min.js"></script>
+    <script src="chat.js?v=0"></script>
+    <script src="sms-panel.js?v=0"></script>
+    <script src="pc-monitor.js?v=0"></script>
+    <script src="api-usage.js?v=0"></script>
     <script>
     // License check — demo watermark + feature gates
     (function() {

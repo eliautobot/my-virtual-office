@@ -19,4 +19,6 @@ ENV VO_STATUS_DIR=/data \
 
 EXPOSE 8090 8091
 
-CMD ["python3", "server.py"]
+RUN chmod +x entrypoint.sh
+
+CMD ["sh", "entrypoint.sh"]
