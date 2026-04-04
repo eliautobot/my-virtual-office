@@ -2557,7 +2557,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
             # Skip unassigned tasks
             with _WORKFLOW_LOCK:
                 wf["phase"] = "error"
-                wf["error"] = f"Task '{task.get('title')}' has no assignee"
+                wf["error"] = "Please assign an agent to all tasks"
                 wf["active"] = False
             break
 
