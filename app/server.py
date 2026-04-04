@@ -4756,6 +4756,85 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
 
         return models
 
+    # OAuth provider model discovery via OpenClaw CLI
+    _oauth_model_cache = {}  # {provider: {models: [...], ts: timestamp}}
+    _OAUTH_CACHE_TTL = 600  # 10 minutes
+
+    @classmethod
+    def _discover_oauth_provider_models(cls):
+        """Discover actually-served models for OAuth providers via `openclaw models list`.
+
+        This replaces stale config-based model lists with live discovery,
+        ensuring only models the provider actually serves are shown.
+        Runs for each OAuth provider, caches results for 10 minutes.
+        """
+        oauth_providers = ["openai-codex"]  # Add more OAuth providers here as needed
+
+        for provider in oauth_providers:
+            cached = cls._oauth_model_cache.get(provider)
+            if cached and (time.time() - cached["ts"]) < cls._OAUTH_CACHE_TTL:
+                continue  # Still fresh
+
+            try:
+                openclaw_bin = shutil.which("openclaw")
+                if not openclaw_bin:
+                    continue
+                result = subprocess.run(
+                    [openclaw_bin, "models", "list", "--provider", provider, "--all", "--json"],
+                    capture_output=True, text=True, timeout=30
+                )
+                if result.returncode != 0:
+                    continue
+                data = json.loads(result.stdout)
+                discovered = []
+                for m in data.get("models", []):
+                    tags = m.get("tags", [])
+                    if "missing" not in tags:
+                        key = m.get("key", "")
+                        if key:
+                            discovered.append(key)
+
+                # Update the config to reflect only discovered models
+                cls._sync_config_models(provider, discovered)
+                cls._oauth_model_cache[provider] = {"models": discovered, "ts": time.time()}
+            except Exception:
+                pass  # Silently skip — will retry next cache expiry
+
+    @classmethod
+    def _sync_config_models(cls, provider, discovered_models):
+        """Sync agents.defaults.models with actually-discovered models for a provider.
+
+        Removes config entries for models NOT served by the provider.
+        Adds entries for discovered models not yet in config.
+        Does NOT touch models from other providers.
+        """
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                cfg = json.load(f)
+
+            models_cfg = cfg.get("agents", {}).get("defaults", {}).get("models", {})
+            prefix = f"{provider}/"
+            discovered_set = set(discovered_models)
+            changed = False
+
+            # Remove config entries not in discovered set
+            to_remove = [k for k in models_cfg if k.startswith(prefix) and k not in discovered_set]
+            for k in to_remove:
+                del models_cfg[k]
+                changed = True
+
+            # Add discovered models not yet in config
+            for m in discovered_models:
+                if m not in models_cfg:
+                    models_cfg[m] = {}
+                    changed = True
+
+            if changed:
+                with open(CONFIG_PATH, "w") as f:
+                    json.dump(cfg, f, indent=2)
+        except Exception:
+            pass  # Config sync is best-effort
+
     _registry_cache = {}  # {provider: {models: [...], ts: timestamp}}
     _REGISTRY_TTL = 600  # 10 minutes
 
@@ -5263,6 +5342,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
 
     def _get_models(self):
         """Read available models from openclaw.json."""
+        # Ensure OAuth provider models are synced with live discovery before reading config
+        try:
+            self._discover_oauth_provider_models()
+        except Exception:
+            pass
+
         try:
             with open(CONFIG_PATH, "r") as f:
                 cfg = json.load(f)
