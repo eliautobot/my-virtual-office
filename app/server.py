@@ -1957,6 +1957,96 @@ def _wf_format_activity_summary(activity):
     return "\n".join(lines)
 
 
+def _wf_abort_task_session(session_key):
+    """Abort a running agent session via gateway chat.abort RPC.
+
+    This immediately kills any in-flight LLM inference for the specific session,
+    similar to clicking Stop in the VO chat. Only targets the given session key —
+    does not affect the agent's main session or other workflow sessions.
+    """
+    import asyncio as _asyncio
+
+    async def _do_abort():
+        try:
+            gw_url = VO_CONFIG["openclaw"]["gatewayUrl"]
+            origin = f"http://127.0.0.1:{PORT}"
+            token = _get_gateway_token()
+            if not token:
+                print(f"[WORKFLOW] No gateway token — skipping session abort for {session_key}")
+                return False
+
+            import websockets as _ws
+            from websockets.asyncio.client import connect as _ws_connect
+
+            async with _asyncio.timeout(15):
+                ws = await _ws_connect(
+                    gw_url,
+                    max_size=1024 * 1024,
+                    additional_headers={"Origin": origin},
+                    close_timeout=3,
+                )
+                async with ws:
+                    # Wait for challenge
+                    raw = await _asyncio.wait_for(ws.recv(), timeout=5)
+                    msg = json.loads(raw)
+                    if msg.get("event") != "connect.challenge":
+                        return False
+
+                    # Authenticate
+                    connect_msg = {
+                        "type": "req",
+                        "id": "wf-abort-1",
+                        "method": "connect",
+                        "params": {
+                            "minProtocol": 3, "maxProtocol": 3,
+                            "client": {"id": "vo-workflow", "version": "1.0", "platform": "server", "mode": "webchat"},
+                            "role": "operator",
+                            "scopes": ["operator.read", "operator.write"],
+                            "caps": [], "commands": [], "permissions": {},
+                            "auth": {"token": token}
+                        }
+                    }
+                    await ws.send(json.dumps(connect_msg))
+                    raw2 = await _asyncio.wait_for(ws.recv(), timeout=5)
+                    res = json.loads(raw2)
+                    if not res.get("ok"):
+                        print(f"[WORKFLOW] Gateway auth failed for session abort: {res.get('error', {}).get('message', 'unknown')}")
+                        return False
+
+                    # Send chat.abort targeting ONLY this session key
+                    abort_msg = {
+                        "type": "req",
+                        "id": "wf-abort-2",
+                        "method": "chat.abort",
+                        "params": {
+                            "sessionKey": session_key
+                        }
+                    }
+                    await ws.send(json.dumps(abort_msg))
+                    raw3 = await _asyncio.wait_for(ws.recv(), timeout=5)
+                    res3 = json.loads(raw3)
+                    if res3.get("ok"):
+                        print(f"[WORKFLOW] Gateway session aborted: {session_key}")
+                        return True
+                    else:
+                        err = res3.get("error", {}).get("message", "unknown")
+                        print(f"[WORKFLOW] Gateway session abort response: {err} (key={session_key})")
+                        return False
+
+        except Exception as e:
+            print(f"[WORKFLOW] Gateway session abort failed for {session_key}: {e}")
+            return False
+
+    try:
+        loop = _asyncio.get_running_loop()
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(_asyncio.run, _do_abort())
+            return future.result(timeout=20)
+    except RuntimeError:
+        return _asyncio.run(_do_abort())
+
+
 def _wf_delete_session_via_gateway(session_key):
     """Delete a session from the gateway's in-memory state via WebSocket RPC.
 
@@ -3217,10 +3307,15 @@ def _handle_workflow_stop(project_id):
         _save_projects(data)
         _log_activity(p, "workflow_stopped", "user", "Workflow stopped by user")
 
-    # Clean up session files for the active task (if any)
+    # Abort the running agent session for the active task, then clean up.
+    # This sends chat.abort to the gateway which immediately kills any in-flight
+    # LLM inference — only targets this specific task session, not the agent's
+    # main session or other workflow sessions.
     if current_task_id and p:
         task = next((t for t in p.get("tasks", []) if t["id"] == current_task_id), None)
         if task and task.get("assignee"):
+            session_key = _wf_task_session_key(task["assignee"], project_id, current_task_id)
+            _wf_abort_task_session(session_key)
             _wf_cleanup_task_sessions(task["assignee"], project_id, current_task_id)
 
     return {"ok": True, "status": "stopped"}
