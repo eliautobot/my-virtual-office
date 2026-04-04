@@ -237,7 +237,8 @@
           if (!s) return;
           if (s.totalTokens > 0) this.contextUsed = s.totalTokens;
           if (s.contextTokens > 0 && s.contextTokens > this.contextWindow) this.contextWindow = s.contextTokens;
-          if (s.model) this.sessionModel = (s.modelProvider ? s.modelProvider + '/' : '') + s.model;
+          // Don't update model from gateway transcript — it can be stale.
+          // Model display is driven by fetchSessionInfo() from server config.
           this.updateModelBar();
         }
       } catch (e) {
@@ -253,7 +254,6 @@
 
     async fetchSessionInfo() {
       let gatewayContext = 0;
-      let gotModelFromGateway = false;
       try {
         const res = await rpc('sessions.list', {});
         if (res.ok && res.payload?.sessions?.length) {
@@ -261,10 +261,6 @@
           if (s) {
             if (s.totalTokens > 0) this.contextUsed = s.totalTokens;
             if (s.contextTokens > 0) gatewayContext = s.contextTokens;
-            if (s.model) {
-              this.sessionModel = (s.modelProvider ? s.modelProvider + '/' : '') + s.model;
-              gotModelFromGateway = true;
-            }
           }
         }
       } catch (e) {
@@ -272,14 +268,15 @@
       }
       let serverContext = 0;
       try {
-        // Pass current agent ID so server returns the correct model for this agent
+        // Pass current agent ID so server returns the correct configured model
         const agentId = this.getSelectedAgentId();
         const qs = agentId ? `?agent=${encodeURIComponent(agentId)}` : '';
         const res = await fetch('/session-info' + qs);
         const data = await res.json();
-        // Use server model as fallback when gateway didn't provide one
-        // (new session, no messages yet, or session not found)
-        if (!gotModelFromGateway && data.model) this.sessionModel = data.model;
+        // Always use the configured model from the server — this reflects
+        // what the agent is SET to use, not what was last used historically.
+        // The gateway transcript model can be stale (from before a model change).
+        if (data.model) this.sessionModel = data.model;
         if (data.contextWindow) serverContext = data.contextWindow;
       } catch (e) {
         console.warn('[chat] /session-info failed:', e);
