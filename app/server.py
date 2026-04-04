@@ -2589,6 +2589,11 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
         if stop_flag.is_set():
             break
 
+        # Clean up any stale session from a previous run of this task.
+        # Without this, the gateway may still hold an old session in memory
+        # and fire "Continue where you left off" instead of the actual task prompt.
+        _wf_cleanup_task_sessions(assignee, project_id, task_id)
+
         task_file = _wf_read_task_file(project_id, task_id)
         prompt = _wf_build_task_prompt(task, task_file, project=project)
         agent_response = _wf_call_agent(assignee, prompt, project_id=project_id, task_id=task_id)
