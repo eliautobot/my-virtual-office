@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 PROJECTS_DIRNAME = "projects-md"
 LEGACY_PROJECTS_FILENAME = "projects.json"
-COMPLEX_JSON_FIELDS = {"columns_json", "templates_json", "reviewCheck_json", "checklist_json", "tags_json", "attachments_json"}
+COMPLEX_JSON_FIELDS = {"columns_json", "templates_json", "reviewCheck_json", "lastReviewCheck_json", "checklist_json", "tags_json", "attachments_json"}
 
 
 def _now_iso() -> str:
@@ -288,6 +288,7 @@ class MarkdownProjectStore:
         comments = task.pop("comments", [])
         attachments = task.pop("attachments", [])
         review_check = task.pop("reviewCheck", None)
+        last_review_check = task.pop("lastReviewCheck", None)
         meta = {
             "id": task_id,
             "title": task.get("title", ""),
@@ -301,6 +302,7 @@ class MarkdownProjectStore:
             "checklist_json": task.get("checklist", []),
             "attachments_json": attachments,
             "reviewCheck_json": review_check or [],
+            "lastReviewCheck_json": last_review_check or [],
             "createdAt": task.get("createdAt"),
             "updatedAt": task.get("updatedAt"),
             "completedAt": task.get("completedAt"),
@@ -327,6 +329,10 @@ class MarkdownProjectStore:
         if review_check:
             body_lines.extend(["", "## Review Check"])
             for item in review_check:
+                body_lines.append(f"- {item.get('status', 'pending')}: {item.get('text', '')}")
+        if last_review_check:
+            body_lines.extend(["", "## Last Review Check"])
+            for item in last_review_check:
                 body_lines.append(f"- {item.get('status', 'pending')}: {item.get('text', '')}")
         _atomic_write(path, _dump_frontmatter(meta) + "\n" + "\n".join(body_lines).rstrip() + "\n")
 
@@ -402,6 +408,9 @@ class MarkdownProjectStore:
         review_check = meta.get("reviewCheck_json", [])
         if review_check:
             task["reviewCheck"] = review_check
+        last_review_check = meta.get("lastReviewCheck_json", [])
+        if last_review_check:
+            task["lastReviewCheck"] = last_review_check
         return task
 
     def _extract_section(self, body: str, heading: str) -> str:

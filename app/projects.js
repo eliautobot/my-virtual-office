@@ -1031,6 +1031,8 @@
         const checklist = task.checklist || [];
         const checkDone = checklist.filter(c => c.done).length;
         const comments = task.comments || [];
+        const reviewItems = (task.reviewCheck && task.reviewCheck.length) ? task.reviewCheck : (task.lastReviewCheck || []);
+        const reviewTitle = (task.reviewCheck && task.reviewCheck.length) ? '🔍 Review Check' : ((task.lastReviewCheck && task.lastReviewCheck.length) ? '🕘 Last Failed Review' : '🔍 Review Check');
         const activity = (p && p.activity || []).filter(a => a.taskId === task.id).slice().reverse().slice(0, 20);
 
         panel.innerHTML = `
@@ -1123,29 +1125,32 @@
                 </div>
             </div>
 
-            ${(task.reviewCheck && task.reviewCheck.length) ? `
+            ${reviewItems.length ? `
             <div class="proj-section">
-                <div class="proj-section-header"><span class="proj-section-title">🔍 Review Check</span></div>
+                <div class="proj-section-header"><span class="proj-section-title">${reviewTitle}</span></div>
                 <div class="proj-review-check-list" id="detail-review-check">
-                    ${task.reviewCheck.map((rc, i) => {
+                    ${reviewItems.map((rc, i) => {
                         const icon = {'pass':'✅','needs_more_work':'⚠️','did_not_pass':'❌','requires_user_review':'👤'}[rc.status] || '❓';
                         const statusClass = 'review-' + (rc.status || 'pending').replace(/_/g, '-');
+                        const editable = !!(task.reviewCheck && task.reviewCheck.length);
                         return `
                         <div class="proj-review-item ${statusClass}">
                             <span class="proj-review-icon">${icon}</span>
                             <span class="proj-review-text">${escHtml(rc.text)}</span>
+                            ${editable ? `
                             <select class="proj-review-select" onchange="ProjMgr.updateReviewItemStatus(${i}, this.value)">
                                 <option value="pass" ${rc.status === 'pass' ? 'selected' : ''}>✅ Pass</option>
                                 <option value="needs_more_work" ${rc.status === 'needs_more_work' ? 'selected' : ''}>⚠️ Needs More Work</option>
                                 <option value="did_not_pass" ${rc.status === 'did_not_pass' ? 'selected' : ''}>❌ Did Not Pass</option>
                                 <option value="requires_user_review" ${rc.status === 'requires_user_review' ? 'selected' : ''}>👤 Requires User Review</option>
-                            </select>
+                            </select>` : `<span style="font-size:11px;color:#777">preserved from prior review</span>`}
                         </div>`;
                     }).join('')}
                 </div>
+                ${(task.reviewCheck && task.reviewCheck.length) ? `
                 <div style="text-align:right;margin-top:6px">
                     <button class="proj-btn proj-btn-sm proj-btn-gold" onclick="ProjMgr.saveReviewCheck()">💾 Save Review</button>
-                </div>
+                </div>` : ''}
             </div>` : ''}
 
             <div class="proj-section">
@@ -1992,6 +1997,13 @@
                 const fresh = await api.getProject(p.id);
                 if (fresh.project) {
                     state.currentProject = fresh.project;
+                    if (state.currentTask && state.currentTask.id) {
+                        const liveTask = fresh.project.tasks.find(t => t.id === state.currentTask.id);
+                        if (liveTask) {
+                            state.currentTask = liveTask;
+                            renderDetailPanel(liveTask);
+                        }
+                    }
                     const mc = getMainContent();
                     if (mc && state.view === 'board') {
                         mc.innerHTML = renderBoardView();

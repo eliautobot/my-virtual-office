@@ -1747,6 +1747,25 @@ def _wf_update_task_field(project_id, task_id, field, value):
     _save_projects(data)
     return task
 
+
+def _wf_sync_project_workflow_meta(project_id, *, active=None, phase=None, current_task_id=None, active_agent=None):
+    """Mirror live workflow metadata onto the project payload for UI consumers."""
+    data = _load_projects()
+    p = next((x for x in data["projects"] if x["id"] == project_id), None)
+    if not p:
+        return None
+    if active is not None:
+        p["workflowActive"] = active
+    if phase is not None:
+        p["workflowPhase"] = phase
+    if current_task_id is not None or current_task_id is None:
+        p["activeTaskId"] = current_task_id
+    if active_agent is not None or active_agent is None:
+        p["activeAgent"] = active_agent
+    p["updatedAt"] = _proj_now()
+    _save_projects(data)
+    return p
+
 def _wf_write_task_file(project_id, task, status_text, review_results=None, work_log_entry=None):
     """Update canonical markdown-backed task state, preserving compatibility with workflow logging."""
     data = _load_projects()
@@ -2418,7 +2437,9 @@ For EACH checklist item, respond with one of these statuses:
 {pass_line}
 - NEEDS_MORE_WORK — partially implemented but has issues you can identify in the code
 - DID_NOT_PASS — no real changes found in files, or changes don't work
-- REQUIRES_USER_REVIEW — involves destructive operations, out of scope, or needs human judgment
+- REQUIRES_USER_REVIEW — ONLY if the item truly cannot be judged by an agent after using tools, such as a subjective product/design decision, required human sign-off, unavailable external system access that only the user can provide, or a genuinely destructive/approval-gated action. Do NOT use REQUIRES_USER_REVIEW for ordinary coding uncertainty, incomplete implementation, missing evidence, failed verification, or because one item previously needed rework. In those cases you MUST use NEEDS_MORE_WORK or DID_NOT_PASS.
+
+If you can read the code, run tests, inspect outputs, or otherwise verify the implementation yourself, you MUST make your own judgment and use PASS, NEEDS_MORE_WORK, or DID_NOT_PASS.
 
 Respond in this EXACT format (one line per item, after your verification):
 REVIEW_ITEM_1: <status>
@@ -2667,6 +2688,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
                 wf["error"] = f"Task '{active_task.get('title', '')}' is still in progress. Backlog tasks will not start until it is fully done or moved to backlog/done."
                 wf["currentTaskId"] = active_task["id"]
                 wf["active"] = False
+            _wf_sync_project_workflow_meta(project_id, active=False, phase="blocked_by_active_task", current_task_id=active_task["id"], active_agent=active_task.get("assignee"))
             _wf_persist_state(project_id)
             break
 
@@ -2678,6 +2700,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
                 wf["phase"] = "idle"
                 wf["currentTaskId"] = None
                 wf["active"] = False
+            _wf_sync_project_workflow_meta(project_id, active=False, phase="idle", current_task_id=None, active_agent=None)
             break
 
         task_id = task["id"]
@@ -2694,6 +2717,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
             wf["currentTaskId"] = task_id
             wf["phase"] = "dispatching"
             wf["error"] = None
+        _wf_sync_project_workflow_meta(project_id, active=True, phase="dispatching", current_task_id=task_id, active_agent=assignee)
         _wf_persist_state(project_id)
 
         if stop_flag.is_set():
@@ -2758,6 +2782,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
             with _WORKFLOW_LOCK:
                 wf["phase"] = "reviewing"
                 wf["reviewCycle"] = review_cycle
+            _wf_sync_project_workflow_meta(project_id, active=True, phase="reviewing", current_task_id=task_id, active_agent=assignee)
             _wf_persist_state(project_id)
 
             # Reload task for fresh checklist
@@ -2842,6 +2867,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
                 with _WORKFLOW_LOCK:
                     wf["phase"] = "awaiting_user_review"
                     wf["error"] = "Task requires user review for some items"
+                _wf_sync_project_workflow_meta(project_id, active=True, phase="awaiting_user_review", current_task_id=task_id, active_agent=assignee)
                 _wf_persist_state(project_id)
                 _wf_write_task_file(project_id, task, "review", review_results=review_results, work_log_entry="Workflow paused — requires user review")
                 # Wait until user resolves or stop
@@ -2906,6 +2932,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
                             f"The reviewing agent may be responding with freeform text "
                             f"or the task may be stuck. Please review manually."
                         )
+                    _wf_sync_project_workflow_meta(project_id, active=True, phase="awaiting_human_intervention", current_task_id=task_id, active_agent=assignee)
                     _wf_persist_state(project_id)
                     _wf_write_task_file(
                         project_id, task, "review",
@@ -2917,6 +2944,8 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
                 # Move back to In Progress for rework
                 with _WORKFLOW_LOCK:
                     wf["phase"] = "reworking"
+                _wf_update_task_field(project_id, task_id, "lastReviewCheck", review_results)
+                _wf_sync_project_workflow_meta(project_id, active=True, phase="reworking", current_task_id=task_id, active_agent=assignee)
                 _wf_persist_state(project_id)
 
                 # Clear stale reviewCheck so next cycle starts clean
@@ -2974,6 +3003,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
             with _WORKFLOW_LOCK:
                 wf["phase"] = "task_done"
                 wf["currentTaskId"] = None
+            _wf_sync_project_workflow_meta(project_id, active=(not single_task), phase="task_done", current_task_id=None, active_agent=None)
             _wf_persist_state(project_id)
 
             if single_task:
@@ -2995,6 +3025,7 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
             with _WORKFLOW_LOCK:
                 wf["phase"] = "awaiting_human_intervention"
                 wf["error"] = f"Task '{task.get('title', '')}' failed review after {max_review_cycles} cycles. Resolve manually or retry."
+            _wf_sync_project_workflow_meta(project_id, active=True, phase="awaiting_human_intervention", current_task_id=task_id, active_agent=assignee)
             _wf_persist_state(project_id)
 
             # Wait until human resolves (moves task to done/backlog, or restarts workflow)
@@ -3333,6 +3364,9 @@ def _handle_workflow_start(project_id, body=None):
 
     # Update project workflow settings
     p["workflowActive"] = True
+    p["workflowPhase"] = "starting"
+    p["activeTaskId"] = None
+    p["activeAgent"] = None
     p["autoMode"] = auto_mode
     p["updatedAt"] = _proj_now()
     _save_projects(data)
@@ -3370,6 +3404,9 @@ def _handle_workflow_stop(project_id):
     p = next((x for x in data["projects"] if x["id"] == project_id), None)
     if p:
         p["workflowActive"] = False
+        p["workflowPhase"] = "stopped"
+        p["activeTaskId"] = None
+        p["activeAgent"] = None
         p["updatedAt"] = _proj_now()
         _save_projects(data)
         _log_activity(p, "workflow_stopped", "user", "Workflow stopped by user")
@@ -3461,6 +3498,7 @@ def _handle_workflow_status(project_id):
         "active": active,
         "autoMode": p.get("autoMode", False),
         "currentTaskId": current_task,
+        "activeAgent": next((t.get("assignee") for t in p.get("tasks", []) if t.get("id") == current_task), None) if current_task else None,
         "phase": phase,
         "error": error,
         "reviewCycle": review_cycle,
