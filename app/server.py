@@ -2355,6 +2355,33 @@ A reviewer will independently verify your work by reading the actual files and b
 
 WARNING: Do NOT run 'docker restart' on this app's container — it will kill the workflow pipeline managing this task. If you need to reload server changes, the app live-mounts /app so file edits take effect on the next HTTP request for static files. For server.py changes that need a process reload, note what needs restarting in your report and the reviewer will handle it."""
 
+def _wf_task_needs_visual_review(task):
+    """Heuristic: determine whether a task should require browser-based review."""
+    parts = [
+        task.get("title", "") or "",
+        task.get("description", "") or "",
+    ]
+    for item in task.get("checklist") or []:
+        parts.append(item.get("text", "") or "")
+    hay = "\n".join(parts).lower()
+
+    visual_terms = [
+        "ui", "ux", "browser", "page", "screen", "visual", "visually",
+        "frontend", "front-end", "layout", "render", "display", "button",
+        "form", "modal", "panel", "dashboard", "site", "web app", "webapp",
+        "css", "html", "screenshot", "snapshot", "click", "navigation",
+        "animation", "canvas", "view", "viewer", "interactive"
+    ]
+    non_visual_terms = [
+        "docs", "documentation", "audit", "analysis", "implementation map",
+        "review evidence", "write-up", "writeup", "readme", "markdown"
+    ]
+
+    has_visual = any(term in hay for term in visual_terms)
+    has_non_visual = any(term in hay for term in non_visual_terms)
+    return has_visual and not has_non_visual
+
+
 def _wf_build_review_prompt(task, task_file_content=None, project=None):
     """Build the self-review prompt for an agent."""
     project_context = ""
@@ -2366,6 +2393,18 @@ def _wf_build_review_prompt(task, task_file_content=None, project=None):
         for i, item in enumerate(task["checklist"], 1):
             items_text += f"  {i}. {item.get('text', '')}\n"
 
+    needs_visual_review = _wf_task_needs_visual_review(task)
+    visual_steps = """
+3. Use the browser tool to load the running app/site and visually confirm UI changes are working. Take snapshots.
+4. If you open any browser/session for review, you MUST close it before finishing your review response. Do not leave browser instances running after review.
+5. If you cannot find real file changes for an item, mark it DID_NOT_PASS regardless of what was claimed earlier.""" if needs_visual_review else """
+3. Use the browser tool only if the task has a real visual/UI surface that can be meaningfully checked in a running app or site.
+4. If you open any browser/session for review, you MUST close it before finishing your review response.
+5. If you cannot find real file changes or real deliverables for an item, mark it DID_NOT_PASS regardless of what was claimed earlier."""
+
+    pass_line = "- PASS — verified in the actual files AND confirmed working in the browser/app" if needs_visual_review else "- PASS — verified in the actual files and supported by real verification steps (for example read/exec, and browser if applicable)"
+    critical_line = "CRITICAL: You MUST use tools (read, exec, browser) during this review. A text-only review with no tool calls will be considered invalid." if needs_visual_review else "CRITICAL: You MUST use tools during this review. Use read and/or exec for non-visual tasks, and use browser only when the task is visually reviewable. A text-only review with no tool calls will be considered invalid."
+
     return f"""{project_context}Review your completed work on: {task.get('title', 'Untitled')}
 
 You must INDEPENDENTLY VERIFY each checklist item. Do NOT trust your previous claims — verify by actually checking.
@@ -2373,12 +2412,10 @@ You must INDEPENDENTLY VERIFY each checklist item. Do NOT trust your previous cl
 MANDATORY REVIEW STEPS:
 1. Use the read tool to open the actual source files that were supposed to be modified. Confirm the changes exist in the code.
 2. Use exec to run any tests, linters, or verification commands.
-3. Use the browser tool to load the running app/site and visually confirm UI changes are working. Take snapshots.
-4. If you open any browser/session for review, you MUST close it before finishing your review response. Do not leave browser instances running after review.
-5. If you cannot find real file changes for an item, mark it DID_NOT_PASS regardless of what was claimed earlier.
+{visual_steps}
 
 For EACH checklist item, respond with one of these statuses:
-- PASS — verified in the actual files AND confirmed working in the browser/app
+{pass_line}
 - NEEDS_MORE_WORK — partially implemented but has issues you can identify in the code
 - DID_NOT_PASS — no real changes found in files, or changes don't work
 - REQUIRES_USER_REVIEW — involves destructive operations, out of scope, or needs human judgment
@@ -2391,7 +2428,7 @@ REVIEW_ITEM_2: <status>
 Checklist items to review:
 {items_text}
 
-CRITICAL: You MUST use tools (read, exec, browser) during this review. A text-only review with no tool calls will be considered invalid."""
+{critical_line}"""
 
 def _wf_build_rework_prompt(task, failed_items, task_file_content=None, project=None):
     """Build a rework prompt for failed review items."""
@@ -2755,17 +2792,18 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
             _wf_write_task_file(project_id, task, "review", review_results=review_results, work_log_entry=f"Review cycle {review_cycle}:\n{review_response[:2000]}\n\n**Review verification activity:**\n{review_activity_text}")
 
             # ── TOOL-CALL VERIFICATION ──────────────────────────────
-            # A valid review MUST include actual tool usage (read, exec,
-            # or browser) to verify the work. Text-only reviews are not
-            # trustworthy — the agent may claim PASS without checking.
-            # Minimum: at least 1 file read OR 1 exec OR 1 browser action.
+            # A valid review MUST include actual tool usage to verify the work.
+            # For visual/UI tasks, browser review is strongly expected.
+            # For non-visual tasks, read/exec verification is enough.
             # Exception: cycle >= 4 with all checklist done bypasses this
             # to prevent infinite loops when the agent refuses to use tools.
             review_tool_count = review_activity.get("tool_call_count", 0)
             review_has_reads = len(review_activity.get("files_read", [])) > 0
             review_has_exec = len(review_activity.get("exec_commands", [])) > 0
             review_has_browser = len(review_activity.get("browser_actions", [])) > 0
+            task_needs_visual_review = _wf_task_needs_visual_review(task)
             review_verified = review_has_reads or review_has_exec or review_has_browser
+            review_visual_verified = review_has_browser if task_needs_visual_review else True
 
             # Track whether the original parse had structured matches (before
             # tool-verification may override the result). This is used by the
@@ -2778,20 +2816,20 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
             needs_user = any(r.get("status") == "requires_user_review" for r in review_results)
             failed_items = [r for r in review_results if r.get("status") in ("needs_more_work", "did_not_pass")]
 
-            # Reject text-only reviews that claim all-pass but used no tools
-            if all_pass and not review_verified:
+            # Reject reviews that claim all-pass without required verification.
+            if all_pass and (not review_verified or not review_visual_verified):
                 all_checklist_done = all(item.get("done", False) for item in checklist)
                 if review_cycle >= 4 and all_checklist_done:
-                    # Safety valve: after 4 cycles with all items done, accept
-                    # to prevent infinite loops. Log for visibility.
                     _wf_write_task_file(project_id, task, "review",
-                        work_log_entry=f"⚠️ Review cycle {review_cycle}: accepted without tool verification (all checklist items done, cycle limit reached)")
+                        work_log_entry=f"⚠️ Review cycle {review_cycle}: accepted without full verification (all checklist items done, cycle limit reached)")
                 else:
-                    # Reject — force rework so the agent actually verifies
                     all_pass = False
-                    failed_items = review_results  # treat all as needing rework
+                    failed_items = review_results
+                    reason = "used no tools (read/exec/browser) to verify"
+                    if review_verified and not review_visual_verified:
+                        reason = "did not use browser verification for a visually reviewable task"
                     _wf_write_task_file(project_id, task, "review",
-                        work_log_entry=f"❌ Review cycle {review_cycle}: REJECTED — agent claimed PASS but used no tools (read/exec/browser) to verify. {review_tool_count} total tool calls.")
+                        work_log_entry=f"❌ Review cycle {review_cycle}: REJECTED — agent claimed PASS but {reason}. {review_tool_count} total tool calls.")
 
             if all_pass:
                 wf["_reworkCount"] = 0
