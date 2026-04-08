@@ -1840,6 +1840,49 @@ def _wf_task_session_key(agent_id, project_id, task_id):
     return f"agent:{agent_id}:openai:wf-{project_id[:8]}-{task_id[:8]}"
 
 
+def _wf_browser_exec_action_desc(command):
+    """Infer browser verification activity from exec-driven browser automation.
+
+    This keeps workflow review validation compatible with environments where
+    visual verification happens through a browser CLI (for example
+    `agent-browser ...`) instead of the first-class `browser` tool.
+    """
+    if not command:
+        return None
+    cmd = command.strip()
+    cmd_lower = cmd.lower()
+
+    browser_markers = (
+        "agent-browser ",
+        " agent-browser",
+        "agent-browser\n",
+        "playwright ",
+        " npx playwright",
+    )
+    if not any(marker in cmd_lower for marker in browser_markers):
+        return None
+
+    action_map = [
+        (" screenshot", "screenshot"),
+        (" snapshot", "snapshot"),
+        (" open ", "open"),
+        (" navigate ", "navigate"),
+        (" click ", "click"),
+        (" fill ", "fill"),
+        (" type ", "type"),
+        (" eval ", "eval"),
+        (" close", "close"),
+        (" wait ", "wait"),
+    ]
+    action = "browser-cli"
+    for needle, label in action_map:
+        if needle in cmd_lower:
+            action = label
+            break
+
+    return f"{action} (exec)"
+
+
 def _wf_extract_session_activity(agent_id, project_id, task_id):
     """Extract file activity and tool usage from a workflow task's session JSONL.
 
@@ -1884,6 +1927,7 @@ def _wf_extract_session_activity(agent_id, project_id, task_id):
         seen_files_read = set()
         seen_files_edit = set()
         seen_files_write = set()
+        seen_browser_actions = set()
 
         with open(jsonl_path, "r") as f:
             for line in f:
@@ -1922,6 +1966,10 @@ def _wf_extract_session_activity(agent_id, project_id, task_id):
                         cmd = args.get("command", "")
                         if cmd:
                             activity["exec_commands"].append(cmd[:200])
+                            browser_desc = _wf_browser_exec_action_desc(cmd)
+                            if browser_desc and browser_desc not in seen_browser_actions:
+                                seen_browser_actions.add(browser_desc)
+                                activity["browser_actions"].append(browser_desc)
                     elif name.lower() == "browser":
                         action = args.get("action", "")
                         url = args.get("url", "")
@@ -1929,7 +1977,10 @@ def _wf_extract_session_activity(agent_id, project_id, task_id):
                             desc = action
                             if url:
                                 desc += f" → {url}"
-                            activity["browser_actions"].append(desc[:200])
+                            desc = desc[:200]
+                            if desc not in seen_browser_actions:
+                                seen_browser_actions.add(desc)
+                                activity["browser_actions"].append(desc)
     except Exception as e:
         print(f"[WORKFLOW] Activity extraction error: {e}")
 
