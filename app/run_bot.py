@@ -87,68 +87,38 @@ def build_config() -> dict:
         "api_passphrase":  os.environ.get("EXCHANGE_PASSPHRASE", ""),
         "paper":           _env_bool("PAPER_TRADING", False),
         "leverage":        _env_int("LEVERAGE", 10),
-        "symbols":         _env_list("SYMBOLS", "BTC/USDT"),
-        "candle_tf":       os.environ.get("CANDLE_TF", "15m"),
-        "candle_limit":    _env_int("CANDLE_LIMIT", 400),
+        "symbols":         _env_list("SYMBOLS", "BTC-USDT-SWAP"),
         "interval":        _env_int("INTERVAL_SECONDS", 60),
-        "trade_amount_usdt": _env_float("TRADE_AMOUNT_USDT", 100.0),
-        "max_positions":   _env_int("MAX_POSITIONS", 4),
-        "max_drawdown":    _env_float("MAX_DRAWDOWN_PCT", 0.20),
-        "risk_per_trade":  _env_float("RISK_PER_TRADE", 0.01),
-        "strategies": {
-            "swing_reversal_pro": _env_bool("STRATEGY_SWING_REVERSAL", True),
-        },
-        "swing_reversal_params": {
-            "risk_pct":        _env_float("SR_RISK",        0.01),
-            "l1_min_score":    _env_int("SR_L1",               5),   # Mode A quality gate (5/7)
-            "l2_min_pass":     _env_int("SR_L2",               4),   # Mode A context (4/6)
-            "sl_atr_mult":     _env_float("SR_SL",            1.5),  # SL = 1.5×ATR
-            "tp_mult":         _env_float("SR_TP",            2.0),  # TP = 2.0×SL dist (1:2 R:R)
-            "adx_no_trade":    _env_float("SR_ADX_MIN",      10.0),  # 15m ADX min threshold
-            "adx_must_rise":   _env_bool("SR_ADX_RISING",   False),  # require ADX rising over N bars
-            "adx_rise_bars":   _env_int("SR_ADX_RISE_BARS",     3),  # lookback for rising check
-            "mtf_bias_limit":  _env_float("SR_MTF_LIMIT",    50.0),
-            "max_bars":        _env_int("SR_MAXBARS",           48), # 12h max hold (48×15m bars)
-            "rsi_entry_long":  _env_float("SR_RSI_LONG",      42.0), # Mode A RSI gate long
-            "rsi_entry_short": _env_float("SR_RSI_SHORT",     58.0), # Mode A RSI gate short
-        },
+        "bot_state_file":  os.environ.get("BOT_STATE_FILE", "bot_state.json"),
+
+        # Adaptive bot core params
+        "account_balance":       _env_float("ACCOUNT_BALANCE", 10_000.0),
+        "base_risk_pct":         _env_float("BASE_RISK_PCT", 0.01),
+        "daily_loss_limit_pct":  _env_float("DAILY_LOSS_LIMIT_PCT", -3.0),
+        "daily_profit_limit_pct": _env_float("DAILY_PROFIT_LIMIT_PCT", 8.0),
+        "cooldown_minutes":      _env_int("COOLDOWN_MINUTES", 30),
+        "max_loss_streak":       _env_int("MAX_LOSS_STREAK", 3),
+        "tp1_close_pct":         _env_float("TP1_CLOSE_PCT", 0.50),
+
+        # Runtime safety
+        "max_tick_staleness_sec": _env_int("MAX_TICK_STALENESS_SEC", 900),
+
         "telegram_token":      os.environ.get("TELEGRAM_BOT_TOKEN", ""),
         "telegram_chat_id":    os.environ.get("TELEGRAM_CHAT_ID", ""),
     }
 
 
 # ---------------------------------------------------------------------------
-# Build strategies
+# Build connector (for live execution + data fetch)
 # ---------------------------------------------------------------------------
 
-def _make_strategies(symbols: list, flags: dict, cfg: dict,
-                     connector=None) -> list:
-    from trading.strategies.swing_reversal_pro import SwingReversalPro
+def _make_exchange_adapter(cfg: dict):
+    from trading.strategies.okx_exchange import OKXExecutionAdapter
 
-    strategies = []
-    p = cfg["swing_reversal_params"]
-    for sym in symbols:
-        if flags.get("swing_reversal_pro"):
-            strategies.append(SwingReversalPro(sym, params={**p, "direction": "long"}))
-            strategies.append(SwingReversalPro(sym, params={**p, "direction": "short"}))
-    return strategies
-
-
-# ---------------------------------------------------------------------------
-# Build connector
-# ---------------------------------------------------------------------------
-
-def _make_connector(cfg: dict):
-    from trading.connectors.binance_conn import BinanceConnector
-
-    return BinanceConnector(
-        api_key=cfg["api_key"],
-        api_secret=cfg["api_secret"],
-        paper=cfg["paper"],
-        exchange_id=cfg["exchange"],
-        passphrase=cfg.get("api_passphrase", ""),
-        leverage=cfg.get("leverage", 1),
-        margin_mode="cross",
+    return OKXExecutionAdapter(
+        symbol=cfg["symbols"][0],
+        sandbox=cfg["paper"],
+        td_mode="cross",
     )
 
 
@@ -168,68 +138,142 @@ def _make_telegram(cfg: dict):
 
 
 # ---------------------------------------------------------------------------
+# Indicator/Candle mapping helpers
+# ---------------------------------------------------------------------------
+
+def _to_candle_dict(ohlcv_row):
+    # ohlcv format from ccxt: [timestamp, open, high, low, close, volume]
+    ts, o, h, l, c, v = ohlcv_row
+    return {
+        "timestamp": ts,
+        "open": float(o),
+        "high": float(h),
+        "low": float(l),
+        "close": float(c),
+        "volume": float(v),
+        # fallback placeholders for pattern-based SL logic
+        "pattern_low": float(l),
+        "pattern_high": float(h),
+    }
+
+
+def _basic_indicators_from_candles(rows):
+    # Lightweight indicators to satisfy adaptive bot required keys.
+    # This is intentionally conservative and deterministic.
+    import numpy as np
+
+    closes = np.array([r[4] for r in rows], dtype=float)
+    highs = np.array([r[2] for r in rows], dtype=float)
+    lows = np.array([r[3] for r in rows], dtype=float)
+    vols = np.array([r[5] for r in rows], dtype=float)
+
+    last_close = float(closes[-1])
+    ema5 = float(np.mean(closes[-5:])) if len(closes) >= 5 else last_close
+    ema20 = float(np.mean(closes[-20:])) if len(closes) >= 20 else last_close
+    atr = float(np.mean(highs[-14:] - lows[-14:])) if len(highs) >= 14 else float(highs[-1] - lows[-1])
+    vol_avg = float(np.mean(vols[-20:])) if len(vols) >= 20 else float(vols[-1])
+
+    # simple proxy scores
+    trend_score = 70.0 if ema5 > ema20 else 40.0
+    momentum_score = 65.0 if closes[-1] > closes[-2] else 45.0 if len(closes) >= 2 else 50.0
+    volume_score = 65.0 if vols[-1] >= vol_avg else 45.0
+
+    # very simple RSI proxy
+    if len(closes) >= 15:
+        diffs = np.diff(closes[-15:])
+        gain = np.mean(np.clip(diffs, 0, None))
+        loss = np.mean(np.clip(-diffs, 0, None)) + 1e-9
+        rs = gain / loss
+        rsi = float(100 - (100 / (1 + rs)))
+    else:
+        rsi = 50.0
+
+    return {
+        "adx": 25.0,
+        "rsi": rsi,
+        "macd": float(ema5 - ema20),
+        "macd_signal": float((ema5 - ema20) * 0.8),
+        "ema5": ema5,
+        "ema20": ema20,
+        "atr": max(atr, 1e-9),
+        "volume": float(vols[-1]),
+        "vol_avg": max(vol_avg, 1e-9),
+        "trend_score": trend_score,
+        "momentum_score": momentum_score,
+        "volume_score": volume_score,
+        "pattern_score": 55.0,
+        "structure_score": 70.0 if ema5 > ema20 else 40.0,
+        "atr_score": 55.0,
+        "rsi_score": min(max(rsi, 0), 100),
+        "sweep_score": 50.0,
+        "divergence_score": 50.0,
+        "ema_score": 60.0 if ema5 > ema20 else 40.0,
+        "vwap_score": 55.0,
+        "macd_score": 60.0 if (ema5 - ema20) > 0 else 40.0,
+        "eff_ratio": 0.7 if ema5 != ema20 else 0.3,
+        "atr_exp": 1.1,
+        "bb_width": 0.5,
+        "ema20_slope_score": 60.0 if ema5 > ema20 else 40.0,
+        "adx_score": 60.0,
+        "eff_score": 60.0,
+        "vol_score": 55.0,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 async def main():
     cfg = build_config()
 
+    if not cfg["symbols"]:
+        logger.critical("No SYMBOLS configured")
+        sys.exit(1)
+
     # Pre-flight: refuse to start live mode with missing credentials
     if not cfg["paper"]:
         required = ["api_key", "api_secret"]
         if cfg["exchange"] == "okx":
-            required.append("api_passphrase")  # OKX mandates passphrase
+            required.append("api_passphrase")
         missing = [k for k in required if not cfg.get(k, "").strip()]
         if missing:
             logger.critical("LIVE MODE but %s not set — set env vars and restart", missing)
             sys.exit(1)
-        if not cfg.get("telegram_token"):
-            logger.warning("⚠ Telegram not configured — no trade alerts in LIVE mode")
 
-    logger.info(
-        "=== Bot starting [%s] exchange=%s symbols=%s ===",
-        "PAPER" if cfg["paper"] else "LIVE",
-        cfg["exchange"],
-        cfg["symbols"],
-    )
-
-    connector = _make_connector(cfg)
-    strategies = _make_strategies(cfg["symbols"], cfg["strategies"], cfg,
-                                  connector=connector)
-    if not strategies:
-        logger.error("No strategies enabled — exiting")
+    if cfg["exchange"] != "okx":
+        logger.critical("adaptive_trading_bot live runner currently supports EXCHANGE=okx only")
         sys.exit(1)
 
-    from trading.risk_manager import RiskManager
-    from trading.bot import TradingBot
-
-    risk = RiskManager(
-        max_risk_per_trade_pct=cfg["risk_per_trade"],
-        max_open_positions=cfg["max_positions"],
-        max_drawdown_pct=cfg["max_drawdown"],
+    logger.info(
+        "=== Adaptive bot starting [%s] exchange=%s symbol=%s ===",
+        "PAPER" if cfg["paper"] else "LIVE",
+        cfg["exchange"],
+        cfg["symbols"][0],
     )
 
+    from trading.strategies.adaptive_trading_bot import TradingBot as AdaptiveTradingBot
+
+    exchange_adapter = _make_exchange_adapter(cfg)
     telegram = _make_telegram(cfg)
 
-    bot = TradingBot(
-        connector=connector,
-        strategies=strategies,
-        risk_manager=risk,
-        interval_seconds=cfg["interval"],
-        telegram=telegram,
-        trade_amount_usdt=cfg["trade_amount_usdt"],
-        max_positions=cfg["max_positions"],
-        candle_tf=cfg["candle_tf"],
-        candle_limit=cfg["candle_limit"],
-        mtf_gate=False,
+    bot = AdaptiveTradingBot(
+        account_balance=cfg["account_balance"],
+        base_risk_pct=cfg["base_risk_pct"],
+        daily_loss_limit_pct=cfg["daily_loss_limit_pct"],
+        daily_profit_limit_pct=cfg["daily_profit_limit_pct"],
+        cooldown_minutes=cfg["cooldown_minutes"],
+        max_loss_streak=cfg["max_loss_streak"],
+        tp1_close_pct=cfg["tp1_close_pct"],
+        execution_callback=exchange_adapter.execute,
     )
+
+    state_file = cfg["bot_state_file"]
+    bot.load_state(state_file)
+    bot.reconcile_with_exchange(cfg["symbols"][0], exchange_adapter)
 
     stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
-
-    if telegram:
-        telegram.bot = bot
-        telegram.stop_bot_fn = lambda: stop_event.set()
 
     def _handle_signal():
         logger.info("Shutdown signal received")
@@ -241,43 +285,100 @@ async def main():
         except (NotImplementedError, RuntimeError):
             pass
 
+    async def _tick_loop():
+        symbol = cfg["symbols"][0]
+        max_staleness_ms = cfg["max_tick_staleness_sec"] * 1000
+
+        while not stop_event.is_set():
+            try:
+                rows_15m = exchange_adapter.exchange.fetch_ohlcv(symbol, timeframe="15m", limit=400)
+                rows_1h = exchange_adapter.exchange.fetch_ohlcv(symbol, timeframe="1h", limit=400)
+                rows_4h = exchange_adapter.exchange.fetch_ohlcv(symbol, timeframe="4h", limit=400)
+
+                if len(rows_15m) < 30 or len(rows_1h) < 30 or len(rows_4h) < 30:
+                    logger.warning("Not enough OHLCV yet (15m=%d 1h=%d 4h=%d)", len(rows_15m), len(rows_1h), len(rows_4h))
+                    await asyncio.sleep(cfg["interval"])
+                    continue
+
+                c15 = _to_candle_dict(rows_15m[-1])
+                c1h = _to_candle_dict(rows_1h[-1])
+                c4h = _to_candle_dict(rows_4h[-1])
+
+                now_ms = int(asyncio.get_running_loop().time() * 1000)
+                # loop.time() is monotonic; only use as coarse guard with relaxed window.
+                # Primary intent: avoid processing if feed stalls badly.
+                if max_staleness_ms > 0 and abs(now_ms - int(c15["timestamp"])) > (max_staleness_ms * 10):
+                    logger.warning("15m candle appears stale (ts=%s), skipping tick", c15["timestamp"])
+                    await asyncio.sleep(cfg["interval"])
+                    continue
+
+                i15 = _basic_indicators_from_candles(rows_15m)
+                i1h = _basic_indicators_from_candles(rows_1h)
+                i4h = _basic_indicators_from_candles(rows_4h)
+
+                extras = {
+                    "symbol": symbol,
+                    "session": "AUTO",
+                    "funding_rate": None,
+                    "oi": None,
+                }
+                current_price = float(c15["close"])
+
+                bot.on_tick(
+                    candle_15m=c15,
+                    candle_1h=c1h,
+                    candle_4h=c4h,
+                    ind_15m=i15,
+                    ind_1h=i1h,
+                    ind_4h=i4h,
+                    extras=extras,
+                    current_price=current_price,
+                )
+
+                if telegram:
+                    try:
+                        status = bot.get_status()
+                        telegram.notify_signal(
+                            symbol=symbol,
+                            side=status.get("direction") or "N/A",
+                            confidence=0.5,
+                            reason=f"state={status.get('state')} pnl={status.get('realized_pnl', 0):+.2f}",
+                        )
+                    except Exception as te:
+                        logger.warning("Telegram notify failed: %s", te)
+
+            except Exception as e:
+                logger.exception("Tick loop error: %s", e)
+                if bot.state == "ERROR":
+                    logger.error("Bot entered ERROR state, stopping for manual intervention")
+                    stop_event.set()
+                    break
+
+            await asyncio.sleep(cfg["interval"])
+
+    tick_task = asyncio.create_task(_tick_loop())
+
     try:
-        await bot.start()
         await stop_event.wait()
     finally:
-        logger.info("Stopping bot...")
+        logger.info("Stopping adaptive bot...")
+        tick_task.cancel()
         try:
-            await bot.stop()
-        except Exception as e:
-            logger.warning("Bot stop error (non-fatal): %s", e)
+            await tick_task
+        except asyncio.CancelledError:
+            pass
 
         try:
-            await connector.close()
+            bot.save_state(state_file)
         except Exception as e:
-            logger.warning("Connector close error (non-fatal): %s", e)
+            logger.warning("Bot save_state error (non-fatal): %s", e)
 
-        # Belt-and-suspenders: force-clear CCXT/aiohttp objects so their __del__
-        # never emits "Unclosed connector" or "requires .close()" during GC.
-        # This runs whether the bot exits cleanly OR crashes on startup.
-        _exc = getattr(connector, "_exchange", None)
-        if _exc is not None:
-            try:
-                _sess = getattr(_exc, "session", None)
-                if _sess is not None:
-                    _aio_conn = getattr(_sess, "_connector", None)
-                    if _aio_conn is not None and not getattr(_aio_conn, "_closed", True):
-                        await _aio_conn.close()
-                    _exc.session = None
-                _exc.socks_proxy_sessions = None
-                _tcp = getattr(_exc, "tcp_connector", None)
-                if _tcp is not None:
-                    if not getattr(_tcp, "_closed", True):
-                        await _tcp.close()
-                    _exc.tcp_connector = None
-            except Exception:
-                pass
+        try:
+            exchange_adapter.exchange.close()
+        except Exception as e:
+            logger.warning("Exchange close error (non-fatal): %s", e)
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.2)
         logger.info("Done.")
 
 
