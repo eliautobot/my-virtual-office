@@ -44,6 +44,23 @@ Discovery includes Virtual Office-created Claude Code agents, Claude Code's nati
 
 For Docker deployments, install Claude Code inside the container image or set `VO_CLAUDE_CODE_BIN` to a Claude executable path available inside the container. Set `VO_CLAUDE_CODE_HOME` to a deployment-specific Claude config directory so auth and config stay out of the repo and are not tied to any developer's machine. Useful variables: `VO_CLAUDE_CODE_BIN`, `VO_CLAUDE_CODE_HOME`, `VO_CLAUDE_CODE_WORKSPACE_ROOT`, `VO_CLAUDE_CODE_MAIN_WORKSPACE`, `VO_CLAUDE_CODE_MODEL`, `VO_CLAUDE_CODE_PERMISSION_MODE`, `VO_CLAUDE_CODE_INCLUDE_MAIN`, `VO_CLAUDE_CODE_INCLUDE_NATIVE_AGENTS`, and `VO_CLAUDE_CODE_REGISTER_NATIVE_AGENTS`.
 
+### OpenCode
+
+Virtual Office can create OpenCode-backed office agents when the OpenCode CLI is available to the app. Chat uses OpenCode's native session resume capabilities, executing runs via the `opencode run` CLI interface.
+
+Discovery includes Virtual Office-created OpenCode agents, agents parsed from the OpenCode config directory, and a synthesized `Main` entry for the default workspace. Newly created agents write custom configurations and manifest files.
+
+For Docker deployments, install OpenCode inside the container or point to its binary. Useful variables: `VO_OPENCODE_BIN`, `VO_OPENCODE_HOME`, `VO_OPENCODE_WORKSPACE_ROOT`, `VO_OPENCODE_MAIN_WORKSPACE`, `VO_OPENCODE_MODEL`, `VO_OPENCODE_TIMEOUT_SEC`.
+
+### Antigravity (agy)
+
+Virtual Office integrates with Antigravity (agy) for static analysis, quick reviews, and prompt-driven agent tasks. Antigravity uses a one-shot CLI execution mode (`agy --print`) which is stateless and does not maintain active chat session persistence.
+
+Discovery reads agents and templates from the Antigravity configurations. Created agents reside in the specified workspace or project directory structures.
+
+For Docker deployments, provide the agy executable. Useful variables: `VO_ANTIGRAVITY_BIN`, `VO_ANTIGRAVITY_HOME`, `VO_ANTIGRAVITY_WORKSPACE_ROOT`, `VO_ANTIGRAVITY_TIMEOUT_SEC`, `VO_ANTIGRAVITY_PRINT_TIMEOUT`.
+
+
 ## Features
 
 ### 🏢 Live Office Canvas
