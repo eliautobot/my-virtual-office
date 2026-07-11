@@ -16,7 +16,10 @@ import shutil
 import subprocess
 import threading
 import time
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 from dataclasses import dataclass
 from typing import Any, Callable
 

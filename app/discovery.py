@@ -14,6 +14,8 @@ import glob
 import time
 from providers.codex import CodexProvider
 from providers.claude_code import ClaudeCodeProvider
+from providers.opencode import OpenCodeProvider
+from providers.antigravity import AntigravityProvider
 from providers.hermes import HermesProvider, discover_api_agents, discover_desktop_agents
 
 def discover_agents(oc_home):
@@ -205,7 +207,35 @@ def discover_claude_code_agents(claude_home=None, claude_bin=None, workspace_roo
     ).discover_agents()
 
 
-def discover_all_agents(oc_home, hermes_home=None, hermes_bin=None, hermes_enabled=True, hermes_api_url=None, hermes_api_key=None, hermes_desktop_url=None, hermes_desktop_token=None, hermes_desktop_host_header=None, hermes_desktop_tcp_host=None, hermes_desktop_tcp_port=None, hermes_prefer_api=True, hermes_timeout_sec=600, codex_home=None, codex_bin=None, codex_workspace_root=None, codex_enabled=True, codex_model="", codex_sandbox="workspace-write", codex_approval_policy="never", codex_prefer_app_server=True, codex_timeout_sec=900, codex_main_workspace=None, codex_include_main=True, codex_include_native_agents=True, codex_register_native_agents=True, claude_home=None, claude_bin=None, claude_workspace_root=None, claude_enabled=True, claude_model="", claude_permission_mode="acceptEdits", claude_timeout_sec=900, claude_main_workspace=None, claude_include_main=True, claude_include_native_agents=True, claude_register_native_agents=True):
+def discover_opencode_agents(opencode_home=None, opencode_bin=None, workspace_root=None, enabled=True, model="", timeout_sec=900, main_workspace=None, include_main=True, include_agents=True):
+    """Discover local OpenCode CLI-backed Virtual Office agents."""
+    return OpenCodeProvider(
+        home_path=opencode_home,
+        binary=opencode_bin,
+        workspace_root=workspace_root,
+        enabled=enabled,
+        model=model or "",
+        timeout_sec=timeout_sec,
+        main_workspace=main_workspace,
+        include_main=include_main,
+        include_agents=include_agents,
+    ).discover_agents()
+
+
+def discover_antigravity_agents(antigravity_home=None, antigravity_bin=None, workspace_root=None, enabled=True, timeout_sec=600, print_timeout="5m"):
+
+    """Discover local Antigravity (agy) CLI agent."""
+    return AntigravityProvider(
+        home_path=antigravity_home,
+        binary=antigravity_bin,
+        workspace_root=workspace_root,
+        enabled=enabled,
+        timeout_sec=timeout_sec,
+        print_timeout=print_timeout,
+    ).discover_agents()
+
+
+def discover_all_agents(oc_home, hermes_home=None, hermes_bin=None, hermes_enabled=True, hermes_api_url=None, hermes_api_key=None, hermes_desktop_url=None, hermes_desktop_token=None, hermes_desktop_host_header=None, hermes_desktop_tcp_host=None, hermes_desktop_tcp_port=None, hermes_prefer_api=True, hermes_timeout_sec=600, codex_home=None, codex_bin=None, codex_workspace_root=None, codex_enabled=True, codex_model="", codex_sandbox="workspace-write", codex_approval_policy="never", codex_prefer_app_server=True, codex_timeout_sec=900, codex_main_workspace=None, codex_include_main=True, codex_include_native_agents=True, codex_register_native_agents=True, claude_home=None, claude_bin=None, claude_workspace_root=None, claude_enabled=True, claude_model="", claude_permission_mode="acceptEdits", claude_timeout_sec=900, claude_main_workspace=None, claude_include_main=True, claude_include_native_agents=True, claude_register_native_agents=True, opencode_home=None, opencode_bin=None, opencode_workspace_root=None, opencode_enabled=True, opencode_model="", opencode_timeout_sec=900, opencode_main_workspace=None, opencode_include_main=True, opencode_include_agents=True, antigravity_home=None, antigravity_bin=None, antigravity_workspace_root=None, antigravity_enabled=True, antigravity_timeout_sec=600, antigravity_print_timeout="5m"):
     """Discover OpenClaw agents plus optional local Hermes, Codex, and Claude Code agents."""
     agents = discover_agents(oc_home)
     agents.extend(discover_hermes_agents(
@@ -249,6 +279,25 @@ def discover_all_agents(oc_home, hermes_home=None, hermes_bin=None, hermes_enabl
         include_main=claude_include_main,
         include_native_agents=claude_include_native_agents,
         register_native_agents=claude_register_native_agents,
+    ))
+    agents.extend(discover_opencode_agents(
+        opencode_home=opencode_home,
+        opencode_bin=opencode_bin,
+        workspace_root=opencode_workspace_root,
+        enabled=opencode_enabled,
+        model=opencode_model,
+        timeout_sec=opencode_timeout_sec,
+        main_workspace=opencode_main_workspace,
+        include_main=opencode_include_main,
+        include_agents=opencode_include_agents,
+    ))
+    agents.extend(discover_antigravity_agents(
+        antigravity_home=antigravity_home,
+        antigravity_bin=antigravity_bin,
+        workspace_root=antigravity_workspace_root,
+        enabled=antigravity_enabled,
+        timeout_sec=antigravity_timeout_sec,
+        print_timeout=antigravity_print_timeout,
     ))
     return agents
 

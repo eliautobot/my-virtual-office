@@ -222,6 +222,8 @@ def _load_vo_config():
     hermes_platform_token = _env_or("VO_HERMES_PLATFORM_TOKEN", hermes_cfg.get("platformToken", ""))
     codex_cfg = cfg.get("codex") or {}
     claude_code_cfg = cfg.get("claudeCode") or cfg.get("claude_code") or {}
+    opencode_cfg = cfg.get("openCode") or cfg.get("opencode") or {}
+    antigravity_cfg = cfg.get("antigravity") or {}
 
     codex_workspace_root = _env_or(
         "VO_CODEX_WORKSPACE_ROOT",
@@ -230,6 +232,14 @@ def _load_vo_config():
     claude_code_workspace_root = _env_or(
         "VO_CLAUDE_CODE_WORKSPACE_ROOT",
         claude_code_cfg.get("workspaceRoot", os.path.join(_env_or("VO_STATUS_DIR", presence.get("statusDir", "/data")), "claude-code-agents")),
+    )
+    opencode_workspace_root = _env_or(
+        "VO_OPENCODE_WORKSPACE_ROOT",
+        opencode_cfg.get("workspaceRoot", os.path.join(_env_or("VO_STATUS_DIR", presence.get("statusDir", "/data")), "opencode-agents")),
+    )
+    antigravity_workspace_root = _env_or(
+        "VO_ANTIGRAVITY_WORKSPACE_ROOT",
+        antigravity_cfg.get("workspaceRoot", os.path.join(_env_or("VO_STATUS_DIR", presence.get("statusDir", "/data")), "antigravity-workspace")),
     )
 
     return {
@@ -327,6 +337,25 @@ def _load_vo_config():
             "includeMain": str(_env_or("VO_CLAUDE_CODE_INCLUDE_MAIN", claude_code_cfg.get("includeMain", True))).lower() not in ("0", "false", "no", "off"),
             "includeNativeAgents": str(_env_or("VO_CLAUDE_CODE_INCLUDE_NATIVE_AGENTS", claude_code_cfg.get("includeNativeAgents", True))).lower() not in ("0", "false", "no", "off"),
             "registerNativeAgents": str(_env_or("VO_CLAUDE_CODE_REGISTER_NATIVE_AGENTS", claude_code_cfg.get("registerNativeAgents", True))).lower() not in ("0", "false", "no", "off"),
+        },
+        "openCode": {
+            "enabled": str(_env_or("VO_OPENCODE_ENABLED", opencode_cfg.get("enabled", True))).lower() not in ("0", "false", "no", "off"),
+            "homePath": _env_or("VO_OPENCODE_HOME", opencode_cfg.get("homePath", os.path.expanduser("~/.config/opencode"))),
+            "binary": _env_or("VO_OPENCODE_BIN", opencode_cfg.get("binary", "")),
+            "workspaceRoot": opencode_workspace_root,
+            "mainWorkspace": _env_or("VO_OPENCODE_MAIN_WORKSPACE", opencode_cfg.get("mainWorkspace", os.path.join(_env_or("VO_STATUS_DIR", presence.get("statusDir", "/data")), "opencode-main"))),
+            "timeoutSec": int(_env_or("VO_OPENCODE_TIMEOUT_SEC", opencode_cfg.get("timeoutSec", 900))),
+            "model": _env_or("VO_OPENCODE_MODEL", opencode_cfg.get("model", "")),
+            "includeMain": str(_env_or("VO_OPENCODE_INCLUDE_MAIN", opencode_cfg.get("includeMain", True))).lower() not in ("0", "false", "no", "off"),
+            "includeAgents": str(_env_or("VO_OPENCODE_INCLUDE_AGENTS", opencode_cfg.get("includeAgents", True))).lower() not in ("0", "false", "no", "off"),
+        },
+        "antigravity": {
+            "enabled": str(_env_or("VO_ANTIGRAVITY_ENABLED", antigravity_cfg.get("enabled", True))).lower() not in ("0", "false", "no", "off"),
+            "homePath": _env_or("VO_ANTIGRAVITY_HOME", antigravity_cfg.get("homePath", os.path.expanduser("~/.gemini/antigravity-cli"))),
+            "binary": _env_or("VO_ANTIGRAVITY_BIN", antigravity_cfg.get("binary", "")),
+            "workspaceRoot": antigravity_workspace_root,
+            "timeoutSec": int(_env_or("VO_ANTIGRAVITY_TIMEOUT_SEC", antigravity_cfg.get("timeoutSec", 600))),
+            "printTimeout": _env_or("VO_ANTIGRAVITY_PRINT_TIMEOUT", antigravity_cfg.get("printTimeout", "5m")),
         },
     }
 
@@ -2108,6 +2137,8 @@ def _delete_openclaw_auth(provider, profile_id="", agent_id=None, sync_all=False
 from discovery import discover_all_agents, discover_hermes_agents, get_agent_workspace_dir, get_agent_session_id
 from providers.codex import CodexProvider
 from providers.claude_code import ClaudeCodeProvider
+from providers.opencode import OpenCodeProvider
+from providers.antigravity import AntigravityProvider
 from providers.hermes import HermesApiClient, HermesDesktopBackendClient, HermesProvider, discover_desktop_backend
 from license import get_license_status, activate_license, deactivate_license, check_feature, get_agent_limit
 from project_store import MarkdownProjectStore
@@ -3136,7 +3167,7 @@ def _build_agent_workspaces():
             result[a["statusKey"]] = get_agent_workspace_dir(WORKSPACE_BASE, a["id"]).replace(WORKSPACE_BASE + "/", "") if a["workspace"].startswith(WORKSPACE_BASE) else os.path.basename(a["workspace"])
     return result
 def _build_agent_session_ids():
-    return {a["statusKey"]: (a.get("providerAgentId") if a.get("providerKind") in {"hermes", "codex", "claude-code"} else get_agent_session_id(a["id"])) for a in get_roster()}
+    return {a["statusKey"]: (a.get("providerAgentId") if a.get("providerKind") in {"hermes", "codex", "claude-code", "opencode", "antigravity"} else get_agent_session_id(a["id"])) for a in get_roster()}
 
 # Compatibility properties (lazily rebuilt)
 @property
@@ -3692,6 +3723,65 @@ def _claude_code_provider():
         include_native_agents=claude_cfg.get("includeNativeAgents", True),
         register_native_agents=claude_cfg.get("registerNativeAgents", True),
     )
+
+
+def _opencode_provider():
+    opencode_cfg = VO_CONFIG.get("openCode", {})
+    return OpenCodeProvider(
+        home_path=opencode_cfg.get("homePath"),
+        binary=opencode_cfg.get("binary"),
+        workspace_root=opencode_cfg.get("workspaceRoot"),
+        enabled=opencode_cfg.get("enabled", True),
+        timeout_sec=int(opencode_cfg.get("timeoutSec") or 900),
+        model=opencode_cfg.get("model") or "",
+        main_workspace=opencode_cfg.get("mainWorkspace"),
+        include_main=opencode_cfg.get("includeMain", True),
+        include_agents=opencode_cfg.get("includeAgents", True),
+    )
+
+
+def _antigravity_provider():
+    ag_cfg = VO_CONFIG.get("antigravity", {})
+    return AntigravityProvider(
+        home_path=ag_cfg.get("homePath"),
+        binary=ag_cfg.get("binary"),
+        workspace_root=ag_cfg.get("workspaceRoot"),
+        enabled=ag_cfg.get("enabled", True),
+        timeout_sec=int(ag_cfg.get("timeoutSec") or 600),
+        print_timeout=ag_cfg.get("printTimeout", "5m"),
+    )
+
+
+def _get_opencode_agent(agent_id_or_key=None):
+    needle = str(agent_id_or_key or "")
+    for a in get_roster():
+        if a.get("providerKind") == "opencode" and (not needle or needle in (a.get("id"), a.get("statusKey"), a.get("providerAgentId"), a.get("profile"))):
+            return a
+    return None
+
+
+def _is_opencode_agent(agent_id_or_key):
+    needle = str(agent_id_or_key or "")
+    for a in get_roster():
+        if needle in (a.get("id"), a.get("statusKey"), a.get("providerAgentId"), a.get("profile")):
+            return a.get("providerKind") == "opencode"
+    return needle.startswith("opencode:") or needle.startswith("opencode-")
+
+
+def _get_antigravity_agent(agent_id_or_key=None):
+    needle = str(agent_id_or_key or "")
+    for a in get_roster():
+        if a.get("providerKind") == "antigravity" and (not needle or needle in (a.get("id"), a.get("statusKey"), a.get("providerAgentId"), a.get("profile"))):
+            return a
+    return None
+
+
+def _is_antigravity_agent(agent_id_or_key):
+    needle = str(agent_id_or_key or "")
+    for a in get_roster():
+        if needle in (a.get("id"), a.get("statusKey"), a.get("providerAgentId"), a.get("profile")):
+            return a.get("providerKind") == "antigravity"
+    return needle.startswith("antigravity:") or needle.startswith("antigravity-")
 
 
 def _claude_code_history_path(profile="main"):
@@ -6651,6 +6741,103 @@ def _handle_claude_code_test(body=None):
         include_native_agents=cfg.get("includeNativeAgents", True),
         register_native_agents=cfg.get("registerNativeAgents", True),
     ).test()
+
+
+def _handle_opencode_test(body=None):
+    cfg = dict(VO_CONFIG.get("openCode", {}))
+    if isinstance(body, dict):
+        cfg.update({k: v for k, v in body.items() if v is not None})
+    return OpenCodeProvider(
+        home_path=cfg.get("homePath"),
+        binary=cfg.get("binary"),
+        workspace_root=cfg.get("workspaceRoot"),
+        enabled=cfg.get("enabled", True),
+        timeout_sec=int(cfg.get("timeoutSec") or 900),
+        model=cfg.get("model") or "",
+        main_workspace=cfg.get("mainWorkspace"),
+        include_main=cfg.get("includeMain", True),
+        include_agents=cfg.get("includeAgents", True),
+    ).test()
+
+
+def _handle_opencode_chat(body):
+    """Send one message to a local OpenCode CLI-backed agent."""
+    message = (body.get("message") or "").strip()
+    agent_key = body.get("agentId") or body.get("key") or body.get("sessionKey") or "opencode-main"
+    if not message:
+        return {"ok": False, "error": "message is required", "_status": 400}
+
+    agent = _get_opencode_agent(agent_key)
+    if not agent:
+        return {"ok": False, "error": f"OpenCode agent '{agent_key}' not found", "_status": 404}
+
+    opencode_cfg = VO_CONFIG.get("openCode", {})
+    timeout = int(body.get("timeoutSec") or opencode_cfg.get("timeoutSec") or 900)
+    profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+    session_id = body.get("sessionId") or ""
+
+    provider = _opencode_provider()
+    result = provider.send_chat_message(
+        profile=profile,
+        message=message,
+        session_id=session_id or None,
+        timeout_sec=timeout,
+    )
+    if not result.get("ok"):
+        result["_status"] = 500
+    return result
+
+
+def _handle_opencode_interrupt(body):
+    agent_key = body.get("agentId") or body.get("key") or "opencode-main"
+    agent = _get_opencode_agent(agent_key)
+    if not agent:
+        return {"ok": False, "error": f"OpenCode agent '{agent_key}' not found", "_status": 404}
+    profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+    return _opencode_provider().interrupt(profile)
+
+
+def _handle_antigravity_test(body=None):
+    cfg = dict(VO_CONFIG.get("antigravity", {}))
+    if isinstance(body, dict):
+        cfg.update({k: v for k, v in body.items() if v is not None})
+    return AntigravityProvider(
+        home_path=cfg.get("homePath"),
+        binary=cfg.get("binary"),
+        workspace_root=cfg.get("workspaceRoot"),
+        enabled=cfg.get("enabled", True),
+        timeout_sec=int(cfg.get("timeoutSec") or 600),
+        print_timeout=cfg.get("printTimeout", "5m"),
+    ).test()
+
+
+def _handle_antigravity_chat(body):
+    """Send one message to a local Antigravity (agy) agent."""
+    message = (body.get("message") or "").strip()
+    agent_key = body.get("agentId") or body.get("key") or body.get("sessionKey") or "antigravity-main"
+    if not message:
+        return {"ok": False, "error": "message is required", "_status": 400}
+
+    agent = _get_antigravity_agent(agent_key)
+    if not agent:
+        return {"ok": False, "error": f"Antigravity agent '{agent_key}' not found", "_status": 404}
+
+    ag_cfg = VO_CONFIG.get("antigravity", {})
+    timeout = int(body.get("timeoutSec") or ag_cfg.get("timeoutSec") or 600)
+
+    provider = _antigravity_provider()
+    result = provider.send_chat_message(
+        profile="main",
+        message=message,
+        timeout_sec=timeout,
+    )
+    if not result.get("ok"):
+        result["_status"] = 500
+    return result
+
+
+def _handle_antigravity_interrupt(body):
+    return _antigravity_provider().interrupt("main")
 
 
 def _handle_hermes_approval_respond(body):
@@ -15638,6 +15825,28 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
+        elif self.path == "/api/opencode/chat":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_opencode_chat(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/antigravity/chat":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_antigravity_chat(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
         elif self.path == "/api/codex/interrupt":
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
@@ -15653,6 +15862,28 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
             result = _handle_claude_code_interrupt(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/opencode/interrupt":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_opencode_interrupt(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/antigravity/interrupt":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_antigravity_interrupt(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -15833,6 +16064,26 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
             result = _handle_claude_code_test(body)
+            self.send_response(200 if result.get("ok") else 503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/opencode/test":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_opencode_test(body)
+            self.send_response(200 if result.get("ok") else 503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/antigravity/test":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_antigravity_test(body)
             self.send_response(200 if result.get("ok") else 503)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
