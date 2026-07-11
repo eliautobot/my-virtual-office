@@ -6743,6 +6743,103 @@ def _handle_claude_code_test(body=None):
     ).test()
 
 
+def _handle_opencode_test(body=None):
+    cfg = dict(VO_CONFIG.get("openCode", {}))
+    if isinstance(body, dict):
+        cfg.update({k: v for k, v in body.items() if v is not None})
+    return OpenCodeProvider(
+        home_path=cfg.get("homePath"),
+        binary=cfg.get("binary"),
+        workspace_root=cfg.get("workspaceRoot"),
+        enabled=cfg.get("enabled", True),
+        timeout_sec=int(cfg.get("timeoutSec") or 900),
+        model=cfg.get("model") or "",
+        main_workspace=cfg.get("mainWorkspace"),
+        include_main=cfg.get("includeMain", True),
+        include_agents=cfg.get("includeAgents", True),
+    ).test()
+
+
+def _handle_opencode_chat(body):
+    """Send one message to a local OpenCode CLI-backed agent."""
+    message = (body.get("message") or "").strip()
+    agent_key = body.get("agentId") or body.get("key") or body.get("sessionKey") or "opencode-main"
+    if not message:
+        return {"ok": False, "error": "message is required", "_status": 400}
+
+    agent = _get_opencode_agent(agent_key)
+    if not agent:
+        return {"ok": False, "error": f"OpenCode agent '{agent_key}' not found", "_status": 404}
+
+    opencode_cfg = VO_CONFIG.get("openCode", {})
+    timeout = int(body.get("timeoutSec") or opencode_cfg.get("timeoutSec") or 900)
+    profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+    session_id = body.get("sessionId") or ""
+
+    provider = _opencode_provider()
+    result = provider.send_chat_message(
+        profile=profile,
+        message=message,
+        session_id=session_id or None,
+        timeout_sec=timeout,
+    )
+    if not result.get("ok"):
+        result["_status"] = 500
+    return result
+
+
+def _handle_opencode_interrupt(body):
+    agent_key = body.get("agentId") or body.get("key") or "opencode-main"
+    agent = _get_opencode_agent(agent_key)
+    if not agent:
+        return {"ok": False, "error": f"OpenCode agent '{agent_key}' not found", "_status": 404}
+    profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+    return _opencode_provider().interrupt(profile)
+
+
+def _handle_antigravity_test(body=None):
+    cfg = dict(VO_CONFIG.get("antigravity", {}))
+    if isinstance(body, dict):
+        cfg.update({k: v for k, v in body.items() if v is not None})
+    return AntigravityProvider(
+        home_path=cfg.get("homePath"),
+        binary=cfg.get("binary"),
+        workspace_root=cfg.get("workspaceRoot"),
+        enabled=cfg.get("enabled", True),
+        timeout_sec=int(cfg.get("timeoutSec") or 600),
+        print_timeout=cfg.get("printTimeout", "5m"),
+    ).test()
+
+
+def _handle_antigravity_chat(body):
+    """Send one message to a local Antigravity (agy) agent."""
+    message = (body.get("message") or "").strip()
+    agent_key = body.get("agentId") or body.get("key") or body.get("sessionKey") or "antigravity-main"
+    if not message:
+        return {"ok": False, "error": "message is required", "_status": 400}
+
+    agent = _get_antigravity_agent(agent_key)
+    if not agent:
+        return {"ok": False, "error": f"Antigravity agent '{agent_key}' not found", "_status": 404}
+
+    ag_cfg = VO_CONFIG.get("antigravity", {})
+    timeout = int(body.get("timeoutSec") or ag_cfg.get("timeoutSec") or 600)
+
+    provider = _antigravity_provider()
+    result = provider.send_chat_message(
+        profile="main",
+        message=message,
+        timeout_sec=timeout,
+    )
+    if not result.get("ok"):
+        result["_status"] = 500
+    return result
+
+
+def _handle_antigravity_interrupt(body):
+    return _antigravity_provider().interrupt("main")
+
+
 def _handle_hermes_approval_respond(body):
     approval = body.get("approval") if isinstance(body.get("approval"), dict) else {}
     choice = _normalize_hermes_approval_choice(body.get("choice") or body.get("action") or "")
@@ -15728,6 +15825,28 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
+        elif self.path == "/api/opencode/chat":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_opencode_chat(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/antigravity/chat":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_antigravity_chat(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
         elif self.path == "/api/codex/interrupt":
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
@@ -15743,6 +15862,28 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
             result = _handle_claude_code_interrupt(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/opencode/interrupt":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_opencode_interrupt(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/antigravity/interrupt":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_antigravity_interrupt(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -15923,6 +16064,26 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
             result = _handle_claude_code_test(body)
+            self.send_response(200 if result.get("ok") else 503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/opencode/test":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_opencode_test(body)
+            self.send_response(200 if result.get("ok") else 503)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/antigravity/test":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_antigravity_test(body)
             self.send_response(200 if result.get("ok") else 503)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")

@@ -179,7 +179,7 @@ class OpenCodeProvider:
                 continue
             # Try to read agent metadata
             meta = self._load_agent_meta(agent_path)
-            profile = meta.get("profile") or self._safe_profile_name(name)
+            profile = self._safe_profile_name(meta.get("profile") or name)
             if not profile or profile in seen:
                 continue
             seen.add(profile)
@@ -299,9 +299,13 @@ class OpenCodeProvider:
 
             exit_code = proc.wait(timeout=5)
             reply = "\n".join(reply_lines)
+            error_msg = ""
+            if exit_code != 0:
+                error_msg = "\n".join(stderr_lines)[-1000:] or f"CLI process exited with code {exit_code}"
             return {
                 "ok": exit_code == 0,
                 "reply": reply,
+                "error": error_msg,
                 "stderr": "\n".join(stderr_lines)[-4000:],
                 "exitCode": exit_code,
                 "sessionId": session_id or "",
@@ -413,6 +417,7 @@ class OpenCodeProvider:
             "connectionModes": ["cli"],
             "cliAvailable": True,
             "apiAvailable": False,
+            "desktopAvailable": False,
             "source": source,
         }
 

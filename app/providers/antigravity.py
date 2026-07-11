@@ -148,6 +148,7 @@ class AntigravityProvider:
                 "connectionModes": ["cli"],
                 "cliAvailable": True,
                 "apiAvailable": False,
+                "desktopAvailable": False,
                 "source": "antigravity-cli",
             }
         ]
@@ -259,9 +260,13 @@ class AntigravityProvider:
 
             exit_code = proc.wait(timeout=5)
             reply = "\n".join(reply_lines)
+            error_msg = ""
+            if exit_code != 0:
+                error_msg = "\n".join(stderr_lines)[-1000:] or f"CLI process exited with code {exit_code}"
             return {
                 "ok": exit_code == 0,
                 "reply": reply,
+                "error": error_msg,
                 "stderr": "\n".join(stderr_lines)[-4000:],
                 "exitCode": exit_code,
                 "sessionId": "",
