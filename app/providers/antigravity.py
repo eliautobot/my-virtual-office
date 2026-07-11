@@ -139,7 +139,7 @@ class AntigravityProvider:
                 "name": "Antigravity",
                 "emoji": "🔬",
                 "role": "Gemini-powered code analyst",
-                "model": self.model or "gemini",
+                "model": "gemini",
                 "workspace": self.workspace_root or "",
                 "home": self.home_path or "",
                 "binary": self.binary or "",
