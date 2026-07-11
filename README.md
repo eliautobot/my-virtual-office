@@ -46,19 +46,19 @@ For Docker deployments, install Claude Code inside the container image or set `V
 
 ### OpenCode
 
-Virtual Office can create OpenCode-backed office agents when the OpenCode CLI is available to the app. Chat uses OpenCode's native session resume capabilities, executing runs via the `opencode run` CLI interface.
+Virtual Office can create OpenCode-backed office agents when the OpenCode CLI is installed and `VO_OPENCODE_ENABLED=1`. Chat uses OpenCode's native session resume capabilities, executing runs via the `opencode run` CLI interface with provider subprocesses launched from a minimal environment.
 
-Discovery includes Virtual Office-created OpenCode agents, agents parsed from the OpenCode config directory, and a synthesized `Main` entry for the default workspace. Newly created agents write custom configurations and manifest files.
+Discovery includes Virtual Office-created OpenCode agents, markdown agents parsed from the OpenCode config directory, and a synthesized `Main` entry for the default workspace. Newly created agents write managed workspace metadata and OpenCode markdown agent files.
 
-For Docker deployments, install OpenCode inside the container or point to its binary. Useful variables: `VO_OPENCODE_BIN`, `VO_OPENCODE_HOME`, `VO_OPENCODE_WORKSPACE_ROOT`, `VO_OPENCODE_MAIN_WORKSPACE`, `VO_OPENCODE_MODEL`, `VO_OPENCODE_TIMEOUT_SEC`.
+For Docker deployments, install OpenCode inside the container or point to its binary. Useful variables: `VO_OPENCODE_ENABLED`, `VO_OPENCODE_BIN`, `VO_OPENCODE_CONFIG_DIR`, `VO_OPENCODE_WORKSPACE_ROOT`, `VO_OPENCODE_MAIN_WORKSPACE`, `VO_OPENCODE_MODEL`, `VO_OPENCODE_TIMEOUT_SEC`, and `VO_OPENCODE_ENV_ALLOWLIST`.
 
 ### Antigravity (agy)
 
-Virtual Office integrates with Antigravity (agy) for static analysis, quick reviews, and prompt-driven agent tasks. Antigravity uses a one-shot CLI execution mode (`agy --print`) which is stateless and does not maintain active chat session persistence.
+Virtual Office integrates with Antigravity (agy) for static analysis, quick reviews, and prompt-driven agent tasks when `VO_ANTIGRAVITY_ENABLED=1`. Antigravity uses a one-shot CLI execution mode (`agy --print`) which is stateless and does not maintain active chat session persistence.
 
-Discovery reads agents and templates from the Antigravity configurations. Created agents reside in the specified workspace or project directory structures.
+Discovery exposes a single Antigravity office agent when `agy` is available. Virtual Office stores local chat history for that agent, but does not claim native session list/delete support.
 
-For Docker deployments, provide the agy executable. Useful variables: `VO_ANTIGRAVITY_BIN`, `VO_ANTIGRAVITY_HOME`, `VO_ANTIGRAVITY_WORKSPACE_ROOT`, `VO_ANTIGRAVITY_TIMEOUT_SEC`, `VO_ANTIGRAVITY_PRINT_TIMEOUT`.
+For Docker deployments, provide the agy executable. Useful variables: `VO_ANTIGRAVITY_ENABLED`, `VO_ANTIGRAVITY_BIN`, `VO_ANTIGRAVITY_WORKSPACE_ROOT`, `VO_ANTIGRAVITY_TIMEOUT_SEC`, `VO_ANTIGRAVITY_PRINT_TIMEOUT`, `VO_ANTIGRAVITY_MODEL`, `VO_ANTIGRAVITY_SANDBOX`, and `VO_ANTIGRAVITY_ENV_ALLOWLIST`.
 
 
 ## Features

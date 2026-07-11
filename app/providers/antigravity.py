@@ -1,31 +1,23 @@
 """Antigravity (agy) provider adapter for My Virtual Office.
 
-Antigravity is a Gemini-powered autonomous coding agent optimized for
-structured reviews, audits, and quick implementations.  It operates in
-one-shot mode (``agy --print``) with no persistent sessions — each call
-is stateless.
-
-For Docker deployments, install Antigravity inside the container image or
-set ``VO_ANTIGRAVITY_BIN`` to an ``agy`` executable path available inside
-the container.  Set ``VO_ANTIGRAVITY_HOME`` to a deployment-specific data
-directory so auth and config stay out of the repo.
-
-Useful variables: ``VO_ANTIGRAVITY_BIN``, ``VO_ANTIGRAVITY_HOME``,
-``VO_ANTIGRAVITY_WORKSPACE_ROOT``, ``VO_ANTIGRAVITY_TIMEOUT_SEC``,
-``VO_ANTIGRAVITY_PRINT_TIMEOUT``.
+Antigravity runs through the ``agy --print`` CLI surface. The integration is
+intentionally one-shot: Virtual Office stores local chat history, but the
+provider does not claim native session list/read/delete support.
 """
 
 from __future__ import annotations
 
-import json
 import os
-import re
-import shutil
 import subprocess
 import threading
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
+
+try:
+    from .process_env import resolve_executable, sanitized_env
+except ImportError:
+    from process_env import resolve_executable, sanitized_env
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -44,6 +36,8 @@ class AntigravityProvider:
     enabled: bool = True
     timeout_sec: int = 600
     print_timeout: str = "5m"
+    model: str = ""
+    sandbox: str = ""
 
     provider_kind: str = "antigravity"
     provider_type: str = "harness"
@@ -53,7 +47,6 @@ class AntigravityProvider:
         self.home_path = os.path.expanduser(
             self.home_path
             or os.environ.get("VO_ANTIGRAVITY_HOME")
-            or os.environ.get("ANTIGRAVITY_HOME")
             or "~/.gemini/antigravity-cli"
         )
         self.binary = self._resolve_binary(self.binary)
@@ -62,15 +55,9 @@ class AntigravityProvider:
             or os.environ.get("VO_ANTIGRAVITY_WORKSPACE_ROOT")
             or os.path.join(status_dir, "antigravity-workspace")
         )
-        self.print_timeout = str(
-            os.environ.get("VO_ANTIGRAVITY_PRINT_TIMEOUT")
-            or self.print_timeout
-            or "5m"
-        )
-
-    # ------------------------------------------------------------------
-    # Availability / health
-    # ------------------------------------------------------------------
+        self.print_timeout = str(os.environ.get("VO_ANTIGRAVITY_PRINT_TIMEOUT") or self.print_timeout or "5m")
+        self.model = str(self.model or os.environ.get("VO_ANTIGRAVITY_MODEL") or "")
+        self.sandbox = str(self.sandbox or os.environ.get("VO_ANTIGRAVITY_SANDBOX") or "")
 
     def is_available(self) -> bool:
         return bool(
@@ -81,20 +68,12 @@ class AntigravityProvider:
         )
 
     def test(self) -> dict[str, Any]:
+        if not self.enabled:
+            return {"ok": False, "enabled": False, "installed": bool(self.binary), "error": "Antigravity provider is disabled.", "agents": []}
         if not self.binary or not os.path.isfile(self.binary):
-            return {
-                "ok": False,
-                "installed": False,
-                "error": "Antigravity CLI not found. Set VO_ANTIGRAVITY_BIN or install agy on PATH.",
-                "agents": [],
-            }
+            return {"ok": False, "enabled": True, "installed": False, "error": "Antigravity CLI not found. Set VO_ANTIGRAVITY_BIN or install agy on PATH.", "agents": []}
         if not os.access(self.binary, os.X_OK):
-            return {
-                "ok": False,
-                "installed": True,
-                "error": f"Antigravity CLI is not executable at {self.binary}",
-                "agents": [],
-            }
+            return {"ok": False, "enabled": True, "installed": True, "error": f"Antigravity CLI is not executable at {self.binary}", "agents": []}
         try:
             result = subprocess.run(
                 [self.binary, "--version"],
@@ -107,27 +86,25 @@ class AntigravityProvider:
             ok = result.returncode == 0
             return {
                 "ok": ok,
+                "enabled": True,
                 "installed": True,
                 "version": version,
                 "binary": self.binary,
-                "homePath": self.home_path,
                 "workspaceRoot": self.workspace_root,
+                "model": self.model,
+                "sandbox": self.sandbox,
                 "error": "" if ok else f"Antigravity version check failed: {version}",
                 "agents": self.discover_agents() if ok else [],
             }
         except Exception as exc:
-            return {"ok": False, "installed": True, "error": str(exc), "agents": []}
-
-    # ------------------------------------------------------------------
-    # Agent discovery
-    # ------------------------------------------------------------------
+            return {"ok": False, "enabled": True, "installed": True, "error": str(exc), "agents": []}
 
     def discover_agents(self) -> list[dict[str, Any]]:
-        """Antigravity exposes a single 'agy' agent (stateless one-shot tool)."""
         if not self.is_available():
             return []
 
-        last_active = self._last_active(self.home_path or "")
+        last_active = self._last_active(self.workspace_root or "")
+        model = self.model or "gemini"
         return [
             {
                 "id": "antigravity-main",
@@ -138,13 +115,14 @@ class AntigravityProvider:
                 "profile": "main",
                 "name": "Antigravity",
                 "emoji": "🔬",
-                "role": "Gemini-powered code analyst",
-                "model": "gemini",
+                "role": "Gemini-powered one-shot code analyst",
+                "model": model,
+                "provider": "Antigravity",
                 "workspace": self.workspace_root or "",
-                "home": self.home_path or "",
+                "home": self.workspace_root or "",
                 "binary": self.binary or "",
                 "lastActiveAt": last_active,
-                "capabilities": ["chat"],
+                "capabilities": ["chat", "interrupt"],
                 "connectionModes": ["cli"],
                 "cliAvailable": True,
                 "apiAvailable": False,
@@ -152,10 +130,6 @@ class AntigravityProvider:
                 "source": "antigravity-cli",
             }
         ]
-
-    # ------------------------------------------------------------------
-    # Chat (one-shot)
-    # ------------------------------------------------------------------
 
     def send_chat_message(
         self,
@@ -165,37 +139,22 @@ class AntigravityProvider:
         timeout_sec: int | None = None,
         on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
-        """Send a one-shot prompt to Antigravity via ``agy --print``.
-
-        Antigravity has no session persistence — each call is stateless.
-        The ``session_id`` parameter is accepted for API compatibility but
-        ignored.
-        """
         if not self.is_available():
-            return {
-                "ok": False,
-                "error": f"Antigravity CLI is not available at {self.binary}",
-                "reply": "",
-                "sessionId": "",
-            }
+            return {"ok": False, "error": f"Antigravity CLI is not available at {self.binary}", "reply": "", "sessionId": ""}
         if not message.strip():
-            return {
-                "ok": False,
-                "error": "message is required",
-                "reply": "",
-                "sessionId": "",
-            }
+            return {"ok": False, "error": "message is required", "reply": "", "sessionId": ""}
 
         workspace = self.workspace_root or os.getcwd()
         os.makedirs(workspace, exist_ok=True)
 
-        cmd = [
-            self.binary,
-            "--print-timeout",
-            self.print_timeout,
-            "--print",
-            message,
-        ]
+        cmd = [self.binary or "agy"]
+        if self.model:
+            cmd.extend(["--model", self.model])
+        if self.sandbox:
+            cmd.extend(["--sandbox", self.sandbox])
+        if self.print_timeout:
+            cmd.extend(["--print-timeout", self.print_timeout])
+        cmd.extend(["--print", message])
 
         effective_timeout = int(timeout_sec or self.timeout_sec or 600)
         deadline = time.time() + effective_timeout
@@ -228,35 +187,18 @@ class AntigravityProvider:
                     pass
 
             threading.Thread(target=read_stderr, daemon=True).start()
-
             if not proc.stdout:
-                return {
-                    "ok": False,
-                    "error": "Antigravity stdout pipe was not available",
-                    "reply": "",
-                    "sessionId": "",
-                }
+                return {"ok": False, "error": "Antigravity stdout pipe was not available", "reply": "", "sessionId": ""}
 
             for raw in proc.stdout:
                 if time.time() > deadline:
                     proc.kill()
-                    return {
-                        "ok": False,
-                        "error": "Antigravity call timed out",
-                        "reply": "\n".join(reply_lines),
-                        "sessionId": "",
-                    }
+                    return {"ok": False, "error": "Antigravity call timed out", "reply": "\n".join(reply_lines), "sessionId": ""}
                 line = raw.rstrip("\n")
                 if line:
                     reply_lines.append(line)
                     if on_progress:
-                        on_progress(
-                            {
-                                "reply": "\n".join(reply_lines),
-                                "status": "streaming",
-                                "profile": "main",
-                            }
-                        )
+                        on_progress({"reply": "\n".join(reply_lines), "status": "streaming", "profile": "main"})
 
             exit_code = proc.wait(timeout=5)
             reply = "\n".join(reply_lines)
@@ -271,23 +213,14 @@ class AntigravityProvider:
                 "exitCode": exit_code,
                 "sessionId": "",
                 "providerPath": "antigravity-cli",
+                "model": self.model or "gemini",
             }
         except subprocess.TimeoutExpired:
             if proc:
                 proc.kill()
-            return {
-                "ok": False,
-                "error": "Antigravity call timed out",
-                "reply": "\n".join(reply_lines),
-                "sessionId": "",
-            }
+            return {"ok": False, "error": "Antigravity call timed out", "reply": "\n".join(reply_lines), "sessionId": ""}
         except Exception as exc:
-            return {
-                "ok": False,
-                "error": str(exc),
-                "reply": "\n".join(reply_lines),
-                "sessionId": "",
-            }
+            return {"ok": False, "error": str(exc), "reply": "\n".join(reply_lines), "sessionId": ""}
         finally:
             with _ACTIVE_RUNS_LOCK:
                 if _ACTIVE_RUNS.get("main") is proc:
@@ -297,39 +230,27 @@ class AntigravityProvider:
         with _ACTIVE_RUNS_LOCK:
             proc = _ACTIVE_RUNS.get("main")
         if proc and proc.poll() is None:
-            proc.kill()
-            return {"ok": True, "message": "Killed Antigravity process"}
+            proc.terminate()
+            return {"ok": True, "interrupted": True, "profile": "main"}
         return {"ok": False, "error": "No active Antigravity run"}
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
-
     def _subprocess_env(self) -> dict[str, str]:
-        env = os.environ.copy()
-        if self.home_path:
-            env["ANTIGRAVITY_HOME"] = self.home_path
-        return env
+        return sanitized_env("VO_ANTIGRAVITY_ENV_ALLOWLIST")
 
     @staticmethod
     def _resolve_binary(value: str | None) -> str:
-        return os.path.expanduser(
-            value
-            or os.environ.get("VO_ANTIGRAVITY_BIN")
-            or shutil.which("agy")
-            or ""
-        )
+        return resolve_executable(value, "VO_ANTIGRAVITY_BIN", "agy")
 
     @staticmethod
     def _last_active(path: str) -> int:
-        if not path or not os.path.isdir(path):
-            return 0
-        newest = 0
-        for entry in os.scandir(path):
-            try:
-                mtime = entry.stat().st_mtime
-                if mtime > newest:
-                    newest = mtime
-            except OSError:
-                continue
-        return int(newest)
+        latest = 0
+        try:
+            if os.path.isfile(path):
+                return int(os.path.getmtime(path))
+            for root, dirs, files in os.walk(path):
+                dirs[:] = [d for d in dirs if d not in {"node_modules", ".git"}]
+                for fname in files:
+                    latest = max(latest, int(os.path.getmtime(os.path.join(root, fname))))
+        except OSError:
+            pass
+        return latest

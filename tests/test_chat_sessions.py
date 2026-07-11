@@ -69,6 +69,8 @@ def load_server(tmpdir):
         {"id": "hermes-default", "statusKey": "hermes-default", "name": "Hermes", "providerKind": "hermes", "providerAgentId": "default", "profile": "default", "emoji": "H"},
         {"id": "codex-main", "statusKey": "codex-main", "name": "Codex", "providerKind": "codex", "providerAgentId": "main", "profile": "main", "emoji": "C"},
         {"id": "claude-main", "statusKey": "claude-main", "name": "Claude", "providerKind": "claude-code", "providerAgentId": "main", "profile": "main", "emoji": "L"},
+        {"id": "opencode-main", "statusKey": "opencode-main", "name": "OpenCode", "providerKind": "opencode", "providerAgentId": "main", "profile": "main", "emoji": "O"},
+        {"id": "antigravity-main", "statusKey": "antigravity-main", "name": "Antigravity", "providerKind": "antigravity", "providerAgentId": "main", "profile": "main", "emoji": "A"},
     ]
     module._discovered_at = time.time()
     module.refresh_agent_maps()
@@ -118,6 +120,21 @@ class FakeCodexProvider:
         return {"ok": True, "deleted": True}
 
 
+class FakeOpenCodeProvider:
+    def __init__(self):
+        self.deleted = []
+
+    def list_sessions(self, profile, limit=40):
+        return {"ok": True, "sessions": [
+            {"id": "opencode-session-1", "title": "OpenCode Current", "preview": "latest", "updatedAt": "2026-07-07T15:00:00Z"},
+            {"id": "opencode-session-0", "title": "OpenCode Older", "preview": "older", "updatedAt": "2026-07-06T15:00:00Z"},
+        ][:limit], "profile": profile}
+
+    def delete_session(self, profile, session_id):
+        self.deleted.append((profile, session_id))
+        return {"ok": True, "deleted": True, "sessionId": session_id}
+
+
 def main():
     with tempfile.TemporaryDirectory(prefix="vo-chat-sessions-") as raw_tmp:
         server, _data_dir, openclaw_dir, claude_home = load_server(Path(raw_tmp))
@@ -136,12 +153,16 @@ def main():
 
         fake_hermes = FakeHermesProvider()
         fake_codex = FakeCodexProvider()
+        fake_opencode = FakeOpenCodeProvider()
         server._gateway_rpc_call = fake_gateway
         server._hermes_provider = lambda agent=None: fake_hermes
         server._codex_provider = lambda: fake_codex
+        server._opencode_provider = lambda: fake_opencode
 
         server._save_hermes_state("default", {"messages": [], "sessionId": "hermes-session-1"})
         server._save_codex_state("main", {"messages": [], "sessionId": "codex-thread-1"})
+        server._save_opencode_state("main", {"messages": [{"role": "assistant", "text": "hi from opencode"}], "sessionId": "opencode-session-1"})
+        server._save_antigravity_state("main", {"messages": [{"role": "assistant", "text": "hi from agy"}]})
 
         adam_sessions_dir = openclaw_dir / "agents" / "adam" / "sessions"
         adam_sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -199,6 +220,25 @@ def main():
         check("Codex switch reads thread messages", status == 200 and len(switched.get("messages") or []) == 2 and server._get_codex_session_id("main") == "codex-thread-1")
         deleted, status = server.handle_chat_session_delete("codex-main", "codex-thread-1")
         check("Codex delete clears active thread", status == 200 and deleted.get("deleted") and server._get_codex_session_id("main") == "")
+
+        opencode_payload, opencode_status = server.handle_chat_sessions_list("opencode-main")
+        opencode_sessions = opencode_payload.get("sessions") or []
+        check("OpenCode sessions list uses provider", opencode_status == 200 and opencode_sessions and opencode_sessions[0].get("active") is True)
+        created, status = server.handle_chat_session_create("opencode-main")
+        check("OpenCode create clears local active session", status == 200 and created.get("ok") and server._get_opencode_session_id("main") == "")
+        switched, status = server.handle_chat_session_switch("opencode-main", "opencode-session-1")
+        check("OpenCode switch stores active session", status == 200 and switched.get("sessionId") == "opencode-session-1" and server._get_opencode_session_id("main") == "opencode-session-1")
+        deleted, status = server.handle_chat_session_delete("opencode-main", "opencode-session-1")
+        check("OpenCode delete clears active session", status == 200 and deleted.get("deleted") and server._get_opencode_session_id("main") == "")
+
+        antigravity_payload, antigravity_status = server.handle_chat_sessions_list("antigravity-main")
+        check("Antigravity sessions list returns one-shot note", antigravity_status == 200 and antigravity_payload.get("ok") and antigravity_payload.get("sessions") == [])
+        created, status = server.handle_chat_session_create("antigravity-main")
+        check("Antigravity create clears local history", status == 200 and created.get("ok") and server._load_antigravity_history("main") == [])
+        rejected, status = server.handle_chat_session_switch("antigravity-main", "agy-session")
+        check("Antigravity switch is rejected", status == 400 and not rejected.get("ok"))
+        rejected, status = server.handle_chat_session_delete("antigravity-main", "agy-session")
+        check("Antigravity delete is rejected", status == 400 and not rejected.get("ok"))
 
         claude_payload, claude_status = server.handle_chat_sessions_list("claude-main")
         claude_sessions = claude_payload.get("sessions") or []

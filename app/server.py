@@ -339,8 +339,8 @@ def _load_vo_config():
             "registerNativeAgents": str(_env_or("VO_CLAUDE_CODE_REGISTER_NATIVE_AGENTS", claude_code_cfg.get("registerNativeAgents", True))).lower() not in ("0", "false", "no", "off"),
         },
         "openCode": {
-            "enabled": str(_env_or("VO_OPENCODE_ENABLED", opencode_cfg.get("enabled", True))).lower() not in ("0", "false", "no", "off"),
-            "homePath": _env_or("VO_OPENCODE_HOME", opencode_cfg.get("homePath", os.path.expanduser("~/.config/opencode"))),
+            "enabled": str(_env_or("VO_OPENCODE_ENABLED", opencode_cfg.get("enabled", False))).lower() not in ("0", "false", "no", "off"),
+            "homePath": _env_or("VO_OPENCODE_CONFIG_DIR", _env_or("VO_OPENCODE_HOME", opencode_cfg.get("homePath", os.path.expanduser("~/.config/opencode")))),
             "binary": _env_or("VO_OPENCODE_BIN", opencode_cfg.get("binary", "")),
             "workspaceRoot": opencode_workspace_root,
             "mainWorkspace": _env_or("VO_OPENCODE_MAIN_WORKSPACE", opencode_cfg.get("mainWorkspace", os.path.join(_env_or("VO_STATUS_DIR", presence.get("statusDir", "/data")), "opencode-main"))),
@@ -348,14 +348,17 @@ def _load_vo_config():
             "model": _env_or("VO_OPENCODE_MODEL", opencode_cfg.get("model", "")),
             "includeMain": str(_env_or("VO_OPENCODE_INCLUDE_MAIN", opencode_cfg.get("includeMain", True))).lower() not in ("0", "false", "no", "off"),
             "includeAgents": str(_env_or("VO_OPENCODE_INCLUDE_AGENTS", opencode_cfg.get("includeAgents", True))).lower() not in ("0", "false", "no", "off"),
+            "registerAgents": str(_env_or("VO_OPENCODE_REGISTER_AGENTS", opencode_cfg.get("registerAgents", True))).lower() not in ("0", "false", "no", "off"),
         },
         "antigravity": {
-            "enabled": str(_env_or("VO_ANTIGRAVITY_ENABLED", antigravity_cfg.get("enabled", True))).lower() not in ("0", "false", "no", "off"),
+            "enabled": str(_env_or("VO_ANTIGRAVITY_ENABLED", antigravity_cfg.get("enabled", False))).lower() not in ("0", "false", "no", "off"),
             "homePath": _env_or("VO_ANTIGRAVITY_HOME", antigravity_cfg.get("homePath", os.path.expanduser("~/.gemini/antigravity-cli"))),
             "binary": _env_or("VO_ANTIGRAVITY_BIN", antigravity_cfg.get("binary", "")),
             "workspaceRoot": antigravity_workspace_root,
             "timeoutSec": int(_env_or("VO_ANTIGRAVITY_TIMEOUT_SEC", antigravity_cfg.get("timeoutSec", 600))),
             "printTimeout": _env_or("VO_ANTIGRAVITY_PRINT_TIMEOUT", antigravity_cfg.get("printTimeout", "5m")),
+            "model": _env_or("VO_ANTIGRAVITY_MODEL", antigravity_cfg.get("model", "")),
+            "sandbox": _env_or("VO_ANTIGRAVITY_SANDBOX", antigravity_cfg.get("sandbox", "")),
         },
     }
 
@@ -2386,6 +2389,12 @@ def _agent_recent_activity(agent_key, agent):
     elif agent.get("providerKind") == "claude-code":
         profile = agent.get("profile") or agent.get("providerAgentId") or "main"
         messages = _load_claude_code_history(profile)[-80:]
+    elif agent.get("providerKind") == "opencode":
+        profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+        messages = _load_opencode_history(profile)[-80:]
+    elif agent.get("providerKind") == "antigravity":
+        profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+        messages = _load_antigravity_history(profile)[-80:]
     else:
         messages = get_agent_messages(agent_key, max_messages=80)
     return messages[-80:] if isinstance(messages, list) else []
@@ -3050,6 +3059,8 @@ def _discover_roster():
     hermes = VO_CONFIG.get("hermes", {})
     codex = VO_CONFIG.get("codex", {})
     claude_code = VO_CONFIG.get("claudeCode", {})
+    opencode = VO_CONFIG.get("openCode", {})
+    antigravity = VO_CONFIG.get("antigravity", {})
     roster = discover_all_agents(
         WORKSPACE_BASE,
         hermes_home=hermes.get("homePath"),
@@ -3088,6 +3099,24 @@ def _discover_roster():
         claude_include_main=claude_code.get("includeMain", True),
         claude_include_native_agents=claude_code.get("includeNativeAgents", True),
         claude_register_native_agents=claude_code.get("registerNativeAgents", True),
+        opencode_home=opencode.get("homePath"),
+        opencode_bin=opencode.get("binary"),
+        opencode_workspace_root=opencode.get("workspaceRoot"),
+        opencode_enabled=opencode.get("enabled", False),
+        opencode_model=opencode.get("model") or "",
+        opencode_timeout_sec=int(opencode.get("timeoutSec") or 900),
+        opencode_main_workspace=opencode.get("mainWorkspace"),
+        opencode_include_main=opencode.get("includeMain", True),
+        opencode_include_agents=opencode.get("includeAgents", True),
+        opencode_register_agents=opencode.get("registerAgents", True),
+        antigravity_home=antigravity.get("homePath"),
+        antigravity_bin=antigravity.get("binary"),
+        antigravity_workspace_root=antigravity.get("workspaceRoot"),
+        antigravity_enabled=antigravity.get("enabled", False),
+        antigravity_timeout_sec=int(antigravity.get("timeoutSec") or 600),
+        antigravity_print_timeout=antigravity.get("printTimeout") or "5m",
+        antigravity_model=antigravity.get("model") or "",
+        antigravity_sandbox=antigravity.get("sandbox") or "",
     )
     gateway_agent = _hermes_platform_roster_agent()
     if gateway_agent:
@@ -3161,7 +3190,7 @@ def _build_agent_info():
 def _build_agent_workspaces():
     result = {}
     for a in get_roster():
-        if a.get("providerKind") in {"hermes", "codex", "claude-code"}:
+        if a.get("providerKind") in {"hermes", "codex", "claude-code", "opencode", "antigravity"}:
             result[a["statusKey"]] = a.get("home") or a.get("workspace") or ""
         else:
             result[a["statusKey"]] = get_agent_workspace_dir(WORKSPACE_BASE, a["id"]).replace(WORKSPACE_BASE + "/", "") if a["workspace"].startswith(WORKSPACE_BASE) else os.path.basename(a["workspace"])
@@ -3737,6 +3766,7 @@ def _opencode_provider():
         main_workspace=opencode_cfg.get("mainWorkspace"),
         include_main=opencode_cfg.get("includeMain", True),
         include_agents=opencode_cfg.get("includeAgents", True),
+        register_agents=opencode_cfg.get("registerAgents", True),
     )
 
 
@@ -3749,6 +3779,8 @@ def _antigravity_provider():
         enabled=ag_cfg.get("enabled", True),
         timeout_sec=int(ag_cfg.get("timeoutSec") or 600),
         print_timeout=ag_cfg.get("printTimeout", "5m"),
+        model=ag_cfg.get("model") or "",
+        sandbox=ag_cfg.get("sandbox") or "",
     )
 
 
@@ -3782,6 +3814,98 @@ def _is_antigravity_agent(agent_id_or_key):
         if needle in (a.get("id"), a.get("statusKey"), a.get("providerAgentId"), a.get("profile")):
             return a.get("providerKind") == "antigravity"
     return needle.startswith("antigravity:") or needle.startswith("antigravity-")
+
+
+def _opencode_history_path(profile="main"):
+    safe_profile = re.sub(r"[^a-zA-Z0-9_.-]+", "-", profile or "main")[:80] or "main"
+    return os.path.join(STATUS_DIR, f"opencode-chat-{safe_profile}.json")
+
+
+def _load_opencode_state(profile="main"):
+    path = _opencode_history_path(profile)
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {"messages": []}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {"messages": []}
+
+
+def _load_opencode_history(profile="main"):
+    state = _load_opencode_state(profile)
+    messages = state.get("messages", []) if isinstance(state, dict) else []
+    return messages if isinstance(messages, list) else []
+
+
+def _save_opencode_state(profile, state):
+    path = _opencode_history_path(profile)
+    data = state if isinstance(state, dict) else {}
+    data.setdefault("messages", [])
+    data["updatedAt"] = int(time.time() * 1000)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+    try:
+        os.chmod(path, 0o666)
+    except OSError:
+        pass
+
+
+def _save_opencode_history(profile, messages):
+    state = _load_opencode_state(profile)
+    state["messages"] = messages
+    _save_opencode_state(profile, state)
+
+
+def _get_opencode_session_id(profile="main"):
+    return str(_load_opencode_state(profile).get("sessionId") or "")
+
+
+def _set_opencode_session_id(profile="main", session_id=""):
+    state = _load_opencode_state(profile)
+    state["sessionId"] = session_id or ""
+    _save_opencode_state(profile, state)
+
+
+def _antigravity_history_path(profile="main"):
+    safe_profile = re.sub(r"[^a-zA-Z0-9_.-]+", "-", profile or "main")[:80] or "main"
+    return os.path.join(STATUS_DIR, f"antigravity-chat-{safe_profile}.json")
+
+
+def _load_antigravity_state(profile="main"):
+    path = _antigravity_history_path(profile)
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {"messages": []}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {"messages": []}
+
+
+def _load_antigravity_history(profile="main"):
+    state = _load_antigravity_state(profile)
+    messages = state.get("messages", []) if isinstance(state, dict) else []
+    return messages if isinstance(messages, list) else []
+
+
+def _save_antigravity_state(profile, state):
+    path = _antigravity_history_path(profile)
+    data = state if isinstance(state, dict) else {}
+    data.setdefault("messages", [])
+    data["updatedAt"] = int(time.time() * 1000)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+    try:
+        os.chmod(path, 0o666)
+    except OSError:
+        pass
+
+
+def _save_antigravity_history(profile, messages):
+    state = _load_antigravity_state(profile)
+    state["messages"] = messages
+    _save_antigravity_state(profile, state)
 
 
 def _claude_code_history_path(profile="main"):
@@ -6757,6 +6881,7 @@ def _handle_opencode_test(body=None):
         main_workspace=cfg.get("mainWorkspace"),
         include_main=cfg.get("includeMain", True),
         include_agents=cfg.get("includeAgents", True),
+        register_agents=cfg.get("registerAgents", True),
     ).test()
 
 
@@ -6774,18 +6899,118 @@ def _handle_opencode_chat(body):
     opencode_cfg = VO_CONFIG.get("openCode", {})
     timeout = int(body.get("timeoutSec") or opencode_cfg.get("timeoutSec") or 900)
     profile = agent.get("profile") or agent.get("providerAgentId") or "main"
-    session_id = body.get("sessionId") or ""
+    session_id = body.get("sessionId") or _get_opencode_session_id(profile) or ""
+    from_type = str(body.get("fromType") or body.get("senderType") or "").strip().lower()
+    is_human_source = from_type in {"human", "user", "chat", "ui"}
+    attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
+    sender_name = str(body.get("fromDisplayName") or body.get("displayName") or body.get("fromName") or "User").strip() or "User"
 
-    provider = _opencode_provider()
-    result = provider.send_chat_message(
-        profile=profile,
-        message=message,
-        session_id=session_id or None,
-        timeout_sec=timeout,
-    )
-    if not result.get("ok"):
-        result["_status"] = 500
-    return result
+    delivery_message = message
+    if is_human_source:
+        delivery_message = (
+            f"Message from {sender_name} via Virtual Office Chat.\n\n"
+            f"{message}\n\n"
+            "Reply directly to the user. Do not assume the user's name unless they identify themselves."
+        )
+    if attachments:
+        file_lines = []
+        for item in attachments:
+            if isinstance(item, dict):
+                file_lines.append(f"- {item.get('name') or 'attachment'}: {item.get('path') or item.get('url') or ''}".strip())
+        if file_lines:
+            delivery_message += "\n\nAttached files uploaded through Virtual Office:\n" + "\n".join(file_lines)
+
+    now_ms = int(time.time() * 1000)
+    progress_id = f"opencode-progress-{now_ms}"
+    history = _load_opencode_history(profile)
+    history.append({
+        "role": "user",
+        "text": message,
+        "ts": now_ms,
+        "agentId": agent.get("id"),
+        "from": sender_name if is_human_source else "You",
+        "fromType": from_type or "",
+        "attachments": attachments,
+    })
+    history.append({
+        "role": "assistant",
+        "text": "",
+        "ts": now_ms + 1,
+        "agentId": agent.get("id"),
+        "ephemeral": "opencode-progress",
+        "progressId": progress_id,
+        "sessionId": session_id,
+        "thinking": "Starting OpenCode.",
+    })
+    _save_opencode_history(profile, history)
+
+    try:
+        provider = _opencode_provider()
+        agent_model = agent.get("model") or ""
+        if agent_model and agent_model != "inherit":
+            provider.model = agent_model
+        status_key = agent.get("statusKey") or agent.get("id")
+        gateway_presence.set_manual_override(status_key, "working", "OpenCode task")
+
+        def on_progress(run_state):
+            run_state = run_state if isinstance(run_state, dict) else {}
+            current = [m for m in _load_opencode_history(profile) if not msg_matches_ephemeral(m, "opencode-progress")]
+            current.append({
+                "role": "assistant",
+                "text": run_state.get("reply") or "",
+                "ts": int(time.time() * 1000),
+                "agentId": agent.get("id"),
+                "ephemeral": "opencode-progress",
+                "progressId": progress_id,
+                "sessionId": session_id,
+                "thinking": "OpenCode is running.",
+            })
+            _save_opencode_history(profile, current)
+
+        result = provider.send_chat_message(profile, delivery_message, session_id=session_id or None, timeout_sec=timeout, on_progress=on_progress)
+        active_session_id = result.get("sessionId") or session_id
+        if active_session_id:
+            _set_opencode_session_id(profile, active_session_id)
+        reply = result.get("reply", "")
+        history = [m for m in _load_opencode_history(profile) if not msg_matches_ephemeral(m, "opencode-progress")]
+        final_ts = int(time.time() * 1000)
+        history.append({
+            "role": "assistant",
+            "text": reply,
+            "ts": final_ts,
+            "agentId": agent.get("id"),
+            "exitCode": result.get("exitCode"),
+            "sessionId": active_session_id,
+            "thinking": "",
+            "reasoningTokens": 0,
+            "error": result.get("error") or None,
+            "model": result.get("model") or provider.model or "",
+        })
+        _save_opencode_history(profile, history)
+        gateway_presence.set_manual_override(status_key, "idle" if result.get("ok") else "offline", "")
+        return {
+            "ok": bool(result.get("ok")),
+            "reply": reply,
+            "stderr": str(result.get("stderr") or "")[:2000],
+            "exitCode": result.get("exitCode"),
+            "sessionId": active_session_id,
+            "providerPath": result.get("providerPath") or "opencode-cli",
+            "error": result.get("error"),
+            "agent": {"id": agent.get("id"), "name": agent.get("name"), "providerKind": "opencode", "profile": profile},
+            "_status": 200 if result.get("ok") else 500,
+        }
+    except Exception as e:
+        history = [m for m in _load_opencode_history(profile) if not msg_matches_ephemeral(m, "opencode-progress")]
+        history.append({
+            "role": "assistant",
+            "text": "",
+            "ts": int(time.time() * 1000),
+            "agentId": agent.get("id"),
+            "tools": [{"id": "opencode-error", "name": "opencode", "status": "error", "arguments": {}, "error": str(e)}],
+        })
+        _save_opencode_history(profile, history)
+        gateway_presence.set_manual_override(agent.get("statusKey") or agent.get("id"), "offline", "OpenCode error")
+        return {"ok": False, "error": str(e), "_status": 500}
 
 
 def _handle_opencode_interrupt(body):
@@ -6794,7 +7019,24 @@ def _handle_opencode_interrupt(body):
     if not agent:
         return {"ok": False, "error": f"OpenCode agent '{agent_key}' not found", "_status": 404}
     profile = agent.get("profile") or agent.get("providerAgentId") or "main"
-    return _opencode_provider().interrupt(profile)
+    result = _opencode_provider().interrupt(profile)
+    if result.get("ok"):
+        history = _load_opencode_history(profile)
+        history.append({
+            "role": "assistant",
+            "text": "OpenCode run interrupted.",
+            "ts": int(time.time() * 1000),
+            "agentId": agent.get("id"),
+            "ephemeral": "opencode-progress",
+            "progressId": f"opencode-interrupt-{int(time.time() * 1000)}",
+            "sessionId": _get_opencode_session_id(profile),
+            "thinking": "Interrupted by user.",
+        })
+        _save_opencode_history(profile, history)
+        gateway_presence.set_manual_override(agent.get("statusKey") or agent.get("id"), "idle", "")
+    else:
+        result["_status"] = 409
+    return result
 
 
 def _handle_antigravity_test(body=None):
@@ -6808,6 +7050,8 @@ def _handle_antigravity_test(body=None):
         enabled=cfg.get("enabled", True),
         timeout_sec=int(cfg.get("timeoutSec") or 600),
         print_timeout=cfg.get("printTimeout", "5m"),
+        model=cfg.get("model") or "",
+        sandbox=cfg.get("sandbox") or "",
     ).test()
 
 
@@ -6824,20 +7068,131 @@ def _handle_antigravity_chat(body):
 
     ag_cfg = VO_CONFIG.get("antigravity", {})
     timeout = int(body.get("timeoutSec") or ag_cfg.get("timeoutSec") or 600)
+    profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+    from_type = str(body.get("fromType") or body.get("senderType") or "").strip().lower()
+    is_human_source = from_type in {"human", "user", "chat", "ui"}
+    attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
+    sender_name = str(body.get("fromDisplayName") or body.get("displayName") or body.get("fromName") or "User").strip() or "User"
 
-    provider = _antigravity_provider()
-    result = provider.send_chat_message(
-        profile="main",
-        message=message,
-        timeout_sec=timeout,
-    )
-    if not result.get("ok"):
-        result["_status"] = 500
-    return result
+    delivery_message = message
+    if is_human_source:
+        delivery_message = (
+            f"Message from {sender_name} via Virtual Office Chat.\n\n"
+            f"{message}\n\n"
+            "Reply directly to the user. Do not assume the user's name unless they identify themselves."
+        )
+    if attachments:
+        file_lines = []
+        for item in attachments:
+            if isinstance(item, dict):
+                file_lines.append(f"- {item.get('name') or 'attachment'}: {item.get('path') or item.get('url') or ''}".strip())
+        if file_lines:
+            delivery_message += "\n\nAttached files uploaded through Virtual Office:\n" + "\n".join(file_lines)
+
+    now_ms = int(time.time() * 1000)
+    progress_id = f"antigravity-progress-{now_ms}"
+    history = _load_antigravity_history(profile)
+    history.append({
+        "role": "user",
+        "text": message,
+        "ts": now_ms,
+        "agentId": agent.get("id"),
+        "from": sender_name if is_human_source else "You",
+        "fromType": from_type or "",
+        "attachments": attachments,
+    })
+    history.append({
+        "role": "assistant",
+        "text": "",
+        "ts": now_ms + 1,
+        "agentId": agent.get("id"),
+        "ephemeral": "antigravity-progress",
+        "progressId": progress_id,
+        "thinking": "Starting Antigravity.",
+    })
+    _save_antigravity_history(profile, history)
+
+    try:
+        provider = _antigravity_provider()
+        status_key = agent.get("statusKey") or agent.get("id")
+        gateway_presence.set_manual_override(status_key, "working", "Antigravity task")
+
+        def on_progress(run_state):
+            run_state = run_state if isinstance(run_state, dict) else {}
+            current = [m for m in _load_antigravity_history(profile) if not msg_matches_ephemeral(m, "antigravity-progress")]
+            current.append({
+                "role": "assistant",
+                "text": run_state.get("reply") or "",
+                "ts": int(time.time() * 1000),
+                "agentId": agent.get("id"),
+                "ephemeral": "antigravity-progress",
+                "progressId": progress_id,
+                "thinking": "Antigravity is running.",
+            })
+            _save_antigravity_history(profile, current)
+
+        result = provider.send_chat_message(profile="main", message=delivery_message, timeout_sec=timeout, on_progress=on_progress)
+        reply = result.get("reply", "")
+        history = [m for m in _load_antigravity_history(profile) if not msg_matches_ephemeral(m, "antigravity-progress")]
+        history.append({
+            "role": "assistant",
+            "text": reply,
+            "ts": int(time.time() * 1000),
+            "agentId": agent.get("id"),
+            "exitCode": result.get("exitCode"),
+            "thinking": "",
+            "reasoningTokens": 0,
+            "error": result.get("error") or None,
+            "model": result.get("model") or provider.model or "",
+        })
+        _save_antigravity_history(profile, history)
+        gateway_presence.set_manual_override(status_key, "idle" if result.get("ok") else "offline", "")
+        return {
+            "ok": bool(result.get("ok")),
+            "reply": reply,
+            "stderr": str(result.get("stderr") or "")[:2000],
+            "exitCode": result.get("exitCode"),
+            "sessionId": "",
+            "providerPath": result.get("providerPath") or "antigravity-cli",
+            "error": result.get("error"),
+            "agent": {"id": agent.get("id"), "name": agent.get("name"), "providerKind": "antigravity", "profile": profile},
+            "_status": 200 if result.get("ok") else 500,
+        }
+    except Exception as e:
+        history = [m for m in _load_antigravity_history(profile) if not msg_matches_ephemeral(m, "antigravity-progress")]
+        history.append({
+            "role": "assistant",
+            "text": "",
+            "ts": int(time.time() * 1000),
+            "agentId": agent.get("id"),
+            "tools": [{"id": "antigravity-error", "name": "antigravity", "status": "error", "arguments": {}, "error": str(e)}],
+        })
+        _save_antigravity_history(profile, history)
+        gateway_presence.set_manual_override(agent.get("statusKey") or agent.get("id"), "offline", "Antigravity error")
+        return {"ok": False, "error": str(e), "_status": 500}
 
 
 def _handle_antigravity_interrupt(body):
-    return _antigravity_provider().interrupt("main")
+    agent_key = body.get("agentId") or body.get("key") or "antigravity-main"
+    agent = _get_antigravity_agent(agent_key) or {}
+    profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+    result = _antigravity_provider().interrupt("main")
+    if result.get("ok"):
+        history = _load_antigravity_history(profile)
+        history.append({
+            "role": "assistant",
+            "text": "Antigravity run interrupted.",
+            "ts": int(time.time() * 1000),
+            "agentId": agent.get("id"),
+            "ephemeral": "antigravity-progress",
+            "progressId": f"antigravity-interrupt-{int(time.time() * 1000)}",
+            "thinking": "Interrupted by user.",
+        })
+        _save_antigravity_history(profile, history)
+        gateway_presence.set_manual_override(agent.get("statusKey") or agent.get("id"), "idle", "")
+    else:
+        result["_status"] = 409
+    return result
 
 
 def _handle_hermes_approval_respond(body):
@@ -7093,6 +7448,10 @@ def _handle_agent_platforms():
     claude_cfg = VO_CONFIG.get("claudeCode", {})
     claude_status = _claude_code_provider().test()
     claude_home = claude_status.get("homePath") or claude_cfg.get("homePath") or ""
+    opencode_cfg = VO_CONFIG.get("openCode", {})
+    opencode_status = _opencode_provider().test()
+    opencode_home = opencode_status.get("homePath") or opencode_cfg.get("homePath") or ""
+    antigravity_status = _antigravity_provider().test()
     return {
         "ok": True,
         "platforms": [
@@ -7155,6 +7514,34 @@ def _handle_agent_platforms():
                     "defaultCreationMode": "standard",
                     "registerNativeAgents": bool(claude_cfg.get("registerNativeAgents", True)),
                 },
+            },
+            {
+                "id": "opencode",
+                "label": "OpenCode",
+                "description": "Native OpenCode CLI workspace agent",
+                "providerType": "harness",
+                "available": bool(opencode_status.get("ok")),
+                "create": bool(opencode_status.get("ok")),
+                "delete": bool(opencode_status.get("ok")),
+                "error": "" if opencode_status.get("ok") else opencode_status.get("error", "OpenCode is not available"),
+                "openCode": {
+                    "homePath": opencode_home,
+                    "nativeAgentsDir": os.path.join(opencode_home, "agents") if opencode_home else "",
+                    "workspaceRoot": opencode_status.get("workspaceRoot") or opencode_cfg.get("workspaceRoot") or "",
+                    "mainWorkspace": opencode_status.get("mainWorkspace") or opencode_cfg.get("mainWorkspace") or "",
+                    "defaultCreationMode": "standard",
+                    "registerAgents": bool(opencode_cfg.get("registerAgents", True)),
+                },
+            },
+            {
+                "id": "antigravity",
+                "label": "Antigravity",
+                "description": "Native agy CLI one-shot code analyst",
+                "providerType": "harness",
+                "available": bool(antigravity_status.get("ok")),
+                "create": False,
+                "delete": False,
+                "error": "" if antigravity_status.get("ok") else antigravity_status.get("error", "Antigravity is not available"),
             },
         ],
     }
@@ -8254,6 +8641,8 @@ def _handle_agent_create(body):
         return _handle_codex_agent_create(body, name)
     if platform in {"claude-code", "claude", "claude-cli", "claude-code-agent"}:
         return _handle_claude_code_agent_create(body, name)
+    if platform in {"opencode", "opencode-cli", "opencode-agent"}:
+        return _handle_opencode_agent_create(body, name)
     if platform not in {"openclaw", "openclaw-agent"}:
         return {"error": f"Unsupported agent platform '{platform}'", "_status": 400}
 
@@ -8400,6 +8789,45 @@ def _handle_claude_code_agent_create(body, name):
         "creationMode": result.get("creationMode"),
         "nativeAgentPath": result.get("nativeAgentPath"),
         "message": result.get("message", f"Claude Code agent '{name}' created successfully"),
+    }
+
+
+def _handle_opencode_agent_create(body, name):
+    emoji = body.get("emoji", "⚡")
+    role = body.get("role", "OpenCode Agent")
+    prompt = body.get("prompt") or body.get("systemPrompt") or body.get("instructions") or role
+    model = body.get("model") or VO_CONFIG.get("openCode", {}).get("model", "")
+    profile = body.get("id") or body.get("profile") or _sanitize_agent_id(name)
+    creation_mode = body.get("openCodeCreationMode") or body.get("opencodeCreationMode") or body.get("creationMode") or body.get("agentDirectoryMode") or "standard"
+    custom_directory = body.get("openCodeCustomDirectory") or body.get("opencodeCustomDirectory") or body.get("customDirectory") or body.get("agentDirectory") or ""
+    provider = _opencode_provider()
+    result = provider.create_agent(
+        name=name,
+        role=role,
+        model=model,
+        emoji=emoji,
+        profile=profile,
+        prompt=prompt,
+        creation_mode=creation_mode,
+        custom_directory=custom_directory,
+    )
+    if not result.get("ok"):
+        return {"error": result.get("error", "OpenCode agent creation failed"), "_status": 500}
+    global _discovered_at
+    _discovered_at = 0
+    refresh_agent_maps()
+    return {
+        "ok": True,
+        "agentId": result.get("agentId"),
+        "providerKind": "opencode",
+        "providerType": "harness",
+        "providerAgentId": result.get("profile"),
+        "profile": result.get("profile"),
+        "name": name,
+        "workspace": result.get("workspace"),
+        "creationMode": result.get("creationMode"),
+        "nativeAgentPath": result.get("nativeAgentPath"),
+        "message": result.get("message", f"OpenCode agent '{name}' created successfully"),
     }
 
 
@@ -10550,6 +10978,16 @@ def _wf_call_agent(agent_id, message, timeout=600, project_id=None, task_id=None
         if result.get("ok"):
             return result.get("reply", "")
         return f"[ERROR] Claude Code agent failed: {result.get('error') or result.get('reply') or result}"
+    if _is_opencode_agent(agent_id):
+        result = _handle_opencode_chat({"agentId": agent_id, "message": message, "timeoutSec": timeout})
+        if result.get("ok"):
+            return result.get("reply", "")
+        return f"[ERROR] OpenCode agent failed: {result.get('error') or result.get('reply') or result}"
+    if _is_antigravity_agent(agent_id):
+        result = _handle_antigravity_chat({"agentId": agent_id, "message": message, "timeoutSec": timeout})
+        if result.get("ok"):
+            return result.get("reply", "")
+        return f"[ERROR] Antigravity agent failed: {result.get('error') or result.get('reply') or result}"
 
     # Use a stable session key per task — reused across all calls for this task
     session_key = None
@@ -12080,6 +12518,19 @@ def _handle_agent_delete(body):
                 pass
             except OSError as e:
                 print(f"[CLAUDE_CODE] Failed to remove VO history for deleted profile {profile}: {e}")
+        elif provider_kind == "opencode" or agent_id.startswith("opencode-"):
+            profile = (agent or {}).get("providerAgentId") or agent_id.replace("opencode-", "", 1)
+            result = _opencode_provider().delete_agent(profile)
+            if not result.get("ok"):
+                return {"error": result.get("error", "OpenCode agent delete failed"), "_status": 500}
+            try:
+                os.remove(_opencode_history_path(profile))
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                print(f"[OPENCODE] Failed to remove VO history for deleted profile {profile}: {e}")
+        elif provider_kind == "antigravity" or agent_id.startswith("antigravity-"):
+            return {"error": "The built-in Antigravity agent cannot be deleted from Virtual Office.", "_status": 403}
         else:
             result = _gateway_rpc_call("agents.delete", {"agentId": agent_id, "deleteFiles": True}, timeout=30)
             if not result.get("ok"):
@@ -12323,6 +12774,40 @@ def _chat_sessions_list_codex(agent_ref, limit=40):
     return {"ok": True, "sessions": sessions}
 
 
+def _chat_sessions_list_opencode(agent_ref, limit=40):
+    provider = _opencode_provider()
+    profile = agent_ref["profile"] or "main"
+    outcome = provider.list_sessions(profile, limit=limit)
+    if not outcome.get("ok"):
+        return {"ok": False, "error": outcome.get("error"), "sessions": []}
+    active_id = _get_opencode_session_id(profile)
+    sessions = []
+    for row in outcome.get("sessions") or []:
+        session_id = row.get("id")
+        if not session_id:
+            continue
+        sessions.append({
+            "id": session_id,
+            "sessionKey": f"opencode:{profile}:{session_id}",
+            "title": row.get("title") or session_id,
+            "preview": row.get("preview") or "",
+            "updatedAt": row.get("updatedAt") or row.get("lastActive") or None,
+            "kind": "chat",
+            "liveMode": False,
+            "active": bool(active_id and session_id == active_id),
+            "deletable": True,
+        })
+    return {"ok": True, "sessions": sessions, "resumeCommand": "opencode run --session <session-id>"}
+
+
+def _chat_sessions_list_antigravity(agent_ref, limit=40):
+    return {
+        "ok": True,
+        "sessions": [],
+        "note": "Antigravity is a one-shot CLI provider; Virtual Office stores local history, but there are no native sessions to list.",
+    }
+
+
 def _claude_code_home_path():
     cfg = VO_CONFIG.get("claudeCode", {}) or {}
     return os.path.expanduser(str(os.environ.get("VO_CLAUDE_CODE_HOME") or os.environ.get("CLAUDE_CONFIG_DIR") or cfg.get("homePath") or "~/.claude"))
@@ -12442,6 +12927,10 @@ def handle_chat_sessions_list(agent_id, limit=40):
         outcome = _chat_sessions_list_hermes(agent_ref, limit=limit)
     elif kind == "codex":
         outcome = _chat_sessions_list_codex(agent_ref, limit=limit)
+    elif kind == "opencode":
+        outcome = _chat_sessions_list_opencode(agent_ref, limit=limit)
+    elif kind == "antigravity":
+        outcome = _chat_sessions_list_antigravity(agent_ref, limit=limit)
     elif kind == "openclaw":
         outcome = _chat_sessions_list_openclaw(agent_ref, limit=limit)
     elif kind in ("claude-code", "claudecode", "claude"):
@@ -12465,6 +12954,12 @@ def handle_chat_session_create(agent_id, body=None):
         _save_codex_state(profile, {"messages": [], "sessionId": ""})
         _clear_codex_token_usage(profile)
         return {"ok": True, "providerKind": kind, "profile": profile, "sessionId": "", "note": "New Codex thread starts with the next message."}, 200
+    if kind == "opencode":
+        _save_opencode_state(profile, {"messages": [], "sessionId": ""})
+        return {"ok": True, "providerKind": kind, "profile": profile, "sessionId": "", "note": "New OpenCode session starts with the next message."}, 200
+    if kind == "antigravity":
+        _save_antigravity_state(profile, {"messages": []})
+        return {"ok": True, "providerKind": kind, "profile": profile, "sessionId": "", "note": "Antigravity is one-shot; local history was cleared."}, 200
     if kind in ("claude-code", "claudecode", "claude"):
         _save_claude_code_state(profile, {"messages": [], "sessionId": ""})
         _clear_claude_code_token_usage(profile)
@@ -12499,6 +12994,13 @@ def handle_chat_session_delete(agent_id, session_id, body=None):
             _save_codex_state(profile, {"messages": [], "sessionId": ""})
             _clear_codex_token_usage(profile)
         return outcome, 200 if outcome.get("ok") else 502
+    if kind == "opencode":
+        outcome = _opencode_provider().delete_session(profile, session_id)
+        if outcome.get("ok") and _get_opencode_session_id(profile) == session_id:
+            _save_opencode_state(profile, {"messages": [], "sessionId": ""})
+        return outcome, 200 if outcome.get("ok") else 502
+    if kind == "antigravity":
+        return {"ok": False, "error": "Antigravity does not expose native sessions to delete"}, 400
     if kind in ("claude-code", "claudecode", "claude"):
         path = _claude_code_find_session_file(session_id)
         if not path:
@@ -12550,6 +13052,12 @@ def handle_chat_session_switch(agent_id, session_id, body=None):
         state["sessionId"] = session_id
         _save_codex_state(profile, state)
         return {"ok": True, "providerKind": kind, "sessionId": session_id, "messages": messages}, 200
+    if kind == "opencode":
+        _set_opencode_session_id(profile, session_id)
+        messages = _load_opencode_history(profile)
+        return {"ok": True, "providerKind": kind, "sessionId": session_id, "messages": messages, "resumeCommand": f"opencode run --session {session_id}"}, 200
+    if kind == "antigravity":
+        return {"ok": False, "error": "Antigravity does not expose native sessions to switch"}, 400
     if kind in ("claude-code", "claudecode", "claude"):
         path = _claude_code_find_session_file(session_id)
         if not path:
@@ -12868,6 +13376,60 @@ def get_codex_agent_messages(profile, max_messages=500):
             "reasoningTokens": _codex_int(msg.get("reasoningTokens"), 0),
             "approval": approval,
             "source": msg.get("source") or "codex",
+        })
+    return messages[-max_messages:]
+
+
+def get_opencode_agent_messages(profile, max_messages=500):
+    """Read recent OpenCode provider history for floor chat bubbles."""
+    messages = []
+    for msg in _load_opencode_history(profile)[-max_messages:]:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "assistant")
+        text = str(msg.get("text") or "")
+        tools = msg.get("tools") if isinstance(msg.get("tools"), list) else []
+        thinking = str(msg.get("thinking") or "")
+        if not text and not tools and not thinking:
+            continue
+        epoch_ms = _codex_int(msg.get("epochMs") or msg.get("ts"), 0)
+        messages.append({
+            "role": role,
+            "text": text[:500],
+            "ts": epoch_ms,
+            "epochMs": epoch_ms,
+            "from": msg.get("from") or ("User" if role == "user" else ""),
+            "fromType": msg.get("fromType") or "",
+            "tools": tools,
+            "thinking": thinking,
+            "reasoningTokens": _codex_int(msg.get("reasoningTokens"), 0),
+            "source": msg.get("source") or "opencode",
+        })
+    return messages[-max_messages:]
+
+
+def get_antigravity_agent_messages(profile, max_messages=500):
+    """Read recent Antigravity provider history for floor chat bubbles."""
+    messages = []
+    for msg in _load_antigravity_history(profile)[-max_messages:]:
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role") or "assistant")
+        text = str(msg.get("text") or "")
+        thinking = str(msg.get("thinking") or "")
+        if not text and not thinking:
+            continue
+        epoch_ms = _codex_int(msg.get("epochMs") or msg.get("ts"), 0)
+        messages.append({
+            "role": role,
+            "text": text[:500],
+            "ts": epoch_ms,
+            "epochMs": epoch_ms,
+            "from": msg.get("from") or ("User" if role == "user" else ""),
+            "fromType": msg.get("fromType") or "",
+            "thinking": thinking,
+            "reasoningTokens": _codex_int(msg.get("reasoningTokens"), 0),
+            "source": msg.get("source") or "antigravity",
         })
     return messages[-max_messages:]
 
@@ -13514,6 +14076,10 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     session_key = f"codex:{a.get('profile') or a.get('providerAgentId') or a['id']}"
                 elif provider_kind == "claude-code":
                     session_key = f"claude-code:{a.get('profile') or a.get('providerAgentId') or a['id']}"
+                elif provider_kind == "opencode":
+                    session_key = f"opencode:{a.get('profile') or a.get('providerAgentId') or a['id']}"
+                elif provider_kind == "antigravity":
+                    session_key = f"antigravity:{a.get('profile') or a.get('providerAgentId') or a['id']}"
                 else:
                     session_key = f"agent:{a['id']}:main"
                 # Prefer office-config name/emoji over IDENTITY.md
@@ -13522,7 +14088,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 branch_id = oc.get("branch", "")
                 branch_name = _oc_branches.get(branch_id, "") if branch_id else ""
                 if not branch_name:
-                    branch_name = "Hermes" if provider_kind == "hermes" else ("Codex" if provider_kind == "codex" else ("Claude Code" if provider_kind == "claude-code" else "Unassigned"))
+                    branch_name = "Hermes" if provider_kind == "hermes" else ("Codex" if provider_kind == "codex" else ("Claude Code" if provider_kind == "claude-code" else ("OpenCode" if provider_kind == "opencode" else ("Antigravity" if provider_kind == "antigravity" else "Unassigned"))))
                 agents.append({
                     "key": a["statusKey"],
                     "agentId": a["id"],
@@ -13598,6 +14164,14 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     agent = _get_claude_code_agent(agent_key) or {}
                     profile = agent.get("profile") or agent.get("providerAgentId") or "main"
                     msgs = get_claude_code_agent_messages(profile, max_messages=500)
+                elif _is_opencode_agent(agent_key):
+                    agent = _get_opencode_agent(agent_key) or {}
+                    profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+                    msgs = get_opencode_agent_messages(profile, max_messages=500)
+                elif _is_antigravity_agent(agent_key):
+                    agent = _get_antigravity_agent(agent_key) or {}
+                    profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+                    msgs = get_antigravity_agent_messages(profile, max_messages=500)
                 else:
                     msgs = get_agent_messages(agent_key, max_messages=500)
                 if msgs:
@@ -13609,7 +14183,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             # This works across all VO instances since they read the same session files.
             project_work = {}
             for agent_key, agent_id in AGENT_SESSION_IDS.items():
-                if _is_hermes_agent(agent_key) or _is_codex_agent(agent_key) or _is_claude_code_agent(agent_key):
+                if _is_hermes_agent(agent_key) or _is_codex_agent(agent_key) or _is_claude_code_agent(agent_key) or _is_opencode_agent(agent_key) or _is_antigravity_agent(agent_key):
                     continue
                 try:
                     sdir = os.path.join(WORKSPACE_BASE, f"agents/{agent_id}/sessions")
@@ -14026,6 +14600,34 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 "contextUsed": _codex_context_used_from_token_usage(token_usage) or _codex_int(state.get("contextUsed"), 0),
                 "contextWindow": _codex_context_window_from_token_usage(token_usage) or _codex_int(state.get("contextWindow"), 0),
             }).encode())
+        elif self.path == "/api/opencode/history" or self.path.startswith("/api/opencode/history?"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            agent_key = (qs.get("agentId") or qs.get("key") or ["opencode-main"])[0]
+            agent = _get_opencode_agent(agent_key)
+            profile = (agent or {}).get("profile") or (agent or {}).get("providerAgentId") or "main"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "ok": True,
+                "messages": _load_opencode_history(profile),
+                "sessionId": _get_opencode_session_id(profile),
+            }).encode())
+        elif self.path == "/api/antigravity/history" or self.path.startswith("/api/antigravity/history?"):
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            agent_key = (qs.get("agentId") or qs.get("key") or ["antigravity-main"])[0]
+            agent = _get_antigravity_agent(agent_key)
+            profile = (agent or {}).get("profile") or (agent or {}).get("providerAgentId") or "main"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                "ok": True,
+                "messages": _load_antigravity_history(profile),
+                "sessionId": "",
+            }).encode())
         elif request_path == "/api/hermes/approval/pending":
             agent_key = (query_params.get("agentId") or query_params.get("key") or ["hermes-default"])[0]
             session_id = (query_params.get("session_id") or query_params.get("sessionId") or [""])[0]
@@ -14296,6 +14898,28 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     "includeMain": VO_CONFIG.get("claudeCode", {}).get("includeMain", True),
                     "includeNativeAgents": VO_CONFIG.get("claudeCode", {}).get("includeNativeAgents", True),
                     "registerNativeAgents": VO_CONFIG.get("claudeCode", {}).get("registerNativeAgents", True),
+                },
+                "openCode": {
+                    "enabled": VO_CONFIG.get("openCode", {}).get("enabled", False),
+                    "homePath": VO_CONFIG.get("openCode", {}).get("homePath"),
+                    "binary": VO_CONFIG.get("openCode", {}).get("binary"),
+                    "workspaceRoot": VO_CONFIG.get("openCode", {}).get("workspaceRoot"),
+                    "mainWorkspace": VO_CONFIG.get("openCode", {}).get("mainWorkspace"),
+                    "timeoutSec": VO_CONFIG.get("openCode", {}).get("timeoutSec", 900),
+                    "model": VO_CONFIG.get("openCode", {}).get("model"),
+                    "includeMain": VO_CONFIG.get("openCode", {}).get("includeMain", True),
+                    "includeAgents": VO_CONFIG.get("openCode", {}).get("includeAgents", True),
+                    "registerAgents": VO_CONFIG.get("openCode", {}).get("registerAgents", True),
+                },
+                "antigravity": {
+                    "enabled": VO_CONFIG.get("antigravity", {}).get("enabled", False),
+                    "homePath": VO_CONFIG.get("antigravity", {}).get("homePath"),
+                    "binary": VO_CONFIG.get("antigravity", {}).get("binary"),
+                    "workspaceRoot": VO_CONFIG.get("antigravity", {}).get("workspaceRoot"),
+                    "timeoutSec": VO_CONFIG.get("antigravity", {}).get("timeoutSec", 600),
+                    "printTimeout": VO_CONFIG.get("antigravity", {}).get("printTimeout", "5m"),
+                    "model": VO_CONFIG.get("antigravity", {}).get("model"),
+                    "sandbox": VO_CONFIG.get("antigravity", {}).get("sandbox"),
                 },
                 "license": {
                     "licensed": lic["licensed"],
@@ -14872,6 +15496,28 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 "contextWindow": token_context_window or self._context_window_for_model(model, cfg),
                 "contextUsed": context_used,
                 "tokenUsage": token_usage,
+            }
+        if agent_id and _is_opencode_agent(agent_id):
+            agent = _get_opencode_agent(agent_id) or {}
+            model = agent.get("model") or VO_CONFIG.get("openCode", {}).get("model") or "OpenCode"
+            if model == "inherit":
+                model = VO_CONFIG.get("openCode", {}).get("model") or "OpenCode"
+            return {
+                "model": model,
+                "provider": agent.get("provider") or "OpenCode",
+                "providerKind": "opencode",
+                "contextWindow": self._context_window_for_model(model, cfg),
+                "sessionId": _get_opencode_session_id(agent.get("profile") or agent.get("providerAgentId") or "main"),
+            }
+        if agent_id and _is_antigravity_agent(agent_id):
+            agent = _get_antigravity_agent(agent_id) or {}
+            model = agent.get("model") or VO_CONFIG.get("antigravity", {}).get("model") or "gemini"
+            return {
+                "model": model,
+                "provider": agent.get("provider") or "Antigravity",
+                "providerKind": "antigravity",
+                "contextWindow": self._context_window_for_model(model, cfg),
+                "sessionId": "",
             }
 
         model = default_model
@@ -16029,6 +16675,31 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True, "clearedClaudeCodeSession": bool(session_id), "sessionId": session_id}).encode())
+            return
+        elif self.path == "/api/opencode/history/clear":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            agent = _get_opencode_agent(body.get("agentId") or body.get("key") or "opencode-main") or {}
+            profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+            session_id = _get_opencode_session_id(profile)
+            _save_opencode_state(profile, {"messages": [], "sessionId": ""})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "clearedOpenCodeSession": bool(session_id), "sessionId": session_id}).encode())
+            return
+        elif self.path == "/api/antigravity/history/clear":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            agent = _get_antigravity_agent(body.get("agentId") or body.get("key") or "antigravity-main") or {}
+            profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+            _save_antigravity_state(profile, {"messages": []})
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            self.wfile.write(json.dumps({"ok": True, "clearedAntigravityHistory": True, "sessionId": ""}).encode())
             return
         elif self.path == "/api/hermes/test":
             length = int(self.headers.get('Content-Length', 0))

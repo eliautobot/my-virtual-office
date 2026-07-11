@@ -323,7 +323,7 @@
           this.hasExplicitAgentSelection = true;
           this.saveSelection();
         }
-        if (connected || this.isHermesSelected() || this.isCodexSelected() || this.isClaudeCodeSelected()) this.fetchSessionInfo();
+        if (connected || this.isProviderAgentSelected()) this.fetchSessionInfo();
         return;
       }
       this.selectedAgentKey = newAgentKey;
@@ -342,7 +342,7 @@
       else this.stopHermesApprovalPolling();
       if (isCodex) this.startCodexApprovalPolling();
       else this.stopCodexApprovalPolling();
-      if (connected || isHermes || isCodex || isClaudeCode) {
+      if (connected || this.isProviderAgentSelected()) {
         this.loadHistory();
         this.fetchSessionInfo();
       }
@@ -378,7 +378,7 @@
         }
         this.syncAgentSelect();
         if (this.sessionsPanelOpen) this.refreshSessionsList({ showLoading: true });
-        if (connected || this.isHermesSelected() || this.isCodexSelected() || this.isClaudeCodeSelected()) this.fetchSessionInfo();
+        if (connected || this.isProviderAgentSelected()) this.fetchSessionInfo();
       } catch (e) {
         console.warn('[chat] Failed to load agent list:', e);
       }
@@ -390,7 +390,7 @@
 
     async fetchContextUsage() {
       if (!this.isVisibleForPolling()) return;
-      if (this.isHermesSelected() || this.isCodexSelected() || this.isClaudeCodeSelected()) return;
+      if (this.isProviderAgentSelected()) return;
       try {
         // Avoid broad sessions.list polling. Describe only the selected session.
         const res = await rpc('sessions.describe', { key: this.sessionKey });
@@ -429,8 +429,16 @@
       return this.getSelectedProviderKind() === 'claude-code' || String(this.sessionKey || '').startsWith('claude-code:');
     }
 
+    isOpenCodeSelected() {
+      return this.getSelectedProviderKind() === 'opencode' || String(this.sessionKey || '').startsWith('opencode:');
+    }
+
+    isAntigravitySelected() {
+      return this.getSelectedProviderKind() === 'antigravity' || String(this.sessionKey || '').startsWith('antigravity:');
+    }
+
     isProviderAgentSelected() {
-      return this.getSelectedProviderKind() !== 'openclaw' || this.isHermesSelected() || this.isCodexSelected() || this.isClaudeCodeSelected();
+      return this.getSelectedProviderKind() !== 'openclaw' || this.isHermesSelected() || this.isCodexSelected() || this.isClaudeCodeSelected() || this.isOpenCodeSelected() || this.isAntigravitySelected();
     }
 
     startHermesApprovalPolling() {
@@ -546,7 +554,7 @@
       let gatewayContext = 0;
       try {
         // Targeted lookup avoids rebuilding the full sessions.list index.
-        if (!this.isHermesSelected() && !this.isCodexSelected() && !this.isClaudeCodeSelected()) {
+        if (!this.isProviderAgentSelected()) {
           const res = await rpc('sessions.describe', { key: this.sessionKey });
           const s = res?.payload?.session;
           if (res.ok && s) {
@@ -578,12 +586,13 @@
 
     async loadHistory(opts = {}) {
       try {
-        if (this.isHermesSelected() || this.isCodexSelected() || this.isClaudeCodeSelected()) {
+        if (this.isProviderAgentSelected()) {
           const isHermes = this.isHermesSelected();
           const isCodex = this.isCodexSelected();
           const isClaudeCode = this.isClaudeCodeSelected();
-          const providerPath = isHermes ? 'hermes' : (isClaudeCode ? 'claude-code' : 'codex');
-          const progressMarker = isHermes ? 'hermes-progress' : (isClaudeCode ? 'claude-code-progress' : 'codex-progress');
+          const isOpenCode = this.isOpenCodeSelected();
+          const providerPath = isHermes ? 'hermes' : (isClaudeCode ? 'claude-code' : (isOpenCode ? 'opencode' : (this.isAntigravitySelected() ? 'antigravity' : 'codex')));
+          const progressMarker = isHermes ? 'hermes-progress' : (isClaudeCode ? 'claude-code-progress' : (isOpenCode ? 'opencode-progress' : (this.isAntigravitySelected() ? 'antigravity-progress' : 'codex-progress')));
           if (isHermes) this.startHermesApprovalPolling();
           if (isCodex) this.startCodexApprovalPolling();
           const res = await fetch('/api/' + providerPath + '/history?agentId=' + encodeURIComponent(this.getSelectedAgentId() || this.selectedAgentKey));
@@ -946,7 +955,7 @@
     async sendMessage() {
       let text = this.input.value.trim();
       const hasAttachments = this.pendingAttachments.length > 0;
-      if ((!text && !hasAttachments) || (!connected && !this.isHermesSelected() && !this.isCodexSelected() && !this.isClaudeCodeSelected())) return;
+      if ((!text && !hasAttachments) || (!connected && !this.isProviderAgentSelected())) return;
 
       this.input.value = '';
       this.input.style.height = 'auto';
@@ -1176,6 +1185,44 @@
         return;
       }
 
+      if (this.isOpenCodeSelected() || this.isAntigravitySelected()) {
+        const isOpenCode = this.isOpenCodeSelected();
+        const providerPath = isOpenCode ? 'opencode' : 'antigravity';
+        const providerLabel = this.agentSelect.selectedOptions[0]?.textContent.trim() || (isOpenCode ? 'OpenCode' : 'Antigravity');
+        const sendStartedAt = Date.now();
+        const providerBody = {
+          agentId: this.getSelectedAgentId() || this.selectedAgentKey,
+          message: text || '(attached files)',
+          fromType: 'human',
+          fromDisplayName: 'User',
+          sourceApp: 'virtual-office',
+          sourceSurface: 'chat-window',
+          sourceLabel: 'Virtual Office Chat',
+          attachments: uploadedFiles
+        };
+        this.updateTypingIndicator(providerLabel + ' is running');
+        this.setStatus(providerLabel + ' running...', 'connecting');
+        try {
+          const resp = await fetch('/api/' + providerPath + '/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(providerBody)
+          });
+          const data = await resp.json();
+          this.removeTypingIndicator();
+          if (!resp.ok || data.ok === false) throw new Error(data.error || data.reply || resp.statusText);
+          await this.loadHistory({ recoverFinal: true, startedAt: sendStartedAt });
+          await this.fetchSessionInfo();
+          this.setStatus(providerLabel + ' ready', 'connected');
+        } catch (e) {
+          this.removeTypingIndicator();
+          await this.loadHistory({ recoverFinal: true, startedAt: sendStartedAt }).catch(() => {});
+          this.appendSystem(providerLabel + ' send failed: ' + e.message);
+          this.setStatus(providerLabel + ' error', 'disconnected');
+        }
+        return;
+      }
+
       const sendSessionKey = this.sessionKey;
       rpc('chat.send', params).then(res => {
         if (res.ok && res.payload?.runId) {
@@ -1227,6 +1274,23 @@
           await this.loadHistory({ recoverFinal: true }).catch(() => {});
           this.appendSystem('Stop sent');
           this.setStatus('Claude Code stopping...', 'connecting');
+          return;
+        }
+        if (this.isOpenCodeSelected() || this.isAntigravitySelected()) {
+          const isOpenCode = this.isOpenCodeSelected();
+          const providerPath = isOpenCode ? 'opencode' : 'antigravity';
+          const providerLabel = isOpenCode ? 'OpenCode' : 'Antigravity';
+          const resp = await fetch('/api/' + providerPath + '/interrupt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agentId: this.getSelectedAgentId() || this.selectedAgentKey })
+          });
+          const data = await resp.json().catch(() => ({}));
+          if (!resp.ok || data.ok === false) throw new Error(data.error || resp.statusText);
+          this.removeTypingIndicator();
+          await this.loadHistory({ recoverFinal: true }).catch(() => {});
+          this.appendSystem('Stop sent');
+          this.setStatus(providerLabel + ' stopping...', 'connecting');
           return;
         }
         if (this.streamingMsg) {
@@ -2797,7 +2861,7 @@
     if (shouldOpen) {
       panel.dataset.hiddenByUser = 'false';
       windowInstance?.scrollBottom();
-      if (connected || windowInstance?.isHermesSelected?.() || windowInstance?.isCodexSelected?.()) {
+      if (connected || windowInstance?.isProviderAgentSelected?.()) {
         windowInstance?.loadHistory();
         windowInstance?.fetchSessionInfo();
       }
@@ -2848,7 +2912,7 @@
     _modelBarInterval = setInterval(() => {
       if (!connected) return;
       chatWindows.forEach(w => {
-        if (w.isHermesSelected?.() || w.isCodexSelected?.()) w.fetchSessionInfo();
+        if (w.isProviderAgentSelected?.()) w.fetchSessionInfo();
         else w.fetchContextUsage();
       });
     }, 60000);
@@ -3681,7 +3745,7 @@
     if (shouldOpen) {
       primaryWindow.input.focus();
       primaryWindow.scrollBottom();
-      if (connected || primaryWindow.isHermesSelected() || primaryWindow.isCodexSelected()) {
+      if (connected || primaryWindow.isProviderAgentSelected()) {
         primaryWindow.loadHistory();
         primaryWindow.fetchSessionInfo();
       }
