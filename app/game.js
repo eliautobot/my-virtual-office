@@ -7317,6 +7317,8 @@ function _providerKindDisplay(providerKind) {
     if (kind === 'hermes') return 'Hermes';
     if (kind === 'codex') return 'Codex CLI';
     if (kind === 'claude-code') return 'Claude Code';
+    if (kind === 'opencode') return 'OpenCode';
+    if (kind === 'antigravity') return 'Antigravity';
     return 'OpenClaw';
 }
 
@@ -13932,6 +13934,13 @@ function _acpAgentPlatformDefaults(platformId) {
             prompt: 'You are a Claude Code-backed Virtual Office agent. Help with software tasks, use tools carefully, and explain results clearly.'
         };
     }
+    if (platformId === 'opencode') {
+        return {
+            role: 'OpenCode Agent',
+            emoji: '⚡',
+            prompt: 'You are an OpenCode-backed Virtual Office agent. Help with software tasks, keep changes scoped, and explain results clearly.'
+        };
+    }
     return {
         role: 'AI assistant',
         emoji: '🤖',
@@ -14001,7 +14010,7 @@ function _acpShowCreateAgentDialog(platforms) {
             if (!prompt.value.trim() || prompt.value === lastDefaults.prompt) prompt.value = next.prompt;
             note.textContent = p.description || '';
             if (codexOptions) {
-                codexOptions.hidden = !(p.id === 'codex' || p.id === 'claude-code');
+                codexOptions.hidden = !(p.id === 'codex' || p.id === 'claude-code' || p.id === 'opencode');
                 updateCodexDirectoryControls();
             }
             lastDefaults = next;
@@ -14015,12 +14024,12 @@ function _acpShowCreateAgentDialog(platforms) {
             var note = modal.querySelector('.agent-create-codex-note');
             var label = modal.querySelector('.agent-create-native-label');
             if (!codexBox || !mode || !custom || !note) return;
-            var isHarness = p.id === 'codex' || p.id === 'claude-code';
+            var isHarness = p.id === 'codex' || p.id === 'claude-code' || p.id === 'opencode';
             codexBox.hidden = !isHarness;
             if (!isHarness) return;
-            var providerData = p.id === 'claude-code' ? (p.claudeCode || {}) : (p.codex || {});
-            var providerName = p.id === 'claude-code' ? 'Claude Code' : 'Codex';
-            var nativeDir = providerData.nativeAgentsDir || (p.id === 'claude-code' ? '$CLAUDE_CONFIG_DIR/agents' : '$CODEX_HOME/agents');
+            var providerData = p.id === 'claude-code' ? (p.claudeCode || {}) : (p.id === 'opencode' ? (p.openCode || {}) : (p.codex || {}));
+            var providerName = p.id === 'claude-code' ? 'Claude Code' : (p.id === 'opencode' ? 'OpenCode' : 'Codex');
+            var nativeDir = providerData.nativeAgentsDir || (p.id === 'claude-code' ? '$CLAUDE_CONFIG_DIR/agents' : (p.id === 'opencode' ? '$OPENCODE_CONFIG_DIR/agents' : '$CODEX_HOME/agents'));
             var workspaceRoot = providerData.workspaceRoot || '';
             if (label) label.textContent = providerName + ' Location';
             custom.hidden = mode.value !== 'custom';
@@ -14062,8 +14071,8 @@ function _acpShowCreateAgentDialog(platforms) {
                 return;
             }
             var p = selectedPlatform();
-            if ((p.id === 'codex' || p.id === 'claude-code') && codexCreationMode === 'custom' && !codexCustomDirectory) {
-                error.textContent = 'Custom parent directory is required for custom ' + (p.id === 'claude-code' ? 'Claude Code' : 'Codex') + ' creation.';
+            if ((p.id === 'codex' || p.id === 'claude-code' || p.id === 'opencode') && codexCreationMode === 'custom' && !codexCustomDirectory) {
+                error.textContent = 'Custom parent directory is required for custom ' + (p.id === 'claude-code' ? 'Claude Code' : (p.id === 'opencode' ? 'OpenCode' : 'Codex')) + ' creation.';
                 modal.querySelector('input[name="codexCustomDirectory"]').focus();
                 return;
             }
@@ -14074,8 +14083,8 @@ function _acpShowCreateAgentDialog(platforms) {
                 agentRole: role || fallback.role,
                 agentEmoji: emoji || fallback.emoji,
                 agentPrompt: prompt || role || fallback.prompt,
-                codexCreationMode: (p.id === 'codex' || p.id === 'claude-code') ? codexCreationMode : '',
-                codexCustomDirectory: (p.id === 'codex' || p.id === 'claude-code') ? codexCustomDirectory : ''
+                codexCreationMode: (p.id === 'codex' || p.id === 'claude-code' || p.id === 'opencode') ? codexCreationMode : '',
+                codexCustomDirectory: (p.id === 'codex' || p.id === 'claude-code' || p.id === 'opencode') ? codexCustomDirectory : ''
             });
         });
         document.addEventListener('keydown', onKeyDown);
@@ -14114,6 +14123,9 @@ function _acpCreateNewAgent() {
         } else if (selectedPlatform.id === 'claude-code') {
             createPayload.claudeCodeCreationMode = form.codexCreationMode || 'standard';
             createPayload.claudeCodeCustomDirectory = form.codexCustomDirectory || '';
+        } else if (selectedPlatform.id === 'opencode') {
+            createPayload.openCodeCreationMode = form.codexCreationMode || 'standard';
+            createPayload.openCodeCustomDirectory = form.codexCustomDirectory || '';
         }
 
         _acpShowToast('Creating agent in ' + selectedPlatform.label + '...');
@@ -14179,7 +14191,9 @@ function _acpDeleteAgent(agentId) {
     var providerKind = (agentCfg && agentCfg.providerKind)
         || (agentId.indexOf('hermes-') === 0 ? 'hermes'
         : (agentId.indexOf('codex-') === 0 ? 'codex'
-        : (agentId.indexOf('claude-code-') === 0 ? 'claude-code' : 'openclaw')));
+        : (agentId.indexOf('claude-code-') === 0 ? 'claude-code'
+        : (agentId.indexOf('opencode-') === 0 ? 'opencode'
+        : (agentId.indexOf('antigravity-') === 0 ? 'antigravity' : 'openclaw')))));
     if (!confirm('Delete agent "' + agentName + '"?\n\nThis will permanently remove the agent from ' + providerKind + ', including its workspace/profile files, memory, and session history.\n\nThis cannot be undone.')) return;
 
     // Call server to delete from the backing agent platform.
