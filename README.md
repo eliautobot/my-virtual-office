@@ -46,17 +46,19 @@ For Docker deployments, install Claude Code inside the container image or set `V
 
 ### OpenCode
 
-Virtual Office can create OpenCode-backed office agents when the OpenCode CLI is installed and `VO_OPENCODE_ENABLED=1`. Chat uses OpenCode's native session resume capabilities, executing runs via the `opencode run` CLI interface with provider subprocesses launched from a minimal environment.
+Virtual Office can create OpenCode-backed office agents when the OpenCode CLI is installed and `VO_OPENCODE_ENABLED=1`. Chat uses OpenCode's documented `opencode run --format json` CLI surface, so Virtual Office can stream text events into chat, surface tool activity, detect permission/approval events, pass uploaded files with `--file`, resume with `--session` or `--continue`, and export prior native sessions with `opencode export`.
 
-Discovery includes Virtual Office-created OpenCode agents, markdown agents parsed from the OpenCode config directory, and a synthesized `Main` entry for the default workspace. Newly created agents write managed workspace metadata and OpenCode markdown agent files.
+Discovery includes Virtual Office-created OpenCode agents, markdown agents parsed from `$OPENCODE_CONFIG_DIR/agents`, project-local `.opencode/agents`, and a synthesized `Main` entry for the default workspace. Newly created standard agents write managed workspace metadata plus OpenCode markdown agent files with `mode: primary`; custom-directory agents write a project-local OpenCode agent file and a Virtual Office registry entry.
 
-For Docker deployments, install OpenCode inside the container or point to its binary. Useful variables: `VO_OPENCODE_ENABLED`, `VO_OPENCODE_BIN`, `VO_OPENCODE_CONFIG_DIR`, `VO_OPENCODE_WORKSPACE_ROOT`, `VO_OPENCODE_MAIN_WORKSPACE`, `VO_OPENCODE_MODEL`, `VO_OPENCODE_TIMEOUT_SEC`, and `VO_OPENCODE_ENV_ALLOWLIST`.
+Approval support follows the available CLI contract: Virtual Office queues the approval card and, if approved, reruns that turn once with OpenCode `--auto`. Provider subprocesses run with a minimal environment; only a small safe default set plus keys listed in `VO_OPENCODE_ENV_ALLOWLIST` are passed through.
+
+For Docker deployments, install OpenCode inside the container or point to its binary. Useful variables: `VO_OPENCODE_ENABLED`, `VO_OPENCODE_BIN`, `VO_OPENCODE_CONFIG_DIR`, `VO_OPENCODE_WORKSPACE_ROOT`, `VO_OPENCODE_MAIN_WORKSPACE`, `VO_OPENCODE_MODEL`, `VO_OPENCODE_TIMEOUT_SEC`, `VO_OPENCODE_INCLUDE_MAIN`, `VO_OPENCODE_INCLUDE_AGENTS`, `VO_OPENCODE_REGISTER_AGENTS`, and `VO_OPENCODE_ENV_ALLOWLIST`.
 
 ### Antigravity (agy)
 
-Virtual Office integrates with Antigravity (agy) for static analysis, quick reviews, and prompt-driven agent tasks when `VO_ANTIGRAVITY_ENABLED=1`. Antigravity uses a one-shot CLI execution mode (`agy --print`) which is stateless and does not maintain active chat session persistence.
+Virtual Office integrates with Antigravity (agy) for static analysis, quick reviews, and prompt-driven agent tasks when `VO_ANTIGRAVITY_ENABLED=1`. Antigravity uses the documented one-shot CLI execution mode (`agy --print`), with optional `--model`, `--sandbox`, and `--print-timeout`. Virtual Office streams stdout lines into chat and stores local office history for the Antigravity agent.
 
-Discovery exposes a single Antigravity office agent when `agy` is available. Virtual Office stores local chat history for that agent, but does not claim native session list/delete support.
+Discovery exposes a single Antigravity office agent when `agy` is available. Because this CLI surface is stateless, Virtual Office does not claim native Antigravity session list/delete, provider-native tools, or provider-native approval response support. Uploaded file paths are included in the prompt text for context; OpenCode-style native file parts are only used where the provider CLI documents a file flag.
 
 For Docker deployments, provide the agy executable. Useful variables: `VO_ANTIGRAVITY_ENABLED`, `VO_ANTIGRAVITY_BIN`, `VO_ANTIGRAVITY_WORKSPACE_ROOT`, `VO_ANTIGRAVITY_TIMEOUT_SEC`, `VO_ANTIGRAVITY_PRINT_TIMEOUT`, `VO_ANTIGRAVITY_MODEL`, `VO_ANTIGRAVITY_SANDBOX`, and `VO_ANTIGRAVITY_ENV_ALLOWLIST`.
 
@@ -166,7 +168,7 @@ That means the same image tag works on standard x86_64 machines and ARM64 device
 ### First Run
 
 1. Open `http://localhost:8090/setup`
-2. Follow the setup wizard to connect your OpenClaw instance, Hermes Agents, or both
+2. Follow the setup wizard to connect OpenClaw, Hermes Agents, Codex, Claude Code, OpenCode, Antigravity, or the providers you use
 3. Enter a license key or skip for demo mode
 4. Customize your office, add agents, and watch them come to life
 

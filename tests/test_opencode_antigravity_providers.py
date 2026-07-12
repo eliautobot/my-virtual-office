@@ -46,6 +46,8 @@ interesting = [
     "ALLOWED_TEST_KEY",
 ]
 print(json.dumps({
+    "type": "message",
+    "text": "__LABEL__ fake reply",
     "argv": sys.argv[1:],
     "cwd": os.getcwd(),
     "env": {k: os.environ[k] for k in interesting if k in os.environ},
@@ -115,9 +117,10 @@ def main():
             )
             check("OpenCode resolves PATH binary", opencode.binary == str(opencode_bin), opencode.binary)
             result = opencode.send_chat_message("reviewer", "hello", session_id="session-123", timeout_sec=5)
-            payload = json.loads(result.get("reply") or "{}")
+            payload = (result.get("rawEvents") or [{}])[-1]
             check("OpenCode run succeeds with fake CLI", result.get("ok"), str(result))
-            check("OpenCode command uses run", payload.get("argv", [])[:2] == ["run", "--agent"], str(payload))
+            check("OpenCode command requests JSON event format", payload.get("argv", [])[:3] == ["run", "--format", "json"], str(payload))
+            check("OpenCode parsed JSON events", result.get("jsonEvents"), str(result))
             check("OpenCode command passes agent", "reviewer" in payload.get("argv", []), str(payload))
             check("OpenCode command passes session", "--session" in payload.get("argv", []) and "session-123" in payload.get("argv", []), str(payload))
             check("OpenCode command passes model", "--model" in payload.get("argv", []) and "test-model" in payload.get("argv", []), str(payload))
@@ -126,6 +129,16 @@ def main():
             check("OpenCode subprocess does not receive API key", "OPENAI_API_KEY" not in payload.get("env", {}), str(payload))
             check("OpenCode subprocess does not receive proxy", "HTTP_PROXY" not in payload.get("env", {}), str(payload))
             check("OpenCode subprocess receives allowlisted env", payload.get("env", {}).get("ALLOWED_TEST_KEY") == "allowed", str(payload))
+
+            attached = root / "uploads" / "sample.txt"
+            attached.parent.mkdir(exist_ok=True)
+            attached.write_text("sample", encoding="utf-8")
+            file_result = opencode.send_chat_message("reviewer", "read attachment", timeout_sec=5, files=[str(attached)])
+            file_payload = (file_result.get("rawEvents") or [{}])[-1]
+            check("OpenCode command passes native file attachment", "--file" in file_payload.get("argv", []) and str(attached) in file_payload.get("argv", []), str(file_payload))
+            auto_result = opencode.send_chat_message("reviewer", "approved rerun", timeout_sec=5, auto_approve=True)
+            auto_payload = (auto_result.get("rawEvents") or [{}])[-1]
+            check("OpenCode command can rerun once with auto approval", "--auto" in auto_payload.get("argv", []), str(auto_payload))
 
             rejected = opencode.create_agent(
                 name="Nested",

@@ -114,7 +114,7 @@
         <!-- Step 2: Connect Agent Providers -->
         <div class="step" id="step-2">
             <div class="step-title">2. CONNECT AGENT PROVIDERS</div>
-            <div class="step-desc">Tell the Virtual Office where your agent runtimes live. OpenClaw, Hermes, Codex, and Claude Code agents can appear together in the same office.</div>
+            <div class="step-desc">Tell the Virtual Office where your agent runtimes live. OpenClaw, Hermes, Codex, Claude Code, OpenCode, and Antigravity agents can appear together in the same office.</div>
 
             <label>OpenClaw Home Directory</label>
             <input type="text" id="s-ocpath" value="" placeholder="/home/youruser/.openclaw">
@@ -288,6 +288,65 @@
                     </label>
                     <button onclick="testClaudeCodeConnection()" style="margin:0 0 12px;padding:8px 16px;font-size:9px;">🔍 TEST CLAUDE CODE</button>
                     <div id="claude-test-status"></div>
+                </div>
+            </div>
+
+            <div style="border-top:1px solid #333;padding-top:16px;margin-top:18px;">
+                <div style="font-size:13px;color:#ffd700;font-weight:bold;margin-bottom:8px;">⚡ OpenCode Agents</div>
+                <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+                    <input type="checkbox" id="s-opencode-enable"> Auto-detect OpenCode Agents
+                </label>
+                <div style="font-size:13px;color:#999;margin:6px 0 10px;line-height:1.5;">
+                    Virtual Office can chat through OpenCode JSON events, attach files, export sessions, and discover native markdown agents.
+                </div>
+                <div id="opencode-fields" style="display:none;margin-top:10px;">
+                    <label>OpenCode Config Directory</label>
+                    <input type="text" id="s-opencode-home" placeholder="/home/youruser/.config/opencode">
+                    <label>OpenCode CLI Path</label>
+                    <input type="text" id="s-opencode-bin" placeholder="opencode or /home/youruser/.local/bin/opencode">
+                    <label>OpenCode Workspace Root</label>
+                    <input type="text" id="s-opencode-workspace" placeholder="/data/opencode-agents">
+                    <label>OpenCode Main Workspace</label>
+                    <input type="text" id="s-opencode-main-workspace" placeholder="/data/opencode-main">
+                    <label>Default Model <span style="color:#666;font-size:12px">(optional)</span></label>
+                    <input type="text" id="s-opencode-model" placeholder="provider/model or blank">
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+                        <input type="checkbox" id="s-opencode-main" checked> Show OpenCode Main agent
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+                        <input type="checkbox" id="s-opencode-agents" checked> Discover native OpenCode agents
+                    </label>
+                    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+                        <input type="checkbox" id="s-opencode-register" checked> Register new standard agents in native OpenCode
+                    </label>
+                    <button onclick="testOpenCodeConnection()" style="margin:0 0 12px;padding:8px 16px;font-size:9px;">🔍 TEST OPENCODE</button>
+                    <div id="opencode-test-status"></div>
+                </div>
+            </div>
+
+            <div style="border-top:1px solid #333;padding-top:16px;margin-top:18px;">
+                <div style="font-size:13px;color:#ffd700;font-weight:bold;margin-bottom:8px;">△ Antigravity Agent</div>
+                <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+                    <input type="checkbox" id="s-antigravity-enable"> Enable Antigravity agent
+                </label>
+                <div style="font-size:13px;color:#999;margin:6px 0 10px;line-height:1.5;">
+                    Virtual Office can chat with Antigravity through the documented agy print CLI and keep local office history.
+                </div>
+                <div id="antigravity-fields" style="display:none;margin-top:10px;">
+                    <label>Antigravity Home Directory</label>
+                    <input type="text" id="s-antigravity-home" placeholder="/home/youruser/.gemini/antigravity-cli">
+                    <label>agy CLI Path</label>
+                    <input type="text" id="s-antigravity-bin" placeholder="agy or /home/youruser/.local/bin/agy">
+                    <label>Antigravity Workspace Root</label>
+                    <input type="text" id="s-antigravity-workspace" placeholder="/data/antigravity-workspace">
+                    <label>Default Model <span style="color:#666;font-size:12px">(optional)</span></label>
+                    <input type="text" id="s-antigravity-model" placeholder="optional">
+                    <label>Sandbox <span style="color:#666;font-size:12px">(optional)</span></label>
+                    <input type="text" id="s-antigravity-sandbox" placeholder="optional, e.g. read-only">
+                    <label>Print Timeout</label>
+                    <input type="text" id="s-antigravity-print-timeout" placeholder="5m">
+                    <button onclick="testAntigravityConnection()" style="margin:0 0 12px;padding:8px 16px;font-size:9px;">🔍 TEST ANTIGRAVITY</button>
+                    <div id="antigravity-test-status"></div>
                 </div>
             </div>
 
@@ -544,6 +603,16 @@
             document.getElementById('claude-fields').style.display = this.checked ? 'block' : 'none';
         });
 
+        // OpenCode enable toggle
+        document.getElementById('s-opencode-enable').addEventListener('change', function() {
+            document.getElementById('opencode-fields').style.display = this.checked ? 'block' : 'none';
+        });
+
+        // Antigravity enable toggle
+        document.getElementById('s-antigravity-enable').addEventListener('change', function() {
+            document.getElementById('antigravity-fields').style.display = this.checked ? 'block' : 'none';
+        });
+
         // Pre-populate provider fields from current config
         fetch('/vo-config').then(function(r) { return r.json(); }).then(function(cfg) {
             var h = cfg.hermes || {};
@@ -618,6 +687,46 @@
             if (clMain) clMain.checked = cl.includeMain !== false;
             if (clNative) clNative.checked = cl.includeNativeAgents !== false;
             if (clRegister) clRegister.checked = cl.registerNativeAgents !== false;
+
+            var oc = cfg.openCode || cfg.opencode || {};
+            var ocEnable = document.getElementById('s-opencode-enable');
+            var ocFields = document.getElementById('opencode-fields');
+            if (ocEnable) ocEnable.checked = !!oc.enabled;
+            if (ocFields && ocEnable) ocFields.style.display = ocEnable.checked ? 'block' : 'none';
+            var ocHome = document.getElementById('s-opencode-home');
+            var ocBin = document.getElementById('s-opencode-bin');
+            var ocWorkspace = document.getElementById('s-opencode-workspace');
+            var ocMainWorkspace = document.getElementById('s-opencode-main-workspace');
+            var ocModel = document.getElementById('s-opencode-model');
+            var ocMain = document.getElementById('s-opencode-main');
+            var ocAgents = document.getElementById('s-opencode-agents');
+            var ocRegister = document.getElementById('s-opencode-register');
+            if (ocHome && oc.homePath) ocHome.value = oc.homePath;
+            if (ocBin && oc.binary) ocBin.value = oc.binary;
+            if (ocWorkspace && oc.workspaceRoot) ocWorkspace.value = oc.workspaceRoot;
+            if (ocMainWorkspace && oc.mainWorkspace) ocMainWorkspace.value = oc.mainWorkspace;
+            if (ocModel && oc.model) ocModel.value = oc.model;
+            if (ocMain) ocMain.checked = oc.includeMain !== false;
+            if (ocAgents) ocAgents.checked = oc.includeAgents !== false;
+            if (ocRegister) ocRegister.checked = oc.registerAgents !== false;
+
+            var ag = cfg.antigravity || {};
+            var agEnable = document.getElementById('s-antigravity-enable');
+            var agFields = document.getElementById('antigravity-fields');
+            if (agEnable) agEnable.checked = !!ag.enabled;
+            if (agFields && agEnable) agFields.style.display = agEnable.checked ? 'block' : 'none';
+            var agHome = document.getElementById('s-antigravity-home');
+            var agBin = document.getElementById('s-antigravity-bin');
+            var agWorkspace = document.getElementById('s-antigravity-workspace');
+            var agModel = document.getElementById('s-antigravity-model');
+            var agSandbox = document.getElementById('s-antigravity-sandbox');
+            var agPrintTimeout = document.getElementById('s-antigravity-print-timeout');
+            if (agHome && ag.homePath) agHome.value = ag.homePath;
+            if (agBin && ag.binary) agBin.value = ag.binary;
+            if (agWorkspace && ag.workspaceRoot) agWorkspace.value = ag.workspaceRoot;
+            if (agModel && ag.model) agModel.value = ag.model;
+            if (agSandbox && ag.sandbox) agSandbox.value = ag.sandbox;
+            if (agPrintTimeout) agPrintTimeout.value = ag.printTimeout || '5m';
         }).catch(function(){});
 
         function testPcMetrics() {
@@ -807,6 +916,32 @@
             };
         }
 
+        function openCodePayloadFromSetup() {
+            return {
+                enabled: document.getElementById('s-opencode-enable').checked,
+                homePath: document.getElementById('s-opencode-home').value.trim() || null,
+                binary: document.getElementById('s-opencode-bin').value.trim() || null,
+                workspaceRoot: document.getElementById('s-opencode-workspace').value.trim() || null,
+                mainWorkspace: document.getElementById('s-opencode-main-workspace').value.trim() || null,
+                model: document.getElementById('s-opencode-model').value.trim() || '',
+                includeMain: document.getElementById('s-opencode-main').checked,
+                includeAgents: document.getElementById('s-opencode-agents').checked,
+                registerAgents: document.getElementById('s-opencode-register').checked
+            };
+        }
+
+        function antigravityPayloadFromSetup() {
+            return {
+                enabled: document.getElementById('s-antigravity-enable').checked,
+                homePath: document.getElementById('s-antigravity-home').value.trim() || null,
+                binary: document.getElementById('s-antigravity-bin').value.trim() || null,
+                workspaceRoot: document.getElementById('s-antigravity-workspace').value.trim() || null,
+                model: document.getElementById('s-antigravity-model').value.trim() || '',
+                sandbox: document.getElementById('s-antigravity-sandbox').value.trim() || '',
+                printTimeout: document.getElementById('s-antigravity-print-timeout').value.trim() || '5m'
+            };
+        }
+
         function testCodexConnection() {
             var payload = codexPayloadFromSetup();
             var statusEl = document.getElementById('codex-test-status');
@@ -877,6 +1012,82 @@
                     statusEl.innerHTML = html;
                 } else {
                     statusEl.innerHTML = '<div class="status-box error">❌ Claude Code not reachable: ' + escapeHtml(d.error || 'unknown error') + '</div>';
+                }
+            }).catch(function(e) {
+                statusEl.innerHTML = '<div class="status-box error">Error: ' + escapeHtml(e.message) + '</div>';
+            });
+        }
+
+        function testOpenCodeConnection() {
+            var payload = openCodePayloadFromSetup();
+            var statusEl = document.getElementById('opencode-test-status');
+            if (!payload.enabled) {
+                statusEl.innerHTML = '<div class="status-box info">OpenCode auto-detect is disabled.</div>';
+                return;
+            }
+            statusEl.innerHTML = '<div class="status-box info">Saving and testing OpenCode...</div>';
+            fetch('/setup/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ openCode: payload })
+            }).then(function() {
+                return fetch('/api/opencode/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            }).then(function(r) { return r.json(); }).then(function(d) {
+                if (d.ok) {
+                    var agents = d.agents || [];
+                    var html = '<div class="status-box success">✅ OpenCode connected — found ' + agents.length + ' agent' + (agents.length === 1 ? '' : 's') + '</div>';
+                    if (agents.length) {
+                        html += '<div class="agent-list-preview">';
+                        agents.slice(0, 10).forEach(function(a) {
+                            html += '<div class="agent-row"><span class="emoji">' + escapeHtml(a.emoji || '⚡') + '</span><span class="name">' + escapeHtml(a.name) + '</span><span class="role">' + escapeHtml(a.model || a.providerAgentId || 'OpenCode') + '</span></div>';
+                        });
+                        html += '</div>';
+                    }
+                    statusEl.innerHTML = html;
+                } else {
+                    statusEl.innerHTML = '<div class="status-box error">❌ OpenCode not reachable: ' + escapeHtml(d.error || 'unknown error') + '</div>';
+                }
+            }).catch(function(e) {
+                statusEl.innerHTML = '<div class="status-box error">Error: ' + escapeHtml(e.message) + '</div>';
+            });
+        }
+
+        function testAntigravityConnection() {
+            var payload = antigravityPayloadFromSetup();
+            var statusEl = document.getElementById('antigravity-test-status');
+            if (!payload.enabled) {
+                statusEl.innerHTML = '<div class="status-box info">Antigravity is disabled.</div>';
+                return;
+            }
+            statusEl.innerHTML = '<div class="status-box info">Saving and testing Antigravity...</div>';
+            fetch('/setup/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ antigravity: payload })
+            }).then(function() {
+                return fetch('/api/antigravity/test', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+            }).then(function(r) { return r.json(); }).then(function(d) {
+                if (d.ok) {
+                    var agents = d.agents || [];
+                    var html = '<div class="status-box success">✅ Antigravity connected — found ' + agents.length + ' agent' + (agents.length === 1 ? '' : 's') + '</div>';
+                    if (agents.length) {
+                        html += '<div class="agent-list-preview">';
+                        agents.slice(0, 10).forEach(function(a) {
+                            html += '<div class="agent-row"><span class="emoji">' + escapeHtml(a.emoji || '△') + '</span><span class="name">' + escapeHtml(a.name) + '</span><span class="role">' + escapeHtml(a.model || a.providerAgentId || 'Antigravity') + '</span></div>';
+                        });
+                        html += '</div>';
+                    }
+                    statusEl.innerHTML = html;
+                } else {
+                    statusEl.innerHTML = '<div class="status-box error">❌ Antigravity not reachable: ' + escapeHtml(d.error || 'unknown error') + '</div>';
                 }
             }).catch(function(e) {
                 statusEl.innerHTML = '<div class="status-box error">Error: ' + escapeHtml(e.message) + '</div>';
@@ -1100,6 +1311,8 @@
                 })(),
                 codex: codexPayloadFromSetup(),
                 claudeCode: claudeCodePayloadFromSetup(),
+                openCode: openCodePayloadFromSetup(),
+                antigravity: antigravityPayloadFromSetup(),
                 _setupComplete: true
             };
 

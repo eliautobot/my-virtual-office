@@ -76,12 +76,16 @@
         <div class="tab" onclick="showTab(event,'hermes')">☤ Hermes Models</div>
         <div class="tab" onclick="showTab(event,'codex')">⌘ Codex CLI</div>
         <div class="tab" onclick="showTab(event,'claude-code')">◇ Claude Code</div>
+        <div class="tab" onclick="showTab(event,'opencode')">◆ OpenCode</div>
+        <div class="tab" onclick="showTab(event,'antigravity')">△ Antigravity</div>
         <div class="tab" onclick="showTab(event,'setup')">⚙️ Native Setup</div>
     </div>
     <div id="panel-openclaw" class="panel active"><div id="openclaw-models">Loading...</div></div>
     <div id="panel-hermes" class="panel"><div id="hermes-models">Loading...</div></div>
     <div id="panel-codex" class="panel"><div id="codex-models">Loading...</div></div>
     <div id="panel-claude-code" class="panel"><div id="claude-code-models">Loading...</div></div>
+    <div id="panel-opencode" class="panel"><div id="opencode-models">Loading...</div></div>
+    <div id="panel-antigravity" class="panel"><div id="antigravity-models">Loading...</div></div>
     <div id="panel-setup" class="panel"><div id="native-setup">Loading...</div></div>
     <div id="mvw-confirm-overlay" class="mvw-confirm-overlay" hidden>
         <div class="mvw-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="mvw-confirm-title">
@@ -181,6 +185,8 @@ async function loadNativeModels(options = {}) {
     renderHermes();
     renderCodex();
     renderClaudeCode();
+    renderOpenCode();
+    renderAntigravity();
     renderSetup();
     if (pendingScrollRestore) {
         const state = pendingScrollRestore;
@@ -592,6 +598,57 @@ function renderClaudeCode() {
     </div>`;
 }
 
+function renderOpenCode() {
+    const root = document.getElementById('opencode-models');
+    const openCode = nativeData.openCode || {};
+    root.innerHTML = `<div class="grid">
+        <div class="card wide"><div class="provider-name">OpenCode Agent Integration</div>
+            <p class="muted">Virtual Office discovers OpenCode markdown agents, creates OpenCode-backed office agents, streams <code>opencode run --format json</code>, passes uploaded files with <code>--file</code>, and imports sessions with <code>opencode export</code>.</p>
+            <label class="checkbox-row"><input id="setup-opencode-enabled" type="checkbox" ${openCode.enabled ? 'checked' : ''}> Enable OpenCode agents</label>
+            <label class="checkbox-row"><input id="setup-opencode-main" type="checkbox" ${openCode.includeMain !== false ? 'checked' : ''}> Show OpenCode Main agent</label>
+            <label class="checkbox-row"><input id="setup-opencode-agents" type="checkbox" ${openCode.includeAgents !== false ? 'checked' : ''}> Discover native <code>$OPENCODE_CONFIG_DIR/agents</code></label>
+            <label class="checkbox-row"><input id="setup-opencode-register" type="checkbox" ${openCode.registerAgents !== false ? 'checked' : ''}> Register new standard agents in native OpenCode</label>
+            <div class="row"><label>Config Dir</label><input id="setup-opencode-home" value="${esc(openCode.homePath || '')}" placeholder="~/.config/opencode"></div>
+            <div class="row"><label>OpenCode CLI</label><input id="setup-opencode-bin" value="${esc(openCode.binary || '')}" placeholder="opencode or /path/to/opencode"></div>
+            <div class="row"><label>Workspace Root</label><input id="setup-opencode-workspace" value="${esc(openCode.workspaceRoot || '')}" placeholder="/data/opencode-agents"></div>
+            <div class="row"><label>Main Workspace</label><input id="setup-opencode-main-workspace" value="${esc(openCode.mainWorkspace || '')}" placeholder="/data/opencode-main"></div>
+            <div class="row"><label>Default Model</label><input id="setup-opencode-model" value="${esc(openCode.model || '')}" placeholder="provider/model or blank"></div>
+            <div class="provider-tools" style="justify-content:flex-start">
+                <button class="btn btn-green" onclick="saveOpenCodeSetup()">Save OpenCode Setup</button>
+                <button class="btn btn-blue" onclick="testOpenCodeSetup()">Test OpenCode</button>
+            </div>
+            <p id="setup-opencode-status" class="status-msg"></p>
+            <p><code>opencode auth login</code></p>
+            <p><code>opencode run --format json --file path</code></p>
+            <p><code>$OPENCODE_CONFIG_DIR/agents/*.md</code></p>
+        </div>
+    </div>`;
+}
+
+function renderAntigravity() {
+    const root = document.getElementById('antigravity-models');
+    const antigravity = nativeData.antigravity || {};
+    root.innerHTML = `<div class="grid">
+        <div class="card wide"><div class="provider-name">Antigravity Agent Integration</div>
+            <p class="muted">Virtual Office connects Antigravity through the documented <code>agy --print</code> one-shot CLI surface. Chat streams stdout and keeps local Virtual Office history; native sessions are not exposed unless the CLI adds a machine-readable session API.</p>
+            <label class="checkbox-row"><input id="setup-antigravity-enabled" type="checkbox" ${antigravity.enabled ? 'checked' : ''}> Enable Antigravity agent</label>
+            <div class="row"><label>Antigravity Home</label><input id="setup-antigravity-home" value="${esc(antigravity.homePath || '')}" placeholder="~/.gemini/antigravity-cli"></div>
+            <div class="row"><label>agy CLI</label><input id="setup-antigravity-bin" value="${esc(antigravity.binary || '')}" placeholder="agy or /path/to/agy"></div>
+            <div class="row"><label>Workspace Root</label><input id="setup-antigravity-workspace" value="${esc(antigravity.workspaceRoot || '')}" placeholder="/data/antigravity-workspace"></div>
+            <div class="row"><label>Default Model</label><input id="setup-antigravity-model" value="${esc(antigravity.model || '')}" placeholder="optional"></div>
+            <div class="row"><label>Sandbox</label><input id="setup-antigravity-sandbox" value="${esc(antigravity.sandbox || '')}" placeholder="optional, e.g. read-only"></div>
+            <div class="row"><label>Print Timeout</label><input id="setup-antigravity-print-timeout" value="${esc(antigravity.printTimeout || '5m')}" placeholder="5m"></div>
+            <div class="provider-tools" style="justify-content:flex-start">
+                <button class="btn btn-green" onclick="saveAntigravitySetup()">Save Antigravity Setup</button>
+                <button class="btn btn-blue" onclick="testAntigravitySetup()">Test Antigravity</button>
+            </div>
+            <p id="setup-antigravity-status" class="status-msg"></p>
+            <p><code>agy --print</code></p>
+            <p><code>agy --model ... --sandbox ... --print-timeout 5m</code></p>
+        </div>
+    </div>`;
+}
+
 function renderSetup() {
     const root = document.getElementById('native-setup');
     root.innerHTML = `<div class="grid">
@@ -632,6 +689,19 @@ function renderSetup() {
             <p><code>claude -p --output-format stream-json --include-partial-messages</code></p>
             <p><code>$CLAUDE_CONFIG_DIR/agents/*.md</code></p>
             <p>Configure it in the <code>Claude Code</code> tab.</p>
+        </div>
+        <div class="card"><div class="provider-name">OpenCode Agents</div>
+            <p class="muted">OpenCode has its own config dir, auth state, markdown agents, JSON event stream, file attachments, and exportable sessions.</p>
+            <p><code>opencode auth login</code></p>
+            <p><code>opencode run --format json --file path</code></p>
+            <p><code>$OPENCODE_CONFIG_DIR/agents/*.md</code></p>
+            <p>Configure it in the <code>OpenCode</code> tab.</p>
+        </div>
+        <div class="card"><div class="provider-name">Antigravity Agent</div>
+            <p class="muted">Antigravity is wired through print mode, with local Virtual Office history around its one-shot CLI surface.</p>
+            <p><code>agy --print</code></p>
+            <p><code>agy --model ... --sandbox ... --print-timeout 5m</code></p>
+            <p>Configure it in the <code>Antigravity</code> tab.</p>
         </div>
         <div class="card wide"><div class="provider-name">OAuth Note</div>
             <p class="muted">API keys and local/custom providers can be completed inside Virtual Office. OAuth needs an interactive browser/device callback; the next step is wiring a guided callback window so users never touch terminal.</p>
@@ -706,6 +776,32 @@ function claudeCodeSetupPayload() {
     };
 }
 
+function openCodeSetupPayload() {
+    return {
+        enabled: !!document.getElementById('setup-opencode-enabled')?.checked,
+        homePath: val('setup-opencode-home') || null,
+        binary: val('setup-opencode-bin') || null,
+        workspaceRoot: val('setup-opencode-workspace') || null,
+        mainWorkspace: val('setup-opencode-main-workspace') || null,
+        model: val('setup-opencode-model') || '',
+        includeMain: !!document.getElementById('setup-opencode-main')?.checked,
+        includeAgents: !!document.getElementById('setup-opencode-agents')?.checked,
+        registerAgents: !!document.getElementById('setup-opencode-register')?.checked
+    };
+}
+
+function antigravitySetupPayload() {
+    return {
+        enabled: !!document.getElementById('setup-antigravity-enabled')?.checked,
+        homePath: val('setup-antigravity-home') || null,
+        binary: val('setup-antigravity-bin') || null,
+        workspaceRoot: val('setup-antigravity-workspace') || null,
+        model: val('setup-antigravity-model') || '',
+        sandbox: val('setup-antigravity-sandbox') || '',
+        printTimeout: val('setup-antigravity-print-timeout') || '5m'
+    };
+}
+
 async function saveCodexSetup() {
     const data = await postJson('/setup/save', { codex: codexSetupPayload() });
     setStatus('setup-codex-status', data, 'Codex setup saved');
@@ -747,6 +843,54 @@ async function testClaudeCodeSetup() {
     const text = data.ok
         ? 'Claude Code connected · found ' + ((data.agents || []).length) + ' agent' + (((data.agents || []).length) === 1 ? '' : 's')
         : (data.error || 'Claude Code test failed');
+    if (status) {
+        status.className = 'status-msg ' + (data.ok ? 'ok' : 'err');
+        status.textContent = text;
+    }
+    if (data.ok) refreshNativeSoon();
+}
+
+async function saveOpenCodeSetup() {
+    const data = await postJson('/setup/save', { openCode: openCodeSetupPayload() });
+    setStatus('setup-opencode-status', data, 'OpenCode setup saved');
+    if (data.ok) refreshNativeSoon();
+}
+
+async function testOpenCodeSetup() {
+    const status = document.getElementById('setup-opencode-status');
+    if (status) {
+        status.className = 'status-msg muted';
+        status.textContent = 'Testing OpenCode CLI...';
+    }
+    await postJson('/setup/save', { openCode: openCodeSetupPayload() });
+    const data = await postJson('/api/opencode/test', openCodeSetupPayload());
+    const text = data.ok
+        ? 'OpenCode connected · found ' + ((data.agents || []).length) + ' agent' + (((data.agents || []).length) === 1 ? '' : 's')
+        : (data.error || 'OpenCode test failed');
+    if (status) {
+        status.className = 'status-msg ' + (data.ok ? 'ok' : 'err');
+        status.textContent = text;
+    }
+    if (data.ok) refreshNativeSoon();
+}
+
+async function saveAntigravitySetup() {
+    const data = await postJson('/setup/save', { antigravity: antigravitySetupPayload() });
+    setStatus('setup-antigravity-status', data, 'Antigravity setup saved');
+    if (data.ok) refreshNativeSoon();
+}
+
+async function testAntigravitySetup() {
+    const status = document.getElementById('setup-antigravity-status');
+    if (status) {
+        status.className = 'status-msg muted';
+        status.textContent = 'Testing Antigravity CLI...';
+    }
+    await postJson('/setup/save', { antigravity: antigravitySetupPayload() });
+    const data = await postJson('/api/antigravity/test', antigravitySetupPayload());
+    const text = data.ok
+        ? 'Antigravity connected · ' + (data.version || 'agy')
+        : (data.error || 'Antigravity test failed');
     if (status) {
         status.className = 'status-msg ' + (data.ok ? 'ok' : 'err');
         status.textContent = text;
@@ -946,6 +1090,8 @@ function reloadNative(options = {}) {
         document.getElementById('hermes-models').textContent = 'Loading...';
         document.getElementById('codex-models').textContent = 'Loading...';
         document.getElementById('claude-code-models').textContent = 'Loading...';
+        document.getElementById('opencode-models').textContent = 'Loading...';
+        document.getElementById('antigravity-models').textContent = 'Loading...';
         document.getElementById('native-setup').textContent = 'Loading...';
     }
     loadNativeModels().catch(e => {
