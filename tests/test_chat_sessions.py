@@ -123,6 +123,9 @@ class FakeCodexProvider:
 class FakeOpenCodeProvider:
     def __init__(self):
         self.deleted = []
+        self.model = ""
+        self.last_files = []
+        self.last_auto_approve = False
 
     def list_sessions(self, profile, limit=40):
         return {"ok": True, "sessions": [
@@ -130,14 +133,32 @@ class FakeOpenCodeProvider:
             {"id": "opencode-session-0", "title": "OpenCode Older", "preview": "older", "updatedAt": "2026-07-06T15:00:00Z"},
         ][:limit], "profile": profile}
 
+    def export_session(self, profile, session_id):
+        return {"ok": True, "session": {"id": session_id, "messages": [
+            {"role": "user", "content": "hello opencode"},
+            {"role": "assistant", "content": "hi from opencode export"},
+            {"type": "tool", "name": "read", "content": "hidden"},
+        ]}}
+
     def delete_session(self, profile, session_id):
         self.deleted.append((profile, session_id))
         return {"ok": True, "deleted": True, "sessionId": session_id}
 
+    def send_chat_message(self, profile, message, session_id=None, timeout_sec=None, on_progress=None, files=None, auto_approve=False):
+        self.last_files = list(files or [])
+        self.last_auto_approve = bool(auto_approve)
+        tool = {"id": "read-file", "name": "read", "status": "running", "arguments": {"path": self.last_files[0] if self.last_files else ""}}
+        done_tool = {**tool, "status": "done", "result": "file read"}
+        approval = {"id": "approval-1", "approval_id": "approval-1", "title": "OpenCode approval required", "command": "read restricted path"}
+        if on_progress:
+            on_progress({"reply": "partial", "status": "streaming", "sessionId": "stream-session", "tools": [tool]})
+            on_progress({"reply": "partial done", "status": "approval", "sessionId": "stream-session", "tools": [done_tool], "approval": approval})
+        return {"ok": True, "reply": "partial done", "sessionId": "stream-session", "tools": [done_tool], "approval": approval, "providerPath": "opencode-cli"}
+
 
 def main():
     with tempfile.TemporaryDirectory(prefix="vo-chat-sessions-") as raw_tmp:
-        server, _data_dir, openclaw_dir, claude_home = load_server(Path(raw_tmp))
+        server, data_dir, openclaw_dir, claude_home = load_server(Path(raw_tmp))
         gateway_calls = []
 
         def fake_gateway(method, params=None, timeout=20):
@@ -227,8 +248,35 @@ def main():
         created, status = server.handle_chat_session_create("opencode-main")
         check("OpenCode create clears local active session", status == 200 and created.get("ok") and server._get_opencode_session_id("main") == "")
         switched, status = server.handle_chat_session_switch("opencode-main", "opencode-session-1")
-        check("OpenCode switch stores active session", status == 200 and switched.get("sessionId") == "opencode-session-1" and server._get_opencode_session_id("main") == "opencode-session-1")
-        deleted, status = server.handle_chat_session_delete("opencode-main", "opencode-session-1")
+        switched_messages = switched.get("messages") or []
+        check("OpenCode switch exports chat and tool activity", status == 200 and len(switched_messages) == 3 and any((m.get("tools") or []) for m in switched_messages) and switched.get("sessionId") == "opencode-session-1" and server._get_opencode_session_id("main") == "opencode-session-1")
+        uploads_dir = data_dir / "uploads"
+        uploads_dir.mkdir(exist_ok=True)
+        uploaded_file = uploads_dir / "uploaded.txt"
+        outside_file = data_dir / "outside.txt"
+        uploaded_file.write_text("uploaded", encoding="utf-8")
+        outside_file.write_text("outside", encoding="utf-8")
+        run = server._handle_opencode_run_start({
+            "agentId": "opencode-main",
+            "message": "stream it",
+            "attachments": [{"path": str(uploaded_file)}, {"path": str(outside_file)}],
+        })
+        meta = None
+        for _ in range(50):
+            meta = server._get_opencode_stream_run(run.get("runId"))
+            if meta and meta.get("done"):
+                break
+            time.sleep(0.02)
+        queued_events = []
+        if meta:
+            while not meta["events"].empty():
+                queued_events.append(meta["events"].get_nowait().get("event"))
+        pending = server._get_opencode_approval_pending("opencode-main")
+        cancelled = server._handle_opencode_approval_respond({"approval_id": "approval-1", "choice": "cancel"})
+        check("OpenCode run queues streaming events", run.get("ok") and {"run.started", "message.delta", "tool.started", "tool.completed", "approval.request", "run.completed"}.issubset(set(queued_events)), str(queued_events))
+        check("OpenCode run passes only uploaded attachment paths", fake_opencode.last_files == [str(uploaded_file)], str(fake_opencode.last_files))
+        check("OpenCode approval queue can be cancelled", pending.get("pending", {}).get("approval_id") == "approval-1" and cancelled.get("ok") and cancelled.get("choice") == "cancel", str(cancelled))
+        deleted, status = server.handle_chat_session_delete("opencode-main", "stream-session")
         check("OpenCode delete clears active session", status == 200 and deleted.get("deleted") and server._get_opencode_session_id("main") == "")
 
         antigravity_payload, antigravity_status = server.handle_chat_sessions_list("antigravity-main")

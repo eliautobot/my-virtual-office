@@ -12728,6 +12728,21 @@ function _mmLoadCurrentSettings() {
         var hermesPlatformEnable = document.getElementById('mm-hermes-platform-enable');
         var hermesPlatformToken = document.getElementById('mm-hermes-platform-token');
         var hermesPlatformAgent = document.getElementById('mm-hermes-platform-agent');
+        var opencodeCb = document.getElementById('mm-opencode-enable');
+        var opencodeFields = document.getElementById('mm-opencode-fields');
+        var opencodeHome = document.getElementById('mm-opencode-home');
+        var opencodeBin = document.getElementById('mm-opencode-bin');
+        var opencodeWorkspace = document.getElementById('mm-opencode-workspace');
+        var opencodeMainWorkspace = document.getElementById('mm-opencode-main-workspace');
+        var opencodeModel = document.getElementById('mm-opencode-model');
+        var antigravityCb = document.getElementById('mm-antigravity-enable');
+        var antigravityFields = document.getElementById('mm-antigravity-fields');
+        var antigravityHome = document.getElementById('mm-antigravity-home');
+        var antigravityBin = document.getElementById('mm-antigravity-bin');
+        var antigravityWorkspace = document.getElementById('mm-antigravity-workspace');
+        var antigravityModel = document.getElementById('mm-antigravity-model');
+        var antigravitySandbox = document.getElementById('mm-antigravity-sandbox');
+        var antigravityPrintTimeout = document.getElementById('mm-antigravity-print-timeout');
         if (gwInput) gwInput.value = (cfg.openclaw || {}).gatewayUrl || '';
         if (nameInput) nameInput.value = (cfg.office || {}).name || '';
         // Parse "City,State" or "City+Name,State" back into separate fields
@@ -12751,6 +12766,23 @@ function _mmLoadCurrentSettings() {
         if (hermesPlatformEnable) hermesPlatformEnable.checked = !!hermesCfg.platformEnabled;
         if (hermesPlatformToken && hermesCfg.platformTokenConfigured) hermesPlatformToken.placeholder = 'Configured - leave blank to keep';
         if (hermesPlatformAgent) hermesPlatformAgent.value = hermesCfg.platformAgentId || 'hermes-gateway';
+        var openCodeCfg = cfg.openCode || {};
+        if (opencodeCb) opencodeCb.checked = !!openCodeCfg.enabled;
+        if (opencodeFields) opencodeFields.style.display = openCodeCfg.enabled ? 'block' : 'none';
+        if (opencodeHome) opencodeHome.value = openCodeCfg.homePath || '';
+        if (opencodeBin) opencodeBin.value = openCodeCfg.binary || '';
+        if (opencodeWorkspace) opencodeWorkspace.value = openCodeCfg.workspaceRoot || '';
+        if (opencodeMainWorkspace) opencodeMainWorkspace.value = openCodeCfg.mainWorkspace || '';
+        if (opencodeModel) opencodeModel.value = openCodeCfg.model || '';
+        var antigravityCfg = cfg.antigravity || {};
+        if (antigravityCb) antigravityCb.checked = !!antigravityCfg.enabled;
+        if (antigravityFields) antigravityFields.style.display = antigravityCfg.enabled ? 'block' : 'none';
+        if (antigravityHome) antigravityHome.value = antigravityCfg.homePath || '';
+        if (antigravityBin) antigravityBin.value = antigravityCfg.binary || '';
+        if (antigravityWorkspace) antigravityWorkspace.value = antigravityCfg.workspaceRoot || '';
+        if (antigravityModel) antigravityModel.value = antigravityCfg.model || '';
+        if (antigravitySandbox) antigravitySandbox.value = antigravityCfg.sandbox || '';
+        if (antigravityPrintTimeout) antigravityPrintTimeout.value = antigravityCfg.printTimeout || '5m';
         // Auto-populate token from /gateway-info (shows current effective token)
         if (tokenInput) {
             fetch('/gateway-info').then(function(r) { return r.json(); }).then(function(gi) {
@@ -12821,6 +12853,24 @@ function _mmLoadCurrentSettings() {
     });
 })();
 
+// OpenCode toggle in settings
+(function() {
+    var _oCb = document.getElementById('mm-opencode-enable');
+    if (_oCb) _oCb.addEventListener('change', function() {
+        var f = document.getElementById('mm-opencode-fields');
+        if (f) f.style.display = this.checked ? 'block' : 'none';
+    });
+})();
+
+// Antigravity toggle in settings
+(function() {
+    var _aCb = document.getElementById('mm-antigravity-enable');
+    if (_aCb) _aCb.addEventListener('change', function() {
+        var f = document.getElementById('mm-antigravity-fields');
+        if (f) f.style.display = this.checked ? 'block' : 'none';
+    });
+})();
+
 function _mmHermesPayload() {
     var enabled = !!(document.getElementById('mm-hermes-enable') || {}).checked;
     var homePath = (document.getElementById('mm-hermes-home') || {}).value || '';
@@ -12837,6 +12887,34 @@ function _mmHermesPayload() {
     if (apiKey) hermesPayload.apiKey = apiKey;
     if (platformToken) hermesPayload.platformToken = platformToken;
     return { enabled: enabled, apiKey: apiKey, hermes: hermesPayload };
+}
+
+function _mmOpenCodePayload() {
+    var enabled = !!(document.getElementById('mm-opencode-enable') || {}).checked;
+    return {
+        enabled: enabled,
+        homePath: ((document.getElementById('mm-opencode-home') || {}).value || '').trim() || null,
+        binary: ((document.getElementById('mm-opencode-bin') || {}).value || '').trim() || null,
+        workspaceRoot: ((document.getElementById('mm-opencode-workspace') || {}).value || '').trim() || null,
+        mainWorkspace: ((document.getElementById('mm-opencode-main-workspace') || {}).value || '').trim() || null,
+        model: ((document.getElementById('mm-opencode-model') || {}).value || '').trim(),
+        includeMain: true,
+        includeAgents: true,
+        registerAgents: true
+    };
+}
+
+function _mmAntigravityPayload() {
+    var enabled = !!(document.getElementById('mm-antigravity-enable') || {}).checked;
+    return {
+        enabled: enabled,
+        homePath: ((document.getElementById('mm-antigravity-home') || {}).value || '').trim() || null,
+        binary: ((document.getElementById('mm-antigravity-bin') || {}).value || '').trim() || null,
+        workspaceRoot: ((document.getElementById('mm-antigravity-workspace') || {}).value || '').trim() || null,
+        model: ((document.getElementById('mm-antigravity-model') || {}).value || '').trim(),
+        sandbox: ((document.getElementById('mm-antigravity-sandbox') || {}).value || '').trim(),
+        printTimeout: ((document.getElementById('mm-antigravity-print-timeout') || {}).value || '').trim() || '5m'
+    };
 }
 
 function mmDiscoverHermesDesktop() {
@@ -12943,6 +13021,68 @@ function mmTestHermes() {
         }
     }).catch(function(e) {
         statusEl.innerHTML = '<div class="mm-status err">❌ Hermes test failed: ' + e.message + '</div>';
+    });
+}
+
+function mmTestOpenCode() {
+    var statusEl = document.getElementById('mm-opencode-status');
+    var payload = _mmOpenCodePayload();
+    if (!payload.enabled) {
+        statusEl.innerHTML = '<div class="mm-status info">OpenCode agents are disabled.</div>';
+        return;
+    }
+    statusEl.innerHTML = '<div class="mm-status info">Saving and testing OpenCode...</div>';
+    fetch('/setup/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ openCode: payload })
+    }).then(function() {
+        return fetch('/api/opencode/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+    }).then(function(r) { return r.json().then(function(d){ d._httpOk = r.ok; return d; }); }).then(function(d) {
+        var count = (d.agents || []).length;
+        if (d.ok) {
+            var names = (d.agents || []).slice(0, 5).map(function(a) {
+                return (a.emoji || '◆') + ' ' + escHtml(a.name || a.profile || 'OpenCode') + (a.model ? ' · ' + escHtml(a.model) : '');
+            }).join('<br>');
+            statusEl.innerHTML = '<div class="mm-status ok">✅ OpenCode connected — ' + count + ' office agent' + (count === 1 ? '' : 's') + (names ? '<br>' + names : '') + '</div>';
+        } else {
+            statusEl.innerHTML = '<div class="mm-status err">❌ OpenCode not reachable: ' + escHtml(d.error || 'unknown error') + '</div>';
+        }
+    }).catch(function(e) {
+        statusEl.innerHTML = '<div class="mm-status err">❌ OpenCode test failed: ' + escHtml(e.message || String(e)) + '</div>';
+    });
+}
+
+function mmTestAntigravity() {
+    var statusEl = document.getElementById('mm-antigravity-status');
+    var payload = _mmAntigravityPayload();
+    if (!payload.enabled) {
+        statusEl.innerHTML = '<div class="mm-status info">Antigravity agent is disabled.</div>';
+        return;
+    }
+    statusEl.innerHTML = '<div class="mm-status info">Saving and testing Antigravity...</div>';
+    fetch('/setup/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ antigravity: payload })
+    }).then(function() {
+        return fetch('/api/antigravity/test', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+    }).then(function(r) { return r.json().then(function(d){ d._httpOk = r.ok; return d; }); }).then(function(d) {
+        if (d.ok) {
+            statusEl.innerHTML = '<div class="mm-status ok">✅ Antigravity connected' + (d.version ? '<br>' + escHtml(d.version) : '') + '</div>';
+        } else {
+            statusEl.innerHTML = '<div class="mm-status err">❌ Antigravity not reachable: ' + escHtml(d.error || 'unknown error') + '</div>';
+        }
+    }).catch(function(e) {
+        statusEl.innerHTML = '<div class="mm-status err">❌ Antigravity test failed: ' + escHtml(e.message || String(e)) + '</div>';
     });
 }
 
@@ -13141,6 +13281,14 @@ function mmSaveSettings() {
         var hermesPlatformToken = (_hPlatformToken ? _hPlatformToken.value.trim() : '');
         if (hermesPlatformToken) hermesSettings.platformToken = hermesPlatformToken;
         config.hermes = hermesSettings;
+    }
+    var _oCb = document.getElementById('mm-opencode-enable');
+    if (_oCb) {
+        config.openCode = _mmOpenCodePayload();
+    }
+    var _aCb = document.getElementById('mm-antigravity-enable');
+    if (_aCb) {
+        config.antigravity = _mmAntigravityPayload();
     }
     config.office = { name: officeName || 'Virtual Office' };
     config.weather = { location: weather || null };

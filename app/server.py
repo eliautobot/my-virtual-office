@@ -3908,6 +3908,225 @@ def _save_antigravity_history(profile, messages):
     _save_antigravity_state(profile, state)
 
 
+def _provider_attachment_paths(attachments):
+    """Return local upload paths that are safe to pass to native provider CLIs."""
+    if not isinstance(attachments, list):
+        return []
+    upload_root = os.path.abspath(os.path.join(STATUS_DIR, "uploads"))
+    paths = []
+    seen = set()
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        raw_path = str(item.get("path") or "").strip()
+        if not raw_path:
+            continue
+        try:
+            real_path = os.path.abspath(os.path.expanduser(raw_path))
+            if os.path.commonpath([upload_root, real_path]) != upload_root:
+                continue
+            if not os.path.isfile(real_path) or real_path in seen:
+                continue
+        except (OSError, ValueError):
+            continue
+        paths.append(real_path)
+        seen.add(real_path)
+    return paths
+
+
+OPENCODE_STREAM_RUNS_LOCK = threading.Lock()
+OPENCODE_STREAM_RUNS = {}
+ANTIGRAVITY_STREAM_RUNS_LOCK = threading.Lock()
+ANTIGRAVITY_STREAM_RUNS = {}
+OPENCODE_APPROVALS_LOCK = threading.Lock()
+OPENCODE_APPROVALS = {}
+
+
+def _remember_stream_run(store, lock, meta):
+    if not isinstance(meta, dict) or not meta.get("runId"):
+        return
+    with lock:
+        store[str(meta["runId"])] = meta
+
+
+def _get_stream_run(store, lock, run_id):
+    with lock:
+        meta = store.get(str(run_id or ""))
+        return meta if isinstance(meta, dict) else None
+
+
+def _clear_stream_run(store, lock, run_id):
+    with lock:
+        store.pop(str(run_id or ""), None)
+
+
+def _remember_opencode_stream_run(meta):
+    _remember_stream_run(OPENCODE_STREAM_RUNS, OPENCODE_STREAM_RUNS_LOCK, meta)
+
+
+def _get_opencode_stream_run(run_id):
+    return _get_stream_run(OPENCODE_STREAM_RUNS, OPENCODE_STREAM_RUNS_LOCK, run_id)
+
+
+def _clear_opencode_stream_run(run_id):
+    _clear_stream_run(OPENCODE_STREAM_RUNS, OPENCODE_STREAM_RUNS_LOCK, run_id)
+
+
+def _remember_antigravity_stream_run(meta):
+    _remember_stream_run(ANTIGRAVITY_STREAM_RUNS, ANTIGRAVITY_STREAM_RUNS_LOCK, meta)
+
+
+def _get_antigravity_stream_run(run_id):
+    return _get_stream_run(ANTIGRAVITY_STREAM_RUNS, ANTIGRAVITY_STREAM_RUNS_LOCK, run_id)
+
+
+def _clear_antigravity_stream_run(run_id):
+    _clear_stream_run(ANTIGRAVITY_STREAM_RUNS, ANTIGRAVITY_STREAM_RUNS_LOCK, run_id)
+
+
+def _provider_stream_event_payload(provider_kind, run_id, agent, profile, run_state=None, **extra):
+    run_state = run_state if isinstance(run_state, dict) else {}
+    payload = {
+        "runId": run_id,
+        "agentId": (agent or {}).get("id") or "",
+        "profile": profile or "",
+        "sessionId": run_state.get("sessionId") or (_get_opencode_session_id(profile) if provider_kind == "opencode" else ""),
+        "turnId": run_state.get("turnId") or run_state.get("runId") or "",
+        "reply": run_state.get("reply") or "",
+        "tools": run_state.get("tools") or [],
+        "thinking": run_state.get("thinking") or run_state.get("status") or "",
+        "approval": run_state.get("approval") if isinstance(run_state.get("approval"), dict) else None,
+        "error": run_state.get("error") or "",
+        "status": run_state.get("status") or "",
+        "providerPath": run_state.get("providerPath") or f"{provider_kind}-cli",
+    }
+    payload.update({k: v for k, v in extra.items() if v is not None})
+    return payload
+
+
+def _provider_tool_stream_key(tool, idx=0):
+    if not isinstance(tool, dict):
+        return str(idx)
+    return str(tool.get("id") or f"{idx}:{tool.get('name') or 'tool'}:{json.dumps(tool.get('arguments') or {}, sort_keys=True, default=str)[:120]}")
+
+
+def _handle_provider_run_events(handler, meta, clear_fn, provider_name="Provider"):
+    if not meta:
+        handler.send_response(404)
+        handler.send_header("Content-Type", "text/event-stream")
+        handler.send_header("Cache-Control", "no-cache")
+        handler.send_header("Access-Control-Allow-Origin", "*")
+        handler.end_headers()
+        handler.wfile.write(f"event: run.failed\ndata: {{\"error\":\"{provider_name} run not found\"}}\n\n".encode("utf-8"))
+        return
+
+    handler.send_response(200)
+    handler.send_header("Content-Type", "text/event-stream")
+    handler.send_header("Cache-Control", "no-cache")
+    handler.send_header("Connection", "keep-alive")
+    handler.send_header("Access-Control-Allow-Origin", "*")
+    handler.end_headers()
+
+    events = meta.get("events")
+    if not isinstance(events, queue.Queue):
+        return
+    last_keepalive = time.time()
+    try:
+        while True:
+            try:
+                item = events.get(timeout=0.5)
+            except queue.Empty:
+                if time.time() - last_keepalive >= 10:
+                    handler.wfile.write(b": keepalive\n\n")
+                    handler.wfile.flush()
+                    last_keepalive = time.time()
+                if meta.get("done") and events.empty():
+                    break
+                continue
+            event_name = str(item.get("event") or "message")
+            payload = item.get("data") if isinstance(item.get("data"), dict) else {}
+            encoded = json.dumps(payload, ensure_ascii=False, default=str)
+            handler.wfile.write(f"event: {event_name}\ndata: {encoded}\n\n".encode("utf-8"))
+            handler.wfile.flush()
+            if event_name in {"run.completed", "run.failed", "run.cancelled", "run.canceled"}:
+                break
+    except (BrokenPipeError, ConnectionError, OSError):
+        pass
+    finally:
+        if meta.get("done"):
+            clear_fn(meta.get("runId"))
+
+
+def _opencode_approval_public(approval, agent=None, profile="main"):
+    approval = approval if isinstance(approval, dict) else {}
+    approval_id = str(approval.get("approval_id") or approval.get("id") or "")
+    if not approval_id:
+        approval_id = "opencode-approval-" + hashlib.sha1(json.dumps(approval, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+    public = dict(approval)
+    public["id"] = approval_id
+    public["approval_id"] = approval_id
+    public["provider"] = public.get("provider") or "opencode-cli"
+    public["agentId"] = public.get("agentId") or (agent or {}).get("id") or "opencode-main"
+    public["profile"] = public.get("profile") or profile or "main"
+    public["title"] = public.get("title") or "OpenCode approval required"
+    public["description"] = public.get("description") or "OpenCode needs permission before it can continue. Approving reruns this turn once with OpenCode --auto."
+    public["command"] = public.get("command") or "OpenCode permission request"
+    public["status"] = public.get("status") or "pending"
+    public["queuedAt"] = public.get("queuedAt") or int(time.time() * 1000)
+    return public
+
+
+def _remember_opencode_approval_pending(approval, request_body, agent=None, profile="main"):
+    public = _opencode_approval_public(approval, agent=agent, profile=profile)
+    body = {k: v for k, v in dict(request_body or {}).items() if not str(k).startswith("_")}
+    body["agentId"] = body.get("agentId") or (agent or {}).get("id") or "opencode-main"
+    with OPENCODE_APPROVALS_LOCK:
+        OPENCODE_APPROVALS[public["approval_id"]] = {"approval": public, "body": body, "profile": profile}
+    return public
+
+
+def _get_opencode_approval_pending(agent_key="opencode-main"):
+    agent = _get_opencode_agent(agent_key) or {}
+    profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+    with OPENCODE_APPROVALS_LOCK:
+        pending = [
+            item.get("approval")
+            for item in OPENCODE_APPROVALS.values()
+            if isinstance(item, dict)
+            and isinstance(item.get("approval"), dict)
+            and (item.get("approval", {}).get("profile") == profile or item.get("approval", {}).get("agentId") == agent.get("id"))
+            and str(item.get("approval", {}).get("status") or "pending") == "pending"
+        ]
+    pending.sort(key=lambda item: int(item.get("queuedAt") or 0), reverse=True)
+    return {"ok": True, "pending": pending[0] if pending else None, "pending_count": len(pending)}
+
+
+def _resolve_opencode_approval_pending(approval_id, choice):
+    approval_id = str(approval_id or "").strip()
+    if not approval_id:
+        return None
+    with OPENCODE_APPROVALS_LOCK:
+        entry = OPENCODE_APPROVALS.pop(approval_id, None)
+    if not entry:
+        return None
+    approval = dict(entry.get("approval") or {})
+    approval["status"] = "approved" if choice == "approve" else "cancelled"
+    approval["resolvedAt"] = int(time.time() * 1000)
+    return {"approval": approval, "body": entry.get("body") or {}, "profile": entry.get("profile") or "main"}
+
+
+def _opencode_approval_result_message(approval, choice):
+    approval = approval if isinstance(approval, dict) else {}
+    status = "approved" if choice == "approve" else "cancelled"
+    return {
+        "role": "assistant",
+        "text": f"OpenCode approval {status}.",
+        "ts": int(time.time() * 1000),
+        "agentId": approval.get("agentId") or "opencode-main",
+        "approval": {**approval, "status": status, "resolvedAt": int(time.time() * 1000)},
+    }
+
+
 def _claude_code_history_path(profile="main"):
     safe_profile = re.sub(r"[^a-zA-Z0-9_.-]+", "-", profile or "main")[:80] or "main"
     return os.path.join(STATUS_DIR, f"claude-code-chat-{safe_profile}.json")
@@ -6903,7 +7122,12 @@ def _handle_opencode_chat(body):
     from_type = str(body.get("fromType") or body.get("senderType") or "").strip().lower()
     is_human_source = from_type in {"human", "user", "chat", "ui"}
     attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
+    attached_files = _provider_attachment_paths(attachments)
     sender_name = str(body.get("fromDisplayName") or body.get("displayName") or body.get("fromName") or "User").strip() or "User"
+    stream_progress_cb = body.get("_onProgress") if callable(body.get("_onProgress")) else None
+    stream_run_id = str(body.get("_streamRunId") or "").strip()
+    stream_progress_id = str(body.get("_streamProgressId") or "").strip()
+    auto_approve_once = bool(body.get("autoApproveOnce") or body.get("approvalAutoOnce") or body.get("_approvalAutoOnce"))
 
     delivery_message = message
     if is_human_source:
@@ -6921,7 +7145,7 @@ def _handle_opencode_chat(body):
             delivery_message += "\n\nAttached files uploaded through Virtual Office:\n" + "\n".join(file_lines)
 
     now_ms = int(time.time() * 1000)
-    progress_id = f"opencode-progress-{now_ms}"
+    progress_id = stream_progress_id or f"opencode-progress-{now_ms}"
     history = _load_opencode_history(profile)
     history.append({
         "role": "user",
@@ -6951,9 +7175,20 @@ def _handle_opencode_chat(body):
             provider.model = agent_model
         status_key = agent.get("statusKey") or agent.get("id")
         gateway_presence.set_manual_override(status_key, "working", "OpenCode task")
+        remembered_approval_id = ""
+        remembered_approval = None
 
         def on_progress(run_state):
+            nonlocal remembered_approval_id, remembered_approval
             run_state = run_state if isinstance(run_state, dict) else {}
+            approval = run_state.get("approval") if isinstance(run_state.get("approval"), dict) else None
+            approval_id = str((approval or {}).get("approval_id") or (approval or {}).get("id") or "")
+            if approval and approval_id and approval_id != remembered_approval_id and not body.get("approvalRetry"):
+                approval = _remember_opencode_approval_pending(approval, body, agent=agent, profile=profile)
+                remembered_approval_id = str(approval.get("approval_id") or approval.get("id") or "")
+                remembered_approval = approval
+                run_state = dict(run_state)
+                run_state["approval"] = approval
             current = [m for m in _load_opencode_history(profile) if not msg_matches_ephemeral(m, "opencode-progress")]
             current.append({
                 "role": "assistant",
@@ -6962,29 +7197,65 @@ def _handle_opencode_chat(body):
                 "agentId": agent.get("id"),
                 "ephemeral": "opencode-progress",
                 "progressId": progress_id,
-                "sessionId": session_id,
+                "sessionId": run_state.get("sessionId") or session_id,
                 "thinking": "OpenCode is running.",
+                "tools": run_state.get("tools") or [],
+                "approval": run_state.get("approval") if isinstance(run_state.get("approval"), dict) else None,
+                "runId": stream_run_id,
             })
             _save_opencode_history(profile, current)
+            if stream_progress_cb:
+                try:
+                    stream_progress_cb(run_state)
+                except Exception:
+                    pass
 
-        result = provider.send_chat_message(profile, delivery_message, session_id=session_id or None, timeout_sec=timeout, on_progress=on_progress)
+        result = provider.send_chat_message(
+            profile,
+            delivery_message,
+            session_id=session_id or None,
+            timeout_sec=timeout,
+            on_progress=on_progress,
+            files=attached_files,
+            auto_approve=auto_approve_once,
+        )
         active_session_id = result.get("sessionId") or session_id
         if active_session_id:
             _set_opencode_session_id(profile, active_session_id)
         reply = result.get("reply", "")
         history = [m for m in _load_opencode_history(profile) if not msg_matches_ephemeral(m, "opencode-progress")]
         final_ts = int(time.time() * 1000)
+        tools = result.get("tools") if isinstance(result.get("tools"), list) else []
+        approval = result.get("approval") if isinstance(result.get("approval"), dict) else None
+        final_approval_id = str((approval or {}).get("approval_id") or (approval or {}).get("id") or "")
+        if approval and not body.get("approvalRetry") and final_approval_id != remembered_approval_id:
+            approval = _remember_opencode_approval_pending(approval, body, agent=agent, profile=profile)
+        elif approval and remembered_approval:
+            approval = remembered_approval
+        if tools:
+            history.append({
+                "role": "assistant",
+                "text": "",
+                "ts": final_ts,
+                "agentId": agent.get("id"),
+                "source": "opencode-tool-activity",
+                "tools": tools,
+                "sessionId": active_session_id,
+            })
         history.append({
             "role": "assistant",
             "text": reply,
-            "ts": final_ts,
+            "ts": final_ts + (1 if tools else 0),
             "agentId": agent.get("id"),
             "exitCode": result.get("exitCode"),
             "sessionId": active_session_id,
+            "runId": stream_run_id,
             "thinking": "",
             "reasoningTokens": 0,
             "error": result.get("error") or None,
             "model": result.get("model") or provider.model or "",
+            "tools": [],
+            "approval": approval,
         })
         _save_opencode_history(profile, history)
         gateway_presence.set_manual_override(status_key, "idle" if result.get("ok") else "offline", "")
@@ -6995,6 +7266,8 @@ def _handle_opencode_chat(body):
             "exitCode": result.get("exitCode"),
             "sessionId": active_session_id,
             "providerPath": result.get("providerPath") or "opencode-cli",
+            "tools": tools,
+            "approval": approval,
             "error": result.get("error"),
             "agent": {"id": agent.get("id"), "name": agent.get("name"), "providerKind": "opencode", "profile": profile},
             "_status": 200 if result.get("ok") else 500,
@@ -7073,6 +7346,9 @@ def _handle_antigravity_chat(body):
     is_human_source = from_type in {"human", "user", "chat", "ui"}
     attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
     sender_name = str(body.get("fromDisplayName") or body.get("displayName") or body.get("fromName") or "User").strip() or "User"
+    stream_progress_cb = body.get("_onProgress") if callable(body.get("_onProgress")) else None
+    stream_run_id = str(body.get("_streamRunId") or "").strip()
+    stream_progress_id = str(body.get("_streamProgressId") or "").strip()
 
     delivery_message = message
     if is_human_source:
@@ -7090,7 +7366,7 @@ def _handle_antigravity_chat(body):
             delivery_message += "\n\nAttached files uploaded through Virtual Office:\n" + "\n".join(file_lines)
 
     now_ms = int(time.time() * 1000)
-    progress_id = f"antigravity-progress-{now_ms}"
+    progress_id = stream_progress_id or f"antigravity-progress-{now_ms}"
     history = _load_antigravity_history(profile)
     history.append({
         "role": "user",
@@ -7128,8 +7404,14 @@ def _handle_antigravity_chat(body):
                 "ephemeral": "antigravity-progress",
                 "progressId": progress_id,
                 "thinking": "Antigravity is running.",
+                "runId": stream_run_id,
             })
             _save_antigravity_history(profile, current)
+            if stream_progress_cb:
+                try:
+                    stream_progress_cb(run_state)
+                except Exception:
+                    pass
 
         result = provider.send_chat_message(profile="main", message=delivery_message, timeout_sec=timeout, on_progress=on_progress)
         reply = result.get("reply", "")
@@ -7140,6 +7422,7 @@ def _handle_antigravity_chat(body):
             "ts": int(time.time() * 1000),
             "agentId": agent.get("id"),
             "exitCode": result.get("exitCode"),
+            "runId": stream_run_id,
             "thinking": "",
             "reasoningTokens": 0,
             "error": result.get("error") or None,
@@ -7192,6 +7475,203 @@ def _handle_antigravity_interrupt(body):
         gateway_presence.set_manual_override(agent.get("statusKey") or agent.get("id"), "idle", "")
     else:
         result["_status"] = 409
+    return result
+
+
+def _handle_cli_provider_run_start(body, provider_kind):
+    if provider_kind == "opencode":
+        message = (body.get("message") or "").strip()
+        agent_key = body.get("agentId") or body.get("key") or body.get("sessionKey") or "opencode-main"
+        agent = _get_opencode_agent(agent_key)
+        handler = _handle_opencode_chat
+        remember = _remember_opencode_stream_run
+        clear_fn = _clear_opencode_stream_run
+        lock = OPENCODE_STREAM_RUNS_LOCK
+        store_name = "OpenCode"
+    else:
+        message = (body.get("message") or "").strip()
+        agent_key = body.get("agentId") or body.get("key") or body.get("sessionKey") or "antigravity-main"
+        agent = _get_antigravity_agent(agent_key)
+        handler = _handle_antigravity_chat
+        remember = _remember_antigravity_stream_run
+        clear_fn = _clear_antigravity_stream_run
+        lock = ANTIGRAVITY_STREAM_RUNS_LOCK
+        store_name = "Antigravity"
+
+    if not message:
+        return {"ok": False, "error": "message is required", "_status": 400}
+    if not agent:
+        return {"ok": False, "error": f"{store_name} agent '{agent_key}' not found", "_status": 404}
+
+    profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+    run_id = f"{provider_kind}-{int(time.time() * 1000)}-{str(uuid.uuid4())[:8]}"
+    progress_id = f"{provider_kind}-progress-{run_id}"
+    events = queue.Queue()
+    status_key = agent.get("statusKey") or agent.get("id")
+    meta = {
+        "runId": run_id,
+        "agentId": agent.get("id"),
+        "agentKey": agent_key,
+        "profile": profile,
+        "statusKey": status_key,
+        "events": events,
+        "startedAt": int(time.time() * 1000),
+        "done": False,
+        "result": None,
+    }
+    remember(meta)
+
+    def enqueue(event_name, payload=None):
+        payload = payload if isinstance(payload, dict) else {}
+        payload.setdefault("runId", run_id)
+        payload.setdefault("agentId", agent.get("id") or "")
+        payload.setdefault("profile", profile)
+        try:
+            events.put_nowait({"event": event_name, "data": payload, "ts": int(time.time() * 1000)})
+        except Exception:
+            pass
+
+    def worker():
+        last_reply = ""
+        last_thinking = ""
+        last_approval_id = ""
+        seen_tools = {}
+        enqueue("run.started", {"providerPath": f"{provider_kind}-cli"})
+
+        def on_progress(run_state):
+            nonlocal last_reply, last_thinking, last_approval_id
+            run_state = run_state if isinstance(run_state, dict) else {}
+            with lock:
+                meta["sessionId"] = run_state.get("sessionId") or meta.get("sessionId") or ""
+            gateway_presence.set_provider_event(status_key, provider_kind, {
+                "event": "turn.stream",
+                "session_id": run_state.get("sessionId") or "",
+                "status": run_state.get("status") or "",
+            })
+
+            reply = str(run_state.get("reply") or "")
+            if reply and reply != last_reply:
+                delta = reply[len(last_reply):] if reply.startswith(last_reply) else ""
+                last_reply = reply
+                enqueue("message.delta", _provider_stream_event_payload(provider_kind, run_id, agent, profile, run_state, delta=delta))
+
+            thinking = str(run_state.get("thinking") or run_state.get("status") or "")
+            if thinking and thinking != last_thinking:
+                last_thinking = thinking
+                enqueue("reasoning.available", _provider_stream_event_payload(provider_kind, run_id, agent, profile, run_state))
+
+            approval = run_state.get("approval") if isinstance(run_state.get("approval"), dict) else None
+            approval_id = str((approval or {}).get("approval_id") or (approval or {}).get("id") or "")
+            if approval and approval_id and approval_id != last_approval_id:
+                last_approval_id = approval_id
+                enqueue("approval.request", _provider_stream_event_payload(provider_kind, run_id, agent, profile, run_state, approval=approval))
+
+            for idx, tool in enumerate(run_state.get("tools") or []):
+                if not isinstance(tool, dict):
+                    continue
+                key = _provider_tool_stream_key(tool, idx)
+                status = str(tool.get("status") or "").lower()
+                is_terminal = status in {"done", "error", "failed"}
+                prior = seen_tools.get(key)
+                if not prior:
+                    enqueue("tool.started", _provider_stream_event_payload(provider_kind, run_id, agent, profile, run_state, toolCard=tool, toolCallId=key))
+                if is_terminal and (not prior or prior.get("status") != status or prior.get("result") != tool.get("result") or prior.get("error") != tool.get("error")):
+                    event_name = "tool.failed" if status in {"error", "failed"} or tool.get("error") else "tool.completed"
+                    enqueue(event_name, _provider_stream_event_payload(provider_kind, run_id, agent, profile, run_state, toolCard=tool, toolCallId=key))
+                seen_tools[key] = dict(tool)
+
+        run_body = dict(body)
+        run_body["_streamRunId"] = run_id
+        run_body["_streamProgressId"] = progress_id
+        run_body["_onProgress"] = on_progress
+        try:
+            result = handler(run_body)
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc), "_status": 500}
+
+        with lock:
+            meta["done"] = True
+            meta["result"] = result
+
+        payload = {
+            "runId": run_id,
+            "agentId": agent.get("id") or "",
+            "profile": profile,
+            "sessionId": result.get("sessionId") or (meta.get("sessionId") if isinstance(meta, dict) else "") or "",
+            "reply": result.get("reply") or "",
+            "tools": result.get("tools") or [],
+            "thinking": result.get("thinking") or "",
+            "approval": result.get("approval") if isinstance(result.get("approval"), dict) else None,
+            "providerPath": result.get("providerPath") or f"{provider_kind}-cli",
+        }
+        if result.get("ok"):
+            enqueue("run.completed", payload)
+        else:
+            payload["error"] = result.get("error") or result.get("reply") or f"{store_name} run failed"
+            enqueue("run.failed", payload)
+        threading.Timer(600, clear_fn, args=(run_id,)).start()
+
+    threading.Thread(target=worker, daemon=True, name=f"{provider_kind}-run-{run_id}").start()
+    return {
+        "ok": True,
+        "runId": run_id,
+        "providerPath": f"{provider_kind}-cli",
+        "agent": {"id": agent.get("id"), "name": agent.get("name"), "providerKind": provider_kind, "profile": profile},
+    }
+
+
+def _handle_opencode_run_start(body):
+    return _handle_cli_provider_run_start(body, "opencode")
+
+
+def _handle_antigravity_run_start(body):
+    return _handle_cli_provider_run_start(body, "antigravity")
+
+
+def _handle_opencode_run_events(handler, run_id):
+    _handle_provider_run_events(handler, _get_opencode_stream_run(run_id), _clear_opencode_stream_run, "OpenCode")
+
+
+def _handle_antigravity_run_events(handler, run_id):
+    _handle_provider_run_events(handler, _get_antigravity_stream_run(run_id), _clear_antigravity_stream_run, "Antigravity")
+
+
+def _normalize_opencode_approval_choice(choice):
+    return "approve" if str(choice or "").strip().lower() in {"approve", "approved", "allow", "allow_once", "approve_once"} else "cancel"
+
+
+def _handle_opencode_approval_respond(body):
+    approval = body.get("approval") if isinstance(body.get("approval"), dict) else {}
+    choice = _normalize_opencode_approval_choice(body.get("choice") or body.get("action") or "")
+    approval_id = str(body.get("approval_id") or body.get("approvalId") or approval.get("approval_id") or approval.get("id") or "").strip()
+    if not approval_id:
+        return {"ok": False, "error": "approval_id is required", "_status": 400}
+    entry = _resolve_opencode_approval_pending(approval_id, choice)
+    if not entry:
+        return {"ok": False, "error": "OpenCode approval request is no longer pending", "_status": 409}
+
+    resolved_approval = entry.get("approval") or {}
+    profile = entry.get("profile") or resolved_approval.get("profile") or "main"
+    history = _load_opencode_history(profile)
+    history.append(_opencode_approval_result_message(resolved_approval, choice))
+    _save_opencode_history(profile, history)
+
+    if choice != "approve":
+        return {
+            "ok": True,
+            "choice": choice,
+            "approvalChoice": choice,
+            "providerPath": "opencode-cli",
+            "approval": resolved_approval,
+            "message": "OpenCode approval cancelled.",
+        }
+
+    retry_body = dict(entry.get("body") or {})
+    retry_body["autoApproveOnce"] = True
+    retry_body["approvalRetry"] = True
+    result = _handle_opencode_chat(retry_body)
+    result["approvalChoice"] = "approve"
+    result["message"] = "OpenCode approval approved and the turn was rerun once with --auto."
     return result
 
 
@@ -13053,8 +13533,14 @@ def handle_chat_session_switch(agent_id, session_id, body=None):
         _save_codex_state(profile, state)
         return {"ok": True, "providerKind": kind, "sessionId": session_id, "messages": messages}, 200
     if kind == "opencode":
-        _set_opencode_session_id(profile, session_id)
-        messages = _load_opencode_history(profile)
+        outcome = _opencode_provider().export_session(profile, session_id)
+        if not outcome.get("ok"):
+            return {"ok": False, "error": outcome.get("error") or "OpenCode session export failed"}, 502
+        messages = _opencode_export_to_chat_messages(outcome.get("session") or {}, agent_ref)
+        state = _load_opencode_state(profile)
+        state["messages"] = messages[-500:]
+        state["sessionId"] = session_id
+        _save_opencode_state(profile, state)
         return {"ok": True, "providerKind": kind, "sessionId": session_id, "messages": messages, "resumeCommand": f"opencode run --session {session_id}"}, 200
     if kind == "antigravity":
         return {"ok": False, "error": "Antigravity does not expose native sessions to switch"}, 400
@@ -13109,6 +13595,72 @@ def _codex_thread_to_chat_messages(thread, agent_ref):
                 text = str(item.get("text") or "")
                 if text.strip():
                     messages.append({"role": "assistant", "text": text.strip()[:8000], "ts": int(time.time() * 1000), "from": agent_ref["name"], "fromType": "agent", "sessionId": thread_id, "sessionTitle": f"Codex thread {thread_id[-8:]}" if thread_id else "Codex thread", "sessionKind": "chat", "activeSession": True, "source": "codex"})
+    return messages[-500:]
+
+
+def _opencode_export_to_chat_messages(session, agent_ref):
+    messages = []
+    session_id = str(session.get("id") or session.get("sessionId") or session.get("sessionID") or "")
+
+    def text_from_content(value):
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            for key in ("text", "content", "message", "output"):
+                text = text_from_content(value.get(key))
+                if text:
+                    return text
+        if isinstance(value, list):
+            parts = []
+            for item in value:
+                text = text_from_content(item)
+                if text:
+                    parts.append(text)
+            return "\n".join(parts)
+        return ""
+
+    records = []
+    for key in ("messages", "turns", "items", "events"):
+        value = session.get(key)
+        if isinstance(value, list):
+            records.extend(value)
+    if not records and isinstance(session.get("conversation"), list):
+        records.extend(session.get("conversation") or [])
+
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        role = str(row.get("role") or row.get("author") or row.get("type") or "").lower()
+        if role in {"user_message", "usermessage", "input"}:
+            role = "user"
+        elif role in {"agent_message", "assistant_message", "assistantmessage", "output", "text"}:
+            role = "assistant"
+        elif "tool" in role:
+            tool = {
+                "id": row.get("id") or row.get("toolCallId") or row.get("callId") or "",
+                "name": row.get("name") or row.get("tool") or "OpenCode tool",
+                "status": row.get("status") or ("error" if row.get("error") else "done"),
+                "arguments": row.get("arguments") or row.get("args") or row.get("input") or {},
+                "result": row.get("result") or row.get("output") or row.get("content") or "",
+                "error": row.get("error") or "",
+            }
+            messages.append({"role": "assistant", "text": "", "ts": int(time.time() * 1000), "agentId": agent_ref["agentId"], "source": "opencode-tool-activity", "tools": [tool], "sessionId": session_id, "sessionTitle": f"OpenCode session {session_id[-8:]}" if session_id else "OpenCode session", "sessionKind": "chat", "activeSession": True})
+            continue
+        text = text_from_content(row.get("content") if "content" in row else row.get("message") if "message" in row else row.get("text") if "text" in row else row)
+        if role not in {"user", "assistant"} or not text.strip():
+            continue
+        messages.append({
+            "role": role,
+            "text": text.strip()[:12000],
+            "ts": int(time.time() * 1000),
+            "from": agent_ref["name"] if role == "assistant" else "You",
+            "fromType": "agent" if role == "assistant" else "human",
+            "sessionId": session_id,
+            "sessionTitle": f"OpenCode session {session_id[-8:]}" if session_id else "OpenCode session",
+            "sessionKind": "chat",
+            "activeSession": True,
+            "source": "opencode",
+        })
     return messages[-500:]
 
 
@@ -14658,6 +15210,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif request_path.startswith("/api/claude-code/runs/") and request_path.endswith("/events"):
             run_id = urllib.parse.unquote(request_path[len("/api/claude-code/runs/"):-len("/events")].strip("/"))
             _handle_claude_code_run_events(self, run_id)
+        elif request_path.startswith("/api/opencode/runs/") and request_path.endswith("/events"):
+            run_id = urllib.parse.unquote(request_path[len("/api/opencode/runs/"):-len("/events")].strip("/"))
+            _handle_opencode_run_events(self, run_id)
+        elif request_path.startswith("/api/antigravity/runs/") and request_path.endswith("/events"):
+            run_id = urllib.parse.unquote(request_path[len("/api/antigravity/runs/"):-len("/events")].strip("/"))
+            _handle_antigravity_run_events(self, run_id)
         elif request_path == "/api/codex/approval/pending":
             agent_key = (query_params.get("agentId") or query_params.get("key") or ["codex-default"])[0]
             result = _handle_codex_approval_pending(agent_key)
@@ -14666,6 +15224,14 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+        elif request_path == "/api/opencode/approval/pending":
+            agent_key = (query_params.get("agentId") or query_params.get("key") or ["opencode-main"])[0]
+            result = _get_opencode_approval_pending(agent_key)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
             self.wfile.write(json.dumps(result).encode())
         elif self.path == "/api/hermes/test":
             result = _handle_hermes_test()
@@ -16423,6 +16989,28 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
+        elif self.path == "/api/opencode/runs":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_opencode_run_start(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/antigravity/runs":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_antigravity_run_start(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
         elif request_path.startswith("/api/codex/runs/") and request_path.endswith("/stop"):
             run_id = urllib.parse.unquote(request_path[len("/api/codex/runs/"):-len("/stop")].strip("/"))
             length = int(self.headers.get('Content-Length', 0))
@@ -16552,6 +17140,17 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
             body = json.loads(self.rfile.read(length)) if length else {}
             result = _handle_hermes_approval_respond(body)
+            self.send_response(result.get("_status", 200))
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            result.pop("_status", None)
+            self.wfile.write(json.dumps(result).encode())
+            return
+        elif self.path == "/api/opencode/approval/respond":
+            length = int(self.headers.get('Content-Length', 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            result = _handle_opencode_approval_respond(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")

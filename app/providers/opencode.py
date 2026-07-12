@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import threading
 import time
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -254,6 +255,8 @@ class OpenCodeProvider:
         session_id: str | None = None,
         timeout_sec: int | None = None,
         on_progress: ProgressCallback | None = None,
+        files: list[str] | None = None,
+        auto_approve: bool = False,
     ) -> dict[str, Any]:
         if not self.is_available():
             return {"ok": False, "error": f"OpenCode CLI is not available at {self.binary}", "reply": "", "sessionId": session_id or ""}
@@ -264,7 +267,7 @@ class OpenCodeProvider:
         workspace = self._workspace_for_profile(safe_profile)
         os.makedirs(workspace, exist_ok=True)
 
-        cmd = [self.binary or "opencode", "run"]
+        cmd = [self.binary or "opencode", "run", "--format", "json"]
         if safe_profile and safe_profile != "main":
             cmd.extend(["--agent", safe_profile])
         if session_id:
@@ -273,11 +276,21 @@ class OpenCodeProvider:
             cmd.append("--continue")
         if self.model:
             cmd.extend(["--model", self.model])
+        if auto_approve:
+            cmd.append("--auto")
+        for file_path in files or []:
+            clean_path = os.path.abspath(os.path.expanduser(str(file_path or "").strip()))
+            if clean_path and os.path.isfile(clean_path):
+                cmd.extend(["--file", clean_path])
         cmd.append(message)
 
         deadline = time.time() + int(timeout_sec or self.timeout_sec or 900)
         reply_lines: list[str] = []
         stderr_lines: list[str] = []
+        raw_events: list[dict[str, Any]] = []
+        tools_by_id: dict[str, dict[str, Any]] = {}
+        approval: dict[str, Any] | None = None
+        observed_json_events = False
         proc: subprocess.Popen | None = None
         try:
             proc = subprocess.Popen(
@@ -312,16 +325,46 @@ class OpenCodeProvider:
                     proc.kill()
                     return {"ok": False, "error": "OpenCode call timed out", "reply": "\n".join(reply_lines), "sessionId": session_id or ""}
                 line = raw.rstrip("\n")
-                if line:
-                    reply_lines.append(line)
+                if not line:
+                    continue
+                event = self._json_event(line)
+                if event is not None:
+                    observed_json_events = True
+                    raw_events.append(event)
+                    event_state = self._consume_run_event(event, reply_lines, tools_by_id, safe_profile, session_id or "")
+                    if event_state.get("sessionId"):
+                        session_id = str(event_state.get("sessionId") or "")
+                    if isinstance(event_state.get("approval"), dict):
+                        approval = event_state["approval"]
                     if on_progress:
-                        on_progress({"reply": "\n".join(reply_lines), "status": "streaming", "profile": safe_profile})
+                        on_progress({
+                            "reply": "\n".join(reply_lines),
+                            "status": event_state.get("status") or "streaming",
+                            "profile": safe_profile,
+                            "sessionId": session_id or "",
+                            "tools": list(tools_by_id.values()),
+                            "approval": approval,
+                            "rawEvent": event,
+                        })
+                    continue
+
+                reply_lines.append(line)
+                if on_progress:
+                    on_progress({
+                        "reply": "\n".join(reply_lines),
+                        "status": "streaming",
+                        "profile": safe_profile,
+                        "sessionId": session_id or "",
+                        "tools": list(tools_by_id.values()),
+                        "approval": approval,
+                    })
 
             exit_code = proc.wait(timeout=5)
             reply = "\n".join(reply_lines)
             error_msg = ""
             if exit_code != 0:
                 error_msg = "\n".join(stderr_lines)[-1000:] or f"CLI process exited with code {exit_code}"
+                approval = approval or self._approval_from_text(error_msg, safe_profile)
             return {
                 "ok": exit_code == 0,
                 "reply": reply,
@@ -331,6 +374,10 @@ class OpenCodeProvider:
                 "sessionId": session_id or "",
                 "providerPath": "opencode-cli",
                 "model": self.model,
+                "tools": list(tools_by_id.values()),
+                "approval": approval,
+                "rawEvents": raw_events[-200:],
+                "jsonEvents": observed_json_events,
             }
         except subprocess.TimeoutExpired:
             if proc:
@@ -358,7 +405,7 @@ class OpenCodeProvider:
         safe_profile = self._safe_profile_name(profile or "main")
         try:
             result = subprocess.run(
-                [self.binary or "opencode", "session", "list"],
+                [self.binary or "opencode", "session", "list", "--format", "json", "--max-count", str(max(1, int(limit or 40)))],
                 cwd=self._workspace_for_profile(safe_profile),
                 capture_output=True,
                 text=True,
@@ -370,6 +417,36 @@ class OpenCodeProvider:
             return {"ok": True, "sessions": self._parse_session_list(result.stdout or "")[:limit]}
         except Exception as exc:
             return {"ok": False, "error": str(exc), "sessions": []}
+
+    def export_session(self, profile: str, session_id: str, sanitize: bool = False) -> dict[str, Any]:
+        if not self.is_available():
+            return {"ok": False, "error": "OpenCode CLI not available", "session": {}}
+        session_id = str(session_id or "").strip()
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", session_id):
+            return {"ok": False, "error": "Invalid OpenCode session id", "session": {}}
+        safe_profile = self._safe_profile_name(profile or "main")
+        cmd = [self.binary or "opencode", "export", session_id]
+        if sanitize:
+            cmd.append("--sanitize")
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=self._workspace_for_profile(safe_profile),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=self._subprocess_env(),
+            )
+            if result.returncode != 0:
+                return {"ok": False, "error": (result.stderr or result.stdout or "").strip()[:500], "session": {}}
+            raw = result.stdout or ""
+            parsed = json.loads(raw) if raw.strip() else {}
+            if isinstance(parsed, dict):
+                parsed.setdefault("id", session_id)
+                return {"ok": True, "session": parsed}
+            return {"ok": True, "session": {"id": session_id, "messages": parsed if isinstance(parsed, list) else []}}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "session": {}}
 
     def delete_session(self, profile: str, session_id: str) -> dict[str, Any]:
         if not self.is_available():
@@ -651,6 +728,148 @@ class OpenCodeProvider:
                 sessions.append({"id": parts[0], "title": parts[1] if len(parts) > 1 else ""})
         return sessions
 
+    @staticmethod
+    def _json_event(line: str) -> dict[str, Any] | None:
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    @classmethod
+    def _consume_run_event(
+        cls,
+        event: dict[str, Any],
+        reply_lines: list[str],
+        tools_by_id: dict[str, dict[str, Any]],
+        profile: str,
+        session_id: str,
+    ) -> dict[str, Any]:
+        state: dict[str, Any] = {"status": "streaming", "sessionId": cls._event_session_id(event) or session_id}
+        text = cls._event_text(event)
+        if text:
+            reply_lines.append(text)
+        tool = cls._tool_from_event(event)
+        if tool:
+            key = str(tool.get("id") or tool.get("name") or len(tools_by_id))
+            prior = tools_by_id.get(key, {})
+            tools_by_id[key] = {**prior, **tool}
+        approval = cls._approval_from_event(event, profile)
+        if approval:
+            state["approval"] = approval
+            state["status"] = "approval"
+        elif tool:
+            state["status"] = str(tool.get("status") or "tool")
+        elif text:
+            state["status"] = "streaming"
+        else:
+            event_type = str(event.get("type") or event.get("event") or event.get("kind") or "").lower()
+            state["status"] = event_type or "streaming"
+        return state
+
+    @staticmethod
+    def _event_session_id(event: dict[str, Any]) -> str:
+        for key in ("sessionID", "sessionId", "session_id", "threadId", "conversationId"):
+            if event.get(key):
+                return str(event.get(key) or "")
+        nested = event.get("session") if isinstance(event.get("session"), dict) else {}
+        return str(nested.get("id") or nested.get("sessionId") or "")
+
+    @classmethod
+    def _event_text(cls, event: dict[str, Any]) -> str:
+        event_type = str(event.get("type") or event.get("event") or event.get("kind") or "").lower()
+        if any(token in event_type for token in ("tool", "permission", "approval", "step")):
+            return ""
+        for key in ("delta", "text", "content", "message", "output", "response"):
+            value = event.get(key)
+            text = cls._coerce_text(value)
+            if text:
+                return text
+        return ""
+
+    @classmethod
+    def _coerce_text(cls, value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, dict):
+            if value.get("role") and value.get("role") not in {"assistant", "agent"}:
+                return ""
+            for key in ("text", "content", "message", "output"):
+                text = cls._coerce_text(value.get(key))
+                if text:
+                    return text
+        if isinstance(value, list):
+            parts = []
+            for item in value:
+                if isinstance(item, dict) and item.get("type") not in {None, "text", "output_text"}:
+                    continue
+                text = cls._coerce_text(item)
+                if text:
+                    parts.append(text)
+            return "".join(parts)
+        return ""
+
+    @staticmethod
+    def _tool_from_event(event: dict[str, Any]) -> dict[str, Any] | None:
+        event_type = str(event.get("type") or event.get("event") or event.get("kind") or "").lower()
+        if "tool" not in event_type and not any(k in event for k in ("tool", "toolCall", "tool_call")):
+            return None
+        raw_tool = event.get("toolCall") or event.get("tool_call") or event.get("tool")
+        if isinstance(raw_tool, dict):
+            source = {**raw_tool, **{k: v for k, v in event.items() if k not in {"toolCall", "tool_call", "tool"}}}
+        else:
+            source = event
+        name = str(source.get("name") or source.get("tool") or source.get("title") or source.get("command") or "OpenCode tool")
+        tool_id = str(source.get("id") or source.get("toolCallId") or source.get("callId") or hashlib.sha1(json.dumps(source, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16])
+        status = str(source.get("status") or source.get("state") or "").lower()
+        if not status:
+            status = "done" if any(token in event_type for token in ("result", "finish", "complete", "end")) else "running"
+        if status in {"completed", "complete", "success", "succeeded"}:
+            status = "done"
+        if status in {"failed", "failure"}:
+            status = "error"
+        args = source.get("arguments") or source.get("args") or source.get("input") or {}
+        result = source.get("result") or source.get("output") or source.get("content") or ""
+        error = source.get("error") or ""
+        return {"id": tool_id, "name": name, "status": status, "arguments": args, "result": result, "error": error}
+
+    @classmethod
+    def _approval_from_event(cls, event: dict[str, Any], profile: str) -> dict[str, Any] | None:
+        event_type = str(event.get("type") or event.get("event") or event.get("kind") or "").lower()
+        text = json.dumps(event, sort_keys=True, default=str).lower()
+        if not ("approval" in event_type or "permission" in event_type or "permission" in text or "approve" in text):
+            return None
+        approval_id = str(event.get("id") or event.get("approval_id") or event.get("approvalId") or hashlib.sha1(json.dumps(event, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16])
+        command = str(event.get("command") or event.get("pattern") or event.get("tool") or event.get("name") or event.get("description") or "OpenCode permission request")
+        return {
+            "id": approval_id,
+            "approval_id": approval_id,
+            "provider": "opencode-cli",
+            "profile": profile,
+            "title": "OpenCode approval required",
+            "description": str(event.get("description") or event.get("message") or "OpenCode needs permission before it can continue. Approving reruns this turn once with OpenCode --auto."),
+            "command": command,
+            "status": "pending",
+            "raw": event,
+        }
+
+    @staticmethod
+    def _approval_from_text(text: str, profile: str) -> dict[str, Any] | None:
+        lowered = str(text or "").lower()
+        if not any(token in lowered for token in ("approval", "permission", "authorize", "allow")):
+            return None
+        approval_id = "opencode-approval-" + hashlib.sha1(f"{profile}:{text}".encode("utf-8")).hexdigest()[:16]
+        return {
+            "id": approval_id,
+            "approval_id": approval_id,
+            "provider": "opencode-cli",
+            "profile": profile,
+            "title": "OpenCode approval required",
+            "description": "OpenCode exited while waiting for permission. Approving reruns this turn once with OpenCode --auto.",
+            "command": str(text or "OpenCode permission request")[:500],
+            "status": "pending",
+        }
+
     def _identity_md(self, name: str, role: str, emoji: str) -> str:
         return f"# {name}\n\n- Emoji: {emoji or '⚡'}\n- Role: {role or 'OpenCode Agent'}\n- Platform: OpenCode\n"
 
@@ -659,7 +878,7 @@ class OpenCodeProvider:
 
     def _agent_md(self, profile: str, role: str, instructions: str, model: str = "") -> str:
         desc = (role or "OpenCode Agent").replace("\n", " ").strip()
-        lines = ["---", f"description: {desc}"]
+        lines = ["---", f"description: {desc}", "mode: primary"]
         if model:
             lines.append(f"model: {model}")
         lines.extend(["---", "", instructions.strip() or desc, ""])

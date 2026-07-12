@@ -79,6 +79,50 @@
                                 <div id="mm-hermes-status"></div>
                             </div>
                         </div>
+                        <!-- OpenCode Connection -->
+                        <div class="mm-section">
+                            <div class="mm-section-title">◆ OpenCode Agent Connection</div>
+                            <label class="mm-label" style="display:flex;align-items:center;gap:6px;">
+                                <input type="checkbox" id="mm-opencode-enable"> Enable OpenCode agents
+                            </label>
+                            <div id="mm-opencode-fields" style="margin-top:8px;">
+                                <label class="mm-label">OpenCode Config Dir</label>
+                                <input type="text" id="mm-opencode-home" class="mm-input" placeholder="~/.config/opencode">
+                                <label class="mm-label">OpenCode CLI</label>
+                                <input type="text" id="mm-opencode-bin" class="mm-input" placeholder="opencode or /path/to/opencode">
+                                <label class="mm-label">Workspace Root</label>
+                                <input type="text" id="mm-opencode-workspace" class="mm-input" placeholder="/data/opencode-agents">
+                                <label class="mm-label">Main Workspace</label>
+                                <input type="text" id="mm-opencode-main-workspace" class="mm-input" placeholder="/data/opencode-main">
+                                <label class="mm-label">Default Model</label>
+                                <input type="text" id="mm-opencode-model" class="mm-input" placeholder="provider/model or blank">
+                                <button class="mm-btn mm-btn-primary" onclick="mmTestOpenCode()">🔍 Test OpenCode</button>
+                                <div id="mm-opencode-status"></div>
+                            </div>
+                        </div>
+                        <!-- Antigravity Connection -->
+                        <div class="mm-section">
+                            <div class="mm-section-title">△ Antigravity Agent Connection</div>
+                            <label class="mm-label" style="display:flex;align-items:center;gap:6px;">
+                                <input type="checkbox" id="mm-antigravity-enable"> Enable Antigravity agent
+                            </label>
+                            <div id="mm-antigravity-fields" style="margin-top:8px;">
+                                <label class="mm-label">Antigravity Home</label>
+                                <input type="text" id="mm-antigravity-home" class="mm-input" placeholder="~/.gemini/antigravity-cli">
+                                <label class="mm-label">agy CLI</label>
+                                <input type="text" id="mm-antigravity-bin" class="mm-input" placeholder="agy or /path/to/agy">
+                                <label class="mm-label">Workspace Root</label>
+                                <input type="text" id="mm-antigravity-workspace" class="mm-input" placeholder="/data/antigravity-workspace">
+                                <label class="mm-label">Default Model</label>
+                                <input type="text" id="mm-antigravity-model" class="mm-input" placeholder="optional">
+                                <label class="mm-label">Sandbox</label>
+                                <input type="text" id="mm-antigravity-sandbox" class="mm-input" placeholder="optional, e.g. read-only">
+                                <label class="mm-label">Print Timeout</label>
+                                <input type="text" id="mm-antigravity-print-timeout" class="mm-input" placeholder="5m">
+                                <button class="mm-btn mm-btn-primary" onclick="mmTestAntigravity()">🔍 Test Antigravity</button>
+                                <div id="mm-antigravity-status"></div>
+                            </div>
+                        </div>
                         <!-- Office Settings -->
                         <div class="mm-section">
                             <div class="mm-section-title">🏢 Office</div>

@@ -112,10 +112,16 @@
       this.claudeCodeHistoryPollTimer = null;
       this.claudeCodeEventSource = null;
       this.claudeCodeCompletedToolKeys = new Set();
+      this.openCodeEventSource = null;
+      this.openCodeCompletedToolKeys = new Set();
+      this.antigravityEventSource = null;
+      this.antigravityCompletedToolKeys = new Set();
       this.hermesApprovalPollTimer = null;
       this.hermesApprovalLastId = '';
       this.codexApprovalPollTimer = null;
       this.codexApprovalLastId = '';
+      this.openCodeApprovalPollTimer = null;
+      this.openCodeApprovalLastId = '';
       this.sessionModel = '—';
       this.contextWindow = 0;
       this.contextUsed = 0;
@@ -222,6 +228,8 @@
       this.closeHermesEventSource();
       this.closeCodexEventSource();
       this.closeClaudeCodeEventSource();
+      this.closeOpenCodeEventSource();
+      this.closeAntigravityEventSource();
       this.pendingToolEvents.clear();
       this.currentRunId = null;
       this.sessionModel = '—';
@@ -342,6 +350,8 @@
       else this.stopHermesApprovalPolling();
       if (isCodex) this.startCodexApprovalPolling();
       else this.stopCodexApprovalPolling();
+      if (isOpenCode) this.startOpenCodeApprovalPolling();
+      else this.stopOpenCodeApprovalPolling();
       if (connected || this.isProviderAgentSelected()) {
         this.loadHistory();
         this.fetchSessionInfo();
@@ -550,6 +560,61 @@
       this.scrollBottom();
     }
 
+    startOpenCodeApprovalPolling() {
+      this.stopOpenCodeApprovalPolling();
+      this.pollOpenCodeApproval().catch(() => {});
+      this.openCodeApprovalPollTimer = setInterval(() => {
+        this.pollOpenCodeApproval().catch(() => {});
+      }, HERMES_APPROVAL_POLL_MS);
+    }
+
+    stopOpenCodeApprovalPolling() {
+      if (this.openCodeApprovalPollTimer) {
+        clearInterval(this.openCodeApprovalPollTimer);
+        this.openCodeApprovalPollTimer = null;
+      }
+      this.openCodeApprovalLastId = '';
+    }
+
+    async pollOpenCodeApproval() {
+      if (!this.isOpenCodeSelected() || !this.isVisibleForPolling()) return;
+      const agentId = this.getSelectedAgentId() || this.selectedAgentKey;
+      const res = await fetch('/api/opencode/approval/pending?agentId=' + encodeURIComponent(agentId));
+      const data = await res.json();
+      if (!data.ok || !data.pending) return;
+      this.appendOpenCodePendingApproval(data.pending, data.pending_count || 1);
+    }
+
+    appendOpenCodePendingApproval(approval, pendingCount = 1) {
+      if (!approval) return;
+      const approvalId = approval.approval_id || approval.id || '';
+      if (approvalId) {
+        const existing = [...this.messages.querySelectorAll('[data-approval-id]')].find(el => el.dataset.approvalId === approvalId);
+        if (existing) return;
+      }
+      const enriched = {
+        ...approval,
+        id: approvalId || approval.id,
+        approval_id: approvalId || approval.approval_id,
+        pending_count: pendingCount,
+        provider: approval.provider || 'opencode-cli'
+      };
+      this.openCodeApprovalLastId = enriched.id || '';
+      this.appendMessage(
+        'assistant',
+        '',
+        Date.now(),
+        [],
+        {
+          label: this.agentSelect.selectedOptions[0]?.textContent.trim() || 'OpenCode',
+          kind: 'agent',
+          approval: enriched
+        },
+        []
+      );
+      this.scrollBottom();
+    }
+
     async fetchSessionInfo() {
       let gatewayContext = 0;
       try {
@@ -595,6 +660,7 @@
           const progressMarker = isHermes ? 'hermes-progress' : (isClaudeCode ? 'claude-code-progress' : (isOpenCode ? 'opencode-progress' : (this.isAntigravitySelected() ? 'antigravity-progress' : 'codex-progress')));
           if (isHermes) this.startHermesApprovalPolling();
           if (isCodex) this.startCodexApprovalPolling();
+          if (isOpenCode) this.startOpenCodeApprovalPolling();
           const res = await fetch('/api/' + providerPath + '/history?agentId=' + encodeURIComponent(this.getSelectedAgentId() || this.selectedAgentKey));
           const data = await res.json();
           if (data.ok && Array.isArray(data.messages)) {
@@ -1203,18 +1269,23 @@
         this.updateTypingIndicator(providerLabel + ' is running');
         this.setStatus(providerLabel + ' running...', 'connecting');
         try {
-          const resp = await fetch('/api/' + providerPath + '/chat', {
+          const resp = await fetch('/api/' + providerPath + '/runs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(providerBody)
           });
           const data = await resp.json();
-          this.removeTypingIndicator();
           if (!resp.ok || data.ok === false) throw new Error(data.error || data.reply || resp.statusText);
+          this.currentRunId = data.runId || null;
+          await this.fetchSessionInfo();
+          await this.streamCliProviderRunEvents(providerPath, providerLabel, data.runId);
+          this.removeTypingIndicator();
           await this.loadHistory({ recoverFinal: true, startedAt: sendStartedAt });
           await this.fetchSessionInfo();
+          if (isOpenCode) await this.pollOpenCodeApproval().catch(() => {});
           this.setStatus(providerLabel + ' ready', 'connected');
         } catch (e) {
+          this.closeCliProviderEventSource(providerPath);
           this.removeTypingIndicator();
           await this.loadHistory({ recoverFinal: true, startedAt: sendStartedAt }).catch(() => {});
           this.appendSystem(providerLabel + ' send failed: ' + e.message);
@@ -1256,6 +1327,7 @@
           });
           const data = await resp.json().catch(() => ({}));
           if (!resp.ok || data.ok === false) throw new Error(data.error || resp.statusText);
+          this.closeCliProviderEventSource(providerPath);
           this.removeTypingIndicator();
           await this.loadHistory({ recoverFinal: true }).catch(() => {});
           this.appendSystem('Stop sent');
@@ -1673,6 +1745,25 @@
         try { this.claudeCodeEventSource.close(); } catch (_) {}
         this.claudeCodeEventSource = null;
       }
+    }
+
+    closeOpenCodeEventSource() {
+      if (this.openCodeEventSource) {
+        try { this.openCodeEventSource.close(); } catch (_) {}
+        this.openCodeEventSource = null;
+      }
+    }
+
+    closeAntigravityEventSource() {
+      if (this.antigravityEventSource) {
+        try { this.antigravityEventSource.close(); } catch (_) {}
+        this.antigravityEventSource = null;
+      }
+    }
+
+    closeCliProviderEventSource(providerPath) {
+      if (providerPath === 'opencode') this.closeOpenCodeEventSource();
+      else if (providerPath === 'antigravity') this.closeAntigravityEventSource();
     }
 
     async sendHermesBlockingMessage(hermesBody, hermesProgress, hermesSendStartedAt) {
@@ -2158,6 +2249,145 @@
       }
     }
 
+    streamCliProviderRunEvents(providerPath, providerLabel, runId) {
+      if (!runId) return Promise.reject(new Error(providerLabel + ' run did not return a run id'));
+      this.closeCliProviderEventSource(providerPath);
+      if (providerPath === 'opencode') this.openCodeCompletedToolKeys = new Set();
+      else this.antigravityCompletedToolKeys = new Set();
+      this.currentRunId = runId;
+      this.setStatus(providerLabel + ' stream active...', 'connecting');
+      this.markLiveEvent();
+      const agentId = this.getSelectedAgentId() || this.selectedAgentKey || '';
+      const url = '/api/' + providerPath + '/runs/' + encodeURIComponent(runId) + '/events?agentId=' + encodeURIComponent(agentId);
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const source = new EventSource(url);
+        if (providerPath === 'opencode') this.openCodeEventSource = source;
+        else this.antigravityEventSource = source;
+        const cleanup = () => {
+          if (providerPath === 'opencode' && this.openCodeEventSource === source) this.openCodeEventSource = null;
+          if (providerPath === 'antigravity' && this.antigravityEventSource === source) this.antigravityEventSource = null;
+          source.close();
+        };
+        const finish = (ok, value) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          if (ok) resolve(value);
+          else reject(value instanceof Error ? value : new Error(String(value || providerLabel + ' stream failed')));
+        };
+        const handle = (eventName, evt) => {
+          let data = {};
+          try { data = JSON.parse(evt.data || '{}'); } catch (_) {}
+          this.handleCliProviderNativeEvent(providerPath, providerLabel, eventName, data);
+          if (['run.completed', 'run.failed', 'run.cancelled', 'run.canceled'].includes(eventName)) {
+            finish(eventName === 'run.completed', eventName === 'run.completed' ? data : new Error(data.error || eventName));
+          }
+        };
+        [
+          'run.started',
+          'session.metrics',
+          'message.delta',
+          'reasoning.available',
+          'tool.started',
+          'tool.completed',
+          'tool.failed',
+          'approval.request',
+          'run.completed',
+          'run.failed',
+          'run.cancelled',
+          'run.canceled'
+        ].forEach(name => source.addEventListener(name, evt => handle(name, evt)));
+        source.onmessage = evt => handle('message', evt);
+        source.onerror = () => {
+          if (!settled) finish(false, new Error(providerLabel + ' stream disconnected'));
+        };
+      });
+    }
+
+    handleCliProviderNativeEvent(providerPath, providerLabel, eventName, data) {
+      this.markLiveEvent();
+      const runId = data?.runId || this.currentRunId || '';
+      if (runId) this.currentRunId = runId;
+
+      if (eventName === 'run.started') {
+        this.updateTypingIndicator(providerLabel + ' is running...');
+        this.fetchSessionInfo().catch(() => {});
+        return;
+      }
+
+      if (eventName === 'message.delta') {
+        if (!this.streamingMsg || this.streamingMsg.id !== runId) {
+          this.streamingMsg = { id: runId, role: 'assistant', content: '' };
+          this.pendingStreamContent = '';
+          this.appendStreamingMessage();
+        }
+        if (data.reply) this.pendingStreamContent = data.reply;
+        else if (data.delta) this.pendingStreamContent += String(data.delta || '');
+        this.scheduleStreamingRender();
+        return;
+      }
+
+      if (eventName === 'reasoning.available') {
+        this.updateTypingIndicator(providerLabel + ' is working...');
+        return;
+      }
+
+      if (eventName === 'approval.request') {
+        if (providerPath === 'opencode' && data.approval) this.appendOpenCodePendingApproval(data.approval, data.pending_count || 1);
+        this.updateTypingIndicator(providerLabel + ' is waiting for approval...');
+        return;
+      }
+
+      if (eventName === 'tool.started' || eventName === 'tool.completed' || eventName === 'tool.failed') {
+        const card = data.toolCard || {};
+        const isTerminal = eventName !== 'tool.started';
+        const payload = {
+          runId,
+          data: {
+            toolCallId: card.id || data.toolCallId || data.id || '',
+            phase: isTerminal ? 'result' : 'start',
+            name: card.name || data.tool || data.name || providerLabel + ' tool',
+            args: card.arguments || card.args || (card.args_preview ? { command: card.args_preview } : (data.preview ? { command: data.preview } : {})),
+            result: card.result || data.result || data.output || '',
+            isError: eventName === 'tool.failed' || card.status === 'error' || !!data.error,
+            error: data.error || card.error || ''
+          }
+        };
+        const label = formatToolLabel(payload.data.name, coerceToolArgs(payload.data.args));
+        this.updateTypingIndicator(isTerminal ? 'Processing...' : label);
+        if (isTerminal) {
+          if (!this.liveToolCards.has(this.toolKey(payload))) {
+            this.appendToolCall({ ...payload, data: { ...payload.data, phase: 'start' } });
+          }
+          this.finishToolCall(payload);
+          if (providerPath === 'opencode') this.openCodeCompletedToolKeys.add(`${runId}:${payload.data.toolCallId}`);
+          else this.antigravityCompletedToolKeys.add(`${runId}:${payload.data.toolCallId}`);
+        } else {
+          this.updateToolCall(payload);
+        }
+        return;
+      }
+
+      if (['run.completed', 'run.failed', 'run.cancelled', 'run.canceled'].includes(eventName)) {
+        const finalText = data.reply || data.output || this.pendingStreamContent || (this.streamingMsg ? this.streamingMsg.content : '');
+        this.flushStreamingRender(true);
+        this.flushToolEvents(true);
+        this.clearActivityFeed();
+        this.removeTypingIndicator();
+        if (this.streamingMsg) {
+          this.finalizeStreamingMessage(finalText);
+          this.streamingMsg = null;
+        } else if (finalText) {
+          this.appendMessage('assistant', finalText);
+        }
+        if (runId) this.finalizeRunToolCards(runId);
+        this.currentRunId = null;
+        this.stopRecoveryWatchdog();
+        this.fetchSessionInfo().catch(() => {});
+      }
+    }
+
     stopHermesProgressTimers() {
       if (!this.hermesProgressTimers?.length) return;
       for (const timer of this.hermesProgressTimers) clearTimeout(timer);
@@ -2516,6 +2746,55 @@
         this.setStatus('Codex error', 'disconnected');
       }
     }
+
+    async respondOpenCodeApproval(approval, choice, card) {
+      if (!approval || !this.isOpenCodeSelected()) return;
+      const normalized = choice === 'approve' ? 'approve' : 'cancel';
+      const buttons = card ? [...card.querySelectorAll('button')] : [];
+      buttons.forEach(btn => btn.disabled = true);
+      if (card) {
+        card.classList.add('responding');
+        const status = card.querySelector('.chat-approval-status');
+        if (status) status.textContent = normalized === 'approve' ? 'Approving...' : 'Cancelling...';
+      }
+      try {
+        const resp = await fetch('/api/opencode/approval/respond', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            agentId: this.getSelectedAgentId() || this.selectedAgentKey,
+            approval,
+            approval_id: approval.approval_id || approval.id || '',
+            choice: normalized,
+            fromDisplayName: 'User'
+          })
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.ok === false) throw new Error(data.error || data.reply || resp.statusText);
+        if (card) {
+          card.classList.remove('responding');
+          card.classList.add(normalized === 'approve' ? 'approved' : 'denied');
+          const status = card.querySelector('.chat-approval-status');
+          if (status) status.textContent = normalized === 'approve' ? 'approved once' : 'cancelled';
+        }
+        if (normalized === 'cancel') {
+          this.appendSystem('OpenCode approval cancelled.');
+        }
+        await this.loadHistory({ recoverFinal: true }).catch(() => {});
+        await this.pollOpenCodeApproval().catch(() => {});
+        this.setStatus(normalized === 'approve' ? 'OpenCode approval sent' : 'OpenCode ready', 'connected');
+      } catch (e) {
+        buttons.forEach(btn => btn.disabled = false);
+        if (card) {
+          card.classList.remove('responding');
+          const status = card.querySelector('.chat-approval-status');
+          if (status) status.textContent = 'error';
+        }
+        this.appendSystem('OpenCode approval failed: ' + e.message);
+        this.setStatus('OpenCode error', 'disconnected');
+      }
+    }
+
     isNearBottom(threshold = 24) {
       if (!this.messages) return true;
       return this.messages.scrollHeight - this.messages.scrollTop - this.messages.clientHeight <= threshold;
@@ -3301,6 +3580,7 @@
     const card = document.createElement('div');
     const status = String(approval.status || 'pending').toLowerCase();
     const isCodex = String(approval.provider || '').startsWith('codex') || String(approval.agentId || '').startsWith('codex-') || String(approval.title || '').toLowerCase().includes('codex');
+    const isOpenCode = String(approval.provider || '').startsWith('opencode') || String(approval.agentId || '').startsWith('opencode-') || String(approval.title || '').toLowerCase().includes('opencode');
     card.className = 'chat-approval-card ' + (status.includes('denied') || status.includes('cancel') ? 'denied' : status.includes('approved') ? 'approved' : 'pending');
     card.dataset.approvalId = approval.approval_id || approval.id || '';
 
@@ -3311,7 +3591,7 @@
     icon.textContent = (status.includes('denied') || status.includes('cancel')) ? '✕' : status.includes('approved') ? '✓' : '!';
     const title = document.createElement('span');
     title.className = 'chat-approval-title';
-    title.textContent = approval.title || (isCodex ? 'Codex approval required' : 'Hermes approval required');
+    title.textContent = approval.title || (isOpenCode ? 'OpenCode approval required' : (isCodex ? 'Codex approval required' : 'Hermes approval required'));
     const state = document.createElement('span');
     state.className = 'chat-approval-status';
     const pendingCount = Number(approval.pending_count || approval.pendingCount || 0);
@@ -3320,11 +3600,11 @@
 
     const desc = document.createElement('div');
     desc.className = 'chat-approval-desc';
-    desc.textContent = approval.description || (isCodex ? 'Codex needs user approval before it can continue.' : 'Hermes needs user approval before it can continue.');
+    desc.textContent = approval.description || (isOpenCode ? 'OpenCode needs user approval before it can continue.' : (isCodex ? 'Codex needs user approval before it can continue.' : 'Hermes needs user approval before it can continue.'));
 
     const cmd = document.createElement('pre');
     cmd.className = 'chat-approval-command';
-    cmd.textContent = approval.command || (isCodex ? 'Approval-gated Codex action' : 'Approval-gated Hermes command');
+    cmd.textContent = approval.command || (isOpenCode ? 'Approval-gated OpenCode action' : (isCodex ? 'Approval-gated Codex action' : 'Approval-gated Hermes command'));
 
     card.append(header, desc, cmd);
     if (status === 'pending') {
@@ -3333,19 +3613,21 @@
       const allow = document.createElement('button');
       allow.type = 'button';
       allow.className = 'chat-approval-btn primary';
-      allow.textContent = isCodex ? 'Approve' : 'Allow once';
-      allow.title = isCodex ? 'Approve this Codex action for the active turn' : 'Retry this Hermes turn with one-time approval for this invocation only';
+      allow.textContent = (isCodex || isOpenCode) ? 'Approve' : 'Allow once';
+      allow.title = isOpenCode ? 'Rerun this OpenCode turn once with --auto' : (isCodex ? 'Approve this Codex action for the active turn' : 'Retry this Hermes turn with one-time approval for this invocation only');
       allow.addEventListener('click', () => {
-        if (isCodex) windowInstance?.respondCodexApproval(approval, 'approve', card);
+        if (isOpenCode) windowInstance?.respondOpenCodeApproval(approval, 'approve', card);
+        else if (isCodex) windowInstance?.respondCodexApproval(approval, 'approve', card);
         else windowInstance?.respondHermesApproval(approval, 'approve_once', card);
       });
       const deny = document.createElement('button');
       deny.type = 'button';
       deny.className = 'chat-approval-btn';
-      deny.textContent = isCodex ? 'Cancel' : 'Deny';
-      deny.title = isCodex ? 'Cancel this Codex action' : 'Do not retry this blocked Hermes command';
+      deny.textContent = (isCodex || isOpenCode) ? 'Cancel' : 'Deny';
+      deny.title = isOpenCode ? 'Cancel this OpenCode approval request' : (isCodex ? 'Cancel this Codex action' : 'Do not retry this blocked Hermes command');
       deny.addEventListener('click', () => {
-        if (isCodex) windowInstance?.respondCodexApproval(approval, 'cancel', card);
+        if (isOpenCode) windowInstance?.respondOpenCodeApproval(approval, 'cancel', card);
+        else if (isCodex) windowInstance?.respondCodexApproval(approval, 'cancel', card);
         else windowInstance?.respondHermesApproval(approval, 'deny', card);
       });
       actions.append(allow, deny);
