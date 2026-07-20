@@ -21,6 +21,9 @@ services:
       - VO_WS_PORT=${VO_WS_PORT:-8091}
       - VO_OFFICE_NAME=${VO_OFFICE_NAME:-Virtual Office}
       - VO_WEATHER_LOCATION=${VO_WEATHER_LOCATION:-}
+      # Optional Hermes API Server connection on the Docker host.
+      - VO_HERMES_API_URL=${VO_HERMES_API_URL:-}
+      - VO_HERMES_API_KEY=${VO_HERMES_API_KEY:-}
       # Optional native Codex support. Install codex in the image/container PATH
       # or set VO_CODEX_BIN to an absolute path available inside the container.
       - CODEX_HOME=${VO_CODEX_HOME:-/data/codex-home}
