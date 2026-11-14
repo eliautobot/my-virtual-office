@@ -45,3 +45,22 @@ def sanitized_env(extra_allowlist_var: str = "") -> dict[str, str]:
         if key and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
             allowed.add(key)
     return {key: os.environ[key] for key in allowed if key in os.environ}
+
+
+def agent_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+    """Environment for agent CLIs that run tools (BE-13).
+
+    Agents keep what their own CLI needs (PATH, HOME, provider API keys, proxies),
+    but never the office's secrets: every ``VO_*`` variable (gateway token, Twilio
+    and Hermes credentials, agent API token) and anything listed in
+    ``VO_AGENT_ENV_DENY`` is removed, so a prompt-injected ``env`` cannot read them.
+    """
+    deny = {raw.strip() for raw in os.environ.get("VO_AGENT_ENV_DENY", "").split(",") if raw.strip()}
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.startswith("VO_") and not key.startswith("TWILIO_") and key not in deny
+    }
+    for key, value in (extra or {}).items():
+        if value is not None:
+            env[key] = str(value)
+    return env

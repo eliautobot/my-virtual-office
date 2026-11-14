@@ -34,10 +34,8 @@ def discover_agents(oc_home):
     try:
         with open(config_path, "r") as f:
             cfg = json.load(f)
-        config_agents = cfg.get("agents", {}).get("list", [])
-        if not isinstance(config_agents, list):
-            config_agents = []
-    except (FileNotFoundError, json.JSONDecodeError, KeyError):
+        config_agents = openclaw_config_agents(cfg)
+    except (OSError, json.JSONDecodeError, KeyError, AttributeError, TypeError):
         pass
 
     # Step 2: If no config, fall back to scanning agents/ directory
@@ -71,8 +69,8 @@ def discover_agents(oc_home):
             if agent_id == "main":
                 name = "Main Agent"
 
-        # Get model
-        model = agent_cfg.get("model", "")
+        # Get model (OpenClaw accepts "provider/model" or {"primary": ...})
+        model = model_ref_primary(agent_cfg.get("model"))
 
         # Get last activity from session files
         last_active = _get_last_active(os.path.join(agents_dir, agent_id, "sessions"))
@@ -95,55 +93,6 @@ def discover_agents(oc_home):
     return roster
 
 
-def _merge_hermes_agent_modes(cli_agents, api_agents, desktop_agents=None, prefer_api=True):
-    merged = {}
-    order = []
-    desktop_agents = desktop_agents or []
-    for agent in cli_agents:
-        key = agent.get("id") or f"hermes-{agent.get('profile') or agent.get('providerAgentId') or 'default'}"
-        merged[key] = dict(agent)
-        order.append(key)
-
-    for desktop_agent in desktop_agents:
-        key = desktop_agent.get("id") or "hermes-default"
-        if key not in merged:
-            merged[key] = dict(desktop_agent)
-            order.append(key)
-            continue
-
-        existing = merged[key]
-        existing["desktopAvailable"] = True
-        existing["desktopUrl"] = desktop_agent.get("desktopUrl") or existing.get("desktopUrl") or ""
-        existing["connectionModes"] = list(dict.fromkeys((existing.get("connectionModes") or []) + (desktop_agent.get("connectionModes") or ["desktop"])))
-        existing["capabilities"] = list(dict.fromkeys((existing.get("capabilities") or []) + (desktop_agent.get("capabilities") or [])))
-        if not prefer_api:
-            existing["gateway"] = "desktop+cli" if existing.get("cliAvailable") else "desktop"
-            existing["provider"] = existing.get("provider") or desktop_agent.get("provider") or "Hermes Desktop Backend"
-            existing["model"] = existing.get("model") or desktop_agent.get("model") or ""
-
-    for api_agent in api_agents:
-        key = api_agent.get("id") or "hermes-default"
-        if key not in merged:
-            merged[key] = dict(api_agent)
-            order.append(key)
-            continue
-
-        existing = merged[key]
-        existing["apiAvailable"] = True
-        existing["apiUrl"] = api_agent.get("apiUrl") or existing.get("apiUrl") or ""
-        existing["connectionModes"] = list(dict.fromkeys((existing.get("connectionModes") or []) + (api_agent.get("connectionModes") or ["api"])))
-        existing["capabilities"] = list(dict.fromkeys((existing.get("capabilities") or []) + (api_agent.get("capabilities") or [])))
-        if prefer_api:
-            existing["gateway"] = "api+cli"
-            existing["provider"] = existing.get("provider") or api_agent.get("provider") or "Hermes API"
-            existing["model"] = api_agent.get("model") or existing.get("model") or ""
-        else:
-            existing["gateway"] = existing.get("gateway") or "cli+api"
-            existing["model"] = existing.get("model") or api_agent.get("model") or ""
-
-    return [merged[key] for key in order]
-
-
 def discover_hermes_agents(hermes_home=None, hermes_bin=None, enabled=True, api_url=None, api_key=None, desktop_url=None, desktop_token=None, desktop_host_header=None, desktop_tcp_host=None, desktop_tcp_port=None, prefer_api=True, timeout_sec=600, connections=None):
     """Discover native Hermes gateways through configured API connections.
 
@@ -162,7 +111,7 @@ def discover_hermes_agents(hermes_home=None, hermes_bin=None, enabled=True, api_
     )
 
 
-def discover_codex_agents(codex_home=None, codex_bin=None, workspace_root=None, enabled=True, model="", sandbox="workspace-write", approval_policy="never", prefer_app_server=True, timeout_sec=900, main_workspace=None, include_main=True, include_native_agents=True, register_native_agents=True):
+def discover_codex_agents(codex_home=None, codex_bin=None, workspace_root=None, enabled=True, model="", sandbox="workspace-write", approval_policy="never", prefer_app_server=None, timeout_sec=900, main_workspace=None, include_main=None, include_native_agents=None, register_native_agents=None):
     """Discover local Codex CLI-backed Virtual Office agents."""
     return CodexProvider(
         home_path=codex_home,
@@ -181,7 +130,7 @@ def discover_codex_agents(codex_home=None, codex_bin=None, workspace_root=None, 
     ).discover_agents()
 
 
-def discover_claude_code_agents(claude_home=None, claude_bin=None, workspace_root=None, enabled=True, model="", permission_mode="acceptEdits", timeout_sec=900, main_workspace=None, include_main=True, include_native_agents=True, register_native_agents=True):
+def discover_claude_code_agents(claude_home=None, claude_bin=None, workspace_root=None, enabled=True, model="", permission_mode="acceptEdits", timeout_sec=900, main_workspace=None, include_main=None, include_native_agents=None, register_native_agents=None):
     """Discover local Claude Code CLI-backed Virtual Office agents."""
     return ClaudeCodeProvider(
         home_path=claude_home,
@@ -198,7 +147,7 @@ def discover_claude_code_agents(claude_home=None, claude_bin=None, workspace_roo
     ).discover_agents()
 
 
-def discover_all_agents(oc_home, hermes_home=None, hermes_bin=None, hermes_enabled=True, hermes_api_url=None, hermes_api_key=None, hermes_desktop_url=None, hermes_desktop_token=None, hermes_desktop_host_header=None, hermes_desktop_tcp_host=None, hermes_desktop_tcp_port=None, hermes_prefer_api=True, hermes_timeout_sec=600, hermes_connections=None, codex_home=None, codex_bin=None, codex_workspace_root=None, codex_enabled=True, codex_model="", codex_sandbox="workspace-write", codex_approval_policy="never", codex_prefer_app_server=True, codex_timeout_sec=900, codex_main_workspace=None, codex_include_main=True, codex_include_native_agents=True, codex_register_native_agents=True, claude_home=None, claude_bin=None, claude_workspace_root=None, claude_enabled=True, claude_model="", claude_permission_mode="acceptEdits", claude_timeout_sec=900, claude_main_workspace=None, claude_include_main=True, claude_include_native_agents=True, claude_register_native_agents=True):
+def discover_all_agents(oc_home, hermes_home=None, hermes_bin=None, hermes_enabled=True, hermes_api_url=None, hermes_api_key=None, hermes_desktop_url=None, hermes_desktop_token=None, hermes_desktop_host_header=None, hermes_desktop_tcp_host=None, hermes_desktop_tcp_port=None, hermes_prefer_api=True, hermes_timeout_sec=600, hermes_connections=None, codex_home=None, codex_bin=None, codex_workspace_root=None, codex_enabled=True, codex_model="", codex_sandbox="workspace-write", codex_approval_policy="never", codex_prefer_app_server=None, codex_timeout_sec=900, codex_main_workspace=None, codex_include_main=None, codex_include_native_agents=None, codex_register_native_agents=None, claude_home=None, claude_bin=None, claude_workspace_root=None, claude_enabled=True, claude_model="", claude_permission_mode="acceptEdits", claude_timeout_sec=900, claude_main_workspace=None, claude_include_main=None, claude_include_native_agents=None, claude_register_native_agents=None):
     """Discover OpenClaw agents plus optional local Hermes, Codex, and Claude Code agents."""
     agents = discover_agents(oc_home)
     agents.extend(discover_hermes_agents(
@@ -247,6 +196,41 @@ def discover_all_agents(oc_home, hermes_home=None, hermes_bin=None, hermes_enabl
     return agents
 
 
+def model_ref_primary(value):
+    """Primary model id from an OpenClaw model reference (string or {primary})."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict) and isinstance(value.get("primary"), str):
+        return value["primary"].strip()
+    return ""
+
+
+def openclaw_config_agents(cfg):
+    """Agent rows from openclaw.json: 2026.9 keyed ``agents.entries`` or legacy ``agents.list``.
+
+    For keyed entries the key is the agent id (a stale embedded ``id`` never wins).
+    """
+    agents_cfg = cfg.get("agents") if isinstance(cfg, dict) else None
+    if not isinstance(agents_cfg, dict):
+        return []
+    entries = agents_cfg.get("entries")
+    if isinstance(entries, dict):
+        return [dict(entry, id=str(key)) for key, entry in entries.items()
+                if isinstance(entry, dict) and str(key or "").strip()]
+    rows = agents_cfg.get("list")
+    return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+
+
+_DISPLAY_UNSAFE = re.compile(r"[<>\"'`\x00-\x1f\x7f]")
+
+
+def clean_display_text(value, max_len=80):
+    """Plain display text for names/roles/emoji read from agent-editable files."""
+    text = _DISPLAY_UNSAFE.sub("", str(value or ""))
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:max_len].strip()
+
+
 def _parse_identity(workspace_path):
     """Parse IDENTITY.md from an agent workspace. Returns (name, emoji, role) or (None, None, None)."""
     identity_path = os.path.join(workspace_path, "IDENTITY.md")
@@ -260,7 +244,7 @@ def _parse_identity(workspace_path):
     except (FileNotFoundError, PermissionError):
         return name, emoji, role
 
-    # Parse markdown key-value pairs like: - **Name:** Moe
+    # Parse markdown key-value pairs like: - **Name:** Ada
     for line in content.split("\n"):
         line = line.strip()
         m = re.match(r'-\s*\*\*Name:\*\*\s*(.+)', line)
@@ -276,7 +260,9 @@ def _parse_identity(workspace_path):
             # Take the part before em-dash if present
             role = creature.split("—")[0].strip().rstrip(" —-")
 
-    return name, emoji, role
+    return (clean_display_text(name, 60) or None,
+            clean_display_text(emoji, 16) or None,
+            clean_display_text(role, 80) or None)
 
 
 def _get_last_active(sessions_dir):
@@ -312,6 +298,117 @@ def get_agent_workspace_dir(oc_home, agent_id):
 def get_agent_session_id(agent_id):
     """Get the session folder name for an agent (in agents/ directory)."""
     return agent_id
+
+
+# --- Hermes `hermes serve` connections: profiles = agents (design 2.10) ---
+_LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0", "host.docker.internal", "host-gateway"}
+
+
+def normalize_hermes_profiles(items):
+    """Profile rows from an adapter (any of nativeId/profile/id/name) -> one shape:
+    ``{profile, name, emoji, role, model, default}``. Setup profiles are dropped."""
+    out = []
+    seen = set()
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, str):
+            item = {"profile": item}
+        if not isinstance(item, dict):
+            continue
+        profile = str(item.get("nativeId") or item.get("profile") or item.get("id") or item.get("name") or "").strip()
+        if not profile or profile in seen or str(item.get("role") or "").lower() == "setup" or item.get("setup") is True:
+            continue
+        seen.add(profile)
+        name = item.get("displayName") or item.get("display_name") or item.get("label") or item.get("name") or profile
+        role = item.get("role") if isinstance(item.get("role"), str) and item.get("role") else item.get("description")
+        out.append({
+            "profile": profile[:128],
+            "name": clean_display_text(name, 60) or profile[:60],
+            "emoji": clean_display_text(item.get("emoji") or "", 16),
+            "role": clean_display_text(role, 80) if isinstance(role, str) else "",
+            "model": str(item.get("model") or "")[:120],
+            "default": bool(item.get("default") or item.get("isDefault") or profile == "default"),
+        })
+    return out
+
+
+def _url_host(url):
+    from urllib.parse import urlsplit
+    try:
+        return (urlsplit(str(url or "")).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def same_machine(url_a, url_b):
+    """Both addresses are this machine (loopback / host.docker.internal), or the same host."""
+    a, b = _url_host(url_a), _url_host(url_b)
+    if not a or not b:
+        return False
+    return a == b or (a in _LOCAL_HOSTS and b in _LOCAL_HOSTS)
+
+
+def legacy_profile_for(legacy_row, legacy_entry, profiles, model_id=None):
+    """Which serve profile an API-server Hermes row reaches: ``legacy[L].profile``, else a
+    profile named like L, else L's /v1/models first id (``hermes-agent`` = ``default``)."""
+    names = {p["profile"] for p in profiles}
+    entry = legacy_entry if isinstance(legacy_entry, dict) else {}
+    wanted = str(entry.get("profile") or "").strip()
+    if wanted:
+        return wanted if wanted in names else ""
+    lid = str((legacy_row or {}).get("id") or "").strip()
+    if lid in names:
+        return lid
+    model = str(model_id or "").strip()
+    if model == "hermes-agent":
+        model = "default"
+    return model if model in names else ""
+
+
+def hermes_serve_rows(conn, profiles, profile_agents, legacy_rows, legacy_map, caps=None, status=None,
+                      legacy_model_ids=None):
+    """Office roster rows for one serve connection plus its listing view.
+
+    Returns ``(rows, listing)``: ``rows`` go into discovery (hidden profiles left out),
+    ``listing`` has every profile with ``hidden``/``reason`` for the Agent Providers page.
+    A profile reached through an enabled, not switched API-server row stays hidden so
+    the office never shows two agents for one profile."""
+    cid = str(conn.get("id") or "")
+    url = conn.get("url") or ""
+    hidden = {}
+    for row in legacy_rows or []:
+        lid = str(row.get("id") or "").strip()
+        entry = (legacy_map or {}).get(lid) if isinstance((legacy_map or {}).get(lid), dict) else {}
+        if not lid or row.get("enabled") is False or entry.get("replacedBy"):
+            continue
+        if not same_machine(url, row.get("apiUrl") or row.get("url")):
+            continue
+        profile = legacy_profile_for(row, entry, profiles, (legacy_model_ids or {}).get(lid))
+        if profile and profile not in hidden:
+            hidden[profile] = f'reached through the older connection "{row.get("name") or lid}"'
+    state = (status or {}).get("state") or "offline"
+    available = state == "connected"
+    cap_map = {name: True for name in (caps or [])}
+    rows, listing = [], []
+    for p in profiles:
+        agent_id = (profile_agents or {}).get(p["profile"])
+        if not agent_id:
+            continue
+        reason = hidden.get(p["profile"], "")
+        listing.append({"id": agent_id, "name": p["name"], "emoji": p["emoji"], "nativeId": p["profile"],
+                        "hidden": bool(reason), "reason": reason})
+        if reason:
+            continue
+        rows.append({
+            "id": agent_id, "statusKey": agent_id, "name": p["name"],
+            "emoji": p["emoji"] or "⚕️", "role": p["role"] or "Hermes Agent", "model": p["model"],
+            "providerKind": "hermes", "providerType": "runtime", "providerTransport": "serve",
+            "transport": "hermes-serve", "providerConnectionId": cid, "providerAgentId": p["profile"],
+            "profile": p["profile"], "provider": "Hermes", "gateway": "serve",
+            "connectionModes": ["serve"], "capabilities": dict(cap_map),
+            "available": available, "connectionState": "connected" if available else state,
+            "apiAvailable": False, "cliAvailable": False, "workspace": "", "home": "",
+        })
+    return rows, listing
 
 
 # --- Standalone test ---

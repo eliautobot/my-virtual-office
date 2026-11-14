@@ -20,72 +20,85 @@
     ['borderStrong', 'Strong border'],
     ['info', 'Info'],
     ['success', 'Success'],
+    ['warning', 'Warning'],
     ['danger', 'Danger']
   ];
 
+  // Palette key -> design token written on <html> for the Custom theme.
+  var tokenNames = {
+    bg0:'--vo-surface-0', bg1:'--vo-surface-1', bg2:'--vo-surface-2', bg3:'--vo-surface-3',
+    text1:'--vo-text-1', text2:'--vo-text-2', text3:'--vo-text-3',
+    accent:'--vo-accent', accent2:'--vo-accent-2', accentContrast:'--vo-accent-ink',
+    borderSoft:'--vo-border-subtle', borderStrong:'--vo-border-strong',
+    info:'--vo-info', success:'--vo-success', warning:'--vo-warning', danger:'--vo-danger'
+  };
+  var CUSTOM_VARS_KEY = 'vo-ui-custom-vars';
+
+  // Same values as the palettes in ui-tokens.css (the CSS is the source of truth; this copy
+  // only seeds the Custom theme editor). tests/test_v08_design_tokens.py keeps them in sync.
   var palettes = {
     classic: {
       dark: {
-        bg0:'#070b13', bg1:'#0d1422', bg2:'#141d2d', bg3:'#1b273b',
-        text1:'#f5f7fb', text2:'#b9c4d5', text3:'#7f8da4',
-        accent:'#f5c84c', accent2:'#60a5fa', borderSoft:'#26364e',
-        borderStrong:'#3a4d69', info:'#60a5fa', success:'#4ade80',
-        danger:'#fb7185', accentContrast:'#172012'
+        bg0:'#070b13', bg1:'#0d1422', bg2:'#131c2c', bg3:'#1b2638',
+        text1:'#f3f6fb', text2:'#c3cddc', text3:'#8d9ab0',
+        accent:'#f5c84c', accent2:'#60a5fa', borderSoft:'#243247',
+        borderStrong:'#5b6f8c', info:'#60a5fa', success:'#4ade80',
+        warning:'#fbbf24', danger:'#fb7185', accentContrast:'#1a1405'
       },
       light: {
-        bg0:'#e8edf4', bg1:'#f8fafc', bg2:'#ffffff', bg3:'#eef3f8',
-        text1:'#0f172a', text2:'#111827', text3:'#1f2937',
-        accent:'#a96c00', accent2:'#2563eb', borderSoft:'#94a3b8',
-        borderStrong:'#64748b', info:'#2563eb', success:'#15803d',
-        danger:'#be123c', accentContrast:'#ffffff'
+        bg0:'#e9eef5', bg1:'#f8fafc', bg2:'#ffffff', bg3:'#eef2f7',
+        text1:'#0f172a', text2:'#334155', text3:'#556378',
+        accent:'#8a5800', accent2:'#1d4ed8', borderSoft:'#d5dde8',
+        borderStrong:'#7b8aa0', info:'#1d4ed8', success:'#15803d',
+        warning:'#a15c00', danger:'#be123c', accentContrast:'#ffffff'
       }
     },
     retro: {
       dark: {
-        bg0:'#160d20', bg1:'#241435', bg2:'#321b46', bg3:'#43245a',
-        text1:'#fff4d6', text2:'#f5d0fe', text3:'#c39ad4',
-        accent:'#ffb000', accent2:'#2de2e6', borderSoft:'#69417d',
-        borderStrong:'#9864ad', info:'#2de2e6', success:'#63f58a',
-        danger:'#ff5470', accentContrast:'#211128'
+        bg0:'#160d20', bg1:'#21122f', bg2:'#2c1840', bg3:'#3a2152',
+        text1:'#fff4d6', text2:'#f0cdfa', text3:'#c9a3dc',
+        accent:'#ffb000', accent2:'#2de2e6', borderSoft:'#4a2d63',
+        borderStrong:'#a173b8', info:'#2de2e6', success:'#63f58a',
+        warning:'#ffd166', danger:'#ff6b85', accentContrast:'#211128'
       },
       light: {
-        bg0:'#ead8b5', bg1:'#fff4d8', bg2:'#fffaf0', bg3:'#e8cfaa',
-        text1:'#2b1734', text2:'#45244c', text3:'#65406a',
-        accent:'#9a4400', accent2:'#006e78', borderSoft:'#9a7059',
-        borderStrong:'#694057', info:'#006e78', success:'#2c6a32',
-        danger:'#a9203e', accentContrast:'#fff8e8'
+        bg0:'#ead8b5', bg1:'#fff4d8', bg2:'#fffaf0', bg3:'#f3e3c4',
+        text1:'#2b1734', text2:'#45244c', text3:'#6a4470',
+        accent:'#8f3f00', accent2:'#006e78', borderSoft:'#dcc39c',
+        borderStrong:'#7d5a48', info:'#006e78', success:'#2c6a32',
+        warning:'#8a5200', danger:'#a9203e', accentContrast:'#fff8e8'
       }
     },
     cyberpunk: {
       dark: {
         bg0:'#05020d', bg1:'#0c0920', bg2:'#15102c', bg3:'#21133a',
-        text1:'#f9f7ff', text2:'#d9ccff', text3:'#aa96c8',
-        accent:'#00f5ff', accent2:'#ff2bd6', borderSoft:'#513074',
+        text1:'#f9f7ff', text2:'#d9ccff', text3:'#ab98ca',
+        accent:'#00f5ff', accent2:'#ff2bd6', borderSoft:'#33204f',
         borderStrong:'#00bfc8', info:'#00f5ff', success:'#64ff72',
-        danger:'#ff3f7f', accentContrast:'#031116'
+        warning:'#ffe14d', danger:'#ff4f8b', accentContrast:'#031116'
       },
       light: {
-        bg0:'#eae5f5', bg1:'#faf8ff', bg2:'#ffffff', bg3:'#eee8fa',
-        text1:'#180d2d', text2:'#2f1748', text3:'#523c68',
-        accent:'#007c86', accent2:'#b00091', borderSoft:'#a995c2',
-        borderStrong:'#59357d', info:'#007c86', success:'#16703b',
-        danger:'#b40c4c', accentContrast:'#ffffff'
+        bg0:'#eae5f5', bg1:'#faf8ff', bg2:'#ffffff', bg3:'#f1ecfb',
+        text1:'#180d2d', text2:'#2f1748', text3:'#5a4472',
+        accent:'#006f78', accent2:'#b00091', borderSoft:'#ddd3ee',
+        borderStrong:'#6f4f93', info:'#006f78', success:'#16703b',
+        warning:'#8a5a00', danger:'#b40c4c', accentContrast:'#ffffff'
       }
     },
     gameboy: {
       dark: {
-        bg0:'#0f1a0f', bg1:'#172617', bg2:'#233323', bg3:'#304530',
-        text1:'#d2e5a3', text2:'#b8cf86', text3:'#91aa67',
-        accent:'#9bbc0f', accent2:'#6f9a22', borderSoft:'#304f2d',
-        borderStrong:'#5f7f38', info:'#a8c93a', success:'#b7d84b',
-        danger:'#e07a5f', accentContrast:'#0f380f'
+        bg0:'#0f1a0f', bg1:'#152315', bg2:'#1d2e1d', bg3:'#283d28',
+        text1:'#d6e8a8', text2:'#bfd48f', text3:'#9fb874',
+        accent:'#9bbc0f', accent2:'#6f9a22', borderSoft:'#2f472d',
+        borderStrong:'#6f8f45', info:'#b0cf45', success:'#b7d84b',
+        warning:'#e8c547', danger:'#ec8a6f', accentContrast:'#0f380f'
       },
       light: {
-        bg0:'#8bac0f', bg1:'#9bbc0f', bg2:'#cadc9f', bg3:'#b6cc7c',
-        text1:'#0f380f', text2:'#1f4d1d', text3:'#306230',
-        accent:'#0f380f', accent2:'#306230', borderSoft:'#4f6d2f',
-        borderStrong:'#274f27', info:'#214f27', success:'#1d5b28',
-        danger:'#6b2f24', accentContrast:'#d8e9ae'
+        bg0:'#8bac0f', bg1:'#b4cf52', bg2:'#cadc9f', bg3:'#bdd286',
+        text1:'#0f380f', text2:'#183f17', text3:'#1a3f19',
+        accent:'#0f380f', accent2:'#306230', borderSoft:'#7f9a3a',
+        borderStrong:'#274f27', info:'#163f1a', success:'#174f22',
+        warning:'#5a3b00', danger:'#6b1f16', accentContrast:'#d8e9ae'
       }
     }
   };
@@ -119,19 +132,19 @@
   };
 
   var shapeOptions = {
-    square:{sm:'0px', md:'0px', lg:'0px'},
-    pixel:{sm:'2px', md:'4px', lg:'6px'},
-    rounded:{sm:'10px', md:'14px', lg:'20px'},
-    pill:{sm:'18px', md:'24px', lg:'30px'}
+    square:{xs:'0px', sm:'0px', md:'0px', lg:'0px'},
+    pixel:{xs:'0px', sm:'2px', md:'4px', lg:'6px'},
+    rounded:{xs:'4px', sm:'8px', md:'12px', lg:'16px'},
+    pill:{xs:'8px', sm:'18px', md:'22px', lg:'26px'}
   };
   var fontOptions = {
     modern:{
-      ui:'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      display:'"Press Start 2P", monospace'
+      ui:'"Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
+      display:'"Press Start 2P", ui-monospace, monospace'
     },
     pixel:{
-      ui:'"Press Start 2P", monospace',
-      display:'"Press Start 2P", monospace'
+      ui:'"Press Start 2P", ui-monospace, monospace',
+      display:'"Press Start 2P", ui-monospace, monospace'
     },
     mono:{
       ui:'"SFMono-Regular", Consolas, "Liberation Mono", monospace',
@@ -157,10 +170,12 @@
     return luminance > .36 ? '#111111' : '#ffffff';
   }
 
+  // Pixel presets keep the pixel font for titles, tabs and numbers only (sentences and
+  // controls stay in the UI font so labels do not wrap or overflow).
   function baseStyle(name) {
-    if (name === 'retro') return {font:'pixel', shape:'pixel', shadow:'flat', density:'compact'};
+    if (name === 'retro') return {font:'modern', shape:'pixel', shadow:'flat', density:'compact'};
     if (name === 'cyberpunk') return {font:'modern', shape:'pixel', shadow:'glow', density:'comfortable'};
-    if (name === 'gameboy') return {font:'pixel', shape:'pixel', shadow:'flat', density:'compact'};
+    if (name === 'gameboy') return {font:'modern', shape:'pixel', shadow:'flat', density:'compact'};
     return {font:'modern', shape:'rounded', shadow:'soft', density:'comfortable'};
   }
 
@@ -212,50 +227,56 @@
     return root.dataset.uiTheme === 'light' ? 'light' : 'dark';
   }
 
+  var customStyleNames = [
+    '--vo-font-ui','--vo-font-pixel','--vo-radius-xs','--vo-radius-sm','--vo-radius-md','--vo-radius-lg',
+    '--vo-shadow-1','--vo-shadow-2','--vo-shadow-3','--vo-control-h','--vo-border-w'
+  ];
+
   function clearCustomProperties() {
-    [
-      'bg-0','bg-1','bg-2','bg-3','text-1','text-2','text-3','accent','accent-2',
-      'border-soft','border-strong','info','success','danger','accent-contrast',
-      'font-ui','font-display','radius-sm','radius-md','radius-lg','shadow',
-      'shadow-hard','control-height','space-scale'
-    ].forEach(function (name) {
-      root.style.removeProperty('--theme-' + name);
+    Object.keys(tokenNames).forEach(function (key) { root.style.removeProperty(tokenNames[key]); });
+    customStyleNames.forEach(function (name) { root.style.removeProperty(name); });
+  }
+
+  // Every CSS variable the Custom theme sets, per mode. Cached in localStorage so the inline
+  // <head> snippet on each page can paint the custom palette before any script loads.
+  function customVariables(theme, mode) {
+    var colors = theme.modes[mode];
+    var vars = {};
+    Object.keys(tokenNames).forEach(function (key) {
+      if (colors[key]) vars[tokenNames[key]] = colors[key];
     });
+    var fonts = fontOptions[theme.font];
+    var shape = shapeOptions[theme.shape];
+    vars['--vo-font-ui'] = fonts.ui;
+    vars['--vo-font-pixel'] = fonts.display;
+    vars['--vo-radius-xs'] = shape.xs;
+    vars['--vo-radius-sm'] = shape.sm;
+    vars['--vo-radius-md'] = shape.md;
+    vars['--vo-radius-lg'] = shape.lg;
+    vars['--vo-control-h'] = theme.density === 'compact' ? '34px' : '38px';
+    if (theme.shadow === 'flat') {
+      vars['--vo-border-w'] = '2px';
+      vars['--vo-shadow-1'] = '3px 3px 0 ' + colors.borderSoft;
+      vars['--vo-shadow-2'] = '4px 4px 0 ' + colors.borderStrong;
+      vars['--vo-shadow-3'] = '6px 6px 0 ' + colors.borderStrong;
+    } else if (theme.shadow === 'glow') {
+      vars['--vo-shadow-2'] = '0 0 18px color-mix(in srgb, ' + colors.accent + ' 25%, transparent)';
+      vars['--vo-shadow-3'] = '0 18px 60px color-mix(in srgb, ' + colors.accent + ' 18%, transparent), 0 0 24px color-mix(in srgb, ' + colors.accent2 + ' 12%, transparent)';
+    }
+    return vars;
   }
 
   function applyCustomVariables(custom) {
     var theme = normalizeCustom(custom);
     root.dataset.uiFontStyle = theme.font;
-    var colors = theme.modes[currentMode()];
-    var map = {
-      bg0:'bg-0', bg1:'bg-1', bg2:'bg-2', bg3:'bg-3',
-      text1:'text-1', text2:'text-2', text3:'text-3',
-      accent:'accent', accent2:'accent-2', borderSoft:'border-soft',
-      borderStrong:'border-strong', info:'info', success:'success',
-      danger:'danger', accentContrast:'accent-contrast'
-    };
-    Object.keys(map).forEach(function (key) {
-      root.style.setProperty('--theme-' + map[key], colors[key]);
-    });
-    var fonts = fontOptions[theme.font];
-    var shape = shapeOptions[theme.shape];
-    root.style.setProperty('--theme-font-ui', fonts.ui);
-    root.style.setProperty('--theme-font-display', fonts.display);
-    root.style.setProperty('--theme-radius-sm', shape.sm);
-    root.style.setProperty('--theme-radius-md', shape.md);
-    root.style.setProperty('--theme-radius-lg', shape.lg);
-    root.style.setProperty('--theme-control-height', theme.density === 'compact' ? '36px' : '42px');
-    root.style.setProperty('--theme-space-scale', theme.density === 'compact' ? '.86' : '1');
-    if (theme.shadow === 'flat') {
-      root.style.setProperty('--theme-shadow', '4px 4px 0 color-mix(in srgb, var(--theme-border-strong) 82%, #000)');
-      root.style.setProperty('--theme-shadow-hard', '3px 3px 0 var(--theme-border-strong)');
-    } else if (theme.shadow === 'glow') {
-      root.style.setProperty('--theme-shadow', '0 18px 60px color-mix(in srgb, var(--theme-accent) 19%, transparent), 0 0 24px color-mix(in srgb, var(--theme-accent-2) 12%, transparent)');
-      root.style.setProperty('--theme-shadow-hard', '0 0 15px color-mix(in srgb, var(--theme-accent) 45%, transparent)');
-    } else {
-      root.style.setProperty('--theme-shadow', '0 24px 70px color-mix(in srgb, var(--theme-bg-0) 78%, transparent)');
-      root.style.setProperty('--theme-shadow-hard', '0 8px 24px color-mix(in srgb, var(--theme-bg-0) 42%, transparent)');
-    }
+    var vars = customVariables(theme, currentMode());
+    Object.keys(vars).forEach(function (name) { root.style.setProperty(name, vars[name]); });
+    try {
+      localStorage.setItem(CUSTOM_VARS_KEY, JSON.stringify({
+        dark: customVariables(theme, 'dark'),
+        light: customVariables(theme, 'light')
+      }));
+    } catch (e) { /* The theme still applies for this page. */ }
   }
 
   function syncModeButtons() {
@@ -265,15 +286,9 @@
       button.classList.toggle('active', active);
       button.setAttribute('aria-pressed', active ? 'true' : 'false');
     });
-    var dockButton = document.getElementById('btn-ui-theme');
-    if (dockButton) {
-      var next = mode === 'dark' ? 'light' : 'dark';
-      dockButton.textContent = next === 'light' ? '☀️ Light' : '🌙 Dark';
-      dockButton.dataset.mobileLabel = dockButton.textContent;
-    }
     document.querySelectorAll('[data-ui-theme-toggle]').forEach(function (button) {
       var next = mode === 'dark' ? 'light' : 'dark';
-      button.textContent = next === 'light' ? '☀️ Light' : '🌙 Dark';
+      button.textContent = next === 'light' ? 'Light' : 'Dark';
     });
   }
 
@@ -295,8 +310,8 @@
     if (!meta) return;
     var preset = currentPreset();
     var color;
-    if (preset === 'custom') color = loadCustom().modes[currentMode()].bg0;
-    else color = palettes[preset][currentMode()].bg0;
+    if (preset === 'custom') color = loadCustom().modes[currentMode()].bg1;
+    else color = palettes[preset][currentMode()].bg1;
     meta.setAttribute('content', color);
   }
 
@@ -406,20 +421,14 @@
     if (scope.querySelectorAll) scope.querySelectorAll('button').forEach(syncIconOnlyButton);
   }
 
+  // Tag symbol-only buttons once per surface instead of observing every DOM change in the page
+  // (a whole-document observer ran on every streamed chat token). Windows opened through
+  // VOUI.openWindow fire vo:window-open, which re-tags that window.
   function watchIconOnlyButtons() {
     syncIconOnlyButtons(document);
-    if (!document.body) return;
-    var observer = new MutationObserver(function (records) {
-      records.forEach(function (record) {
-        var target = record.target.nodeType === 1 ? record.target : record.target.parentElement;
-        var targetButton = target && target.closest ? target.closest('button') : null;
-        if (targetButton) syncIconOnlyButton(targetButton);
-        record.addedNodes.forEach(function (node) {
-          if (node.nodeType === 1) syncIconOnlyButtons(node);
-        });
-      });
+    window.addEventListener('vo:window-open', function (event) {
+      syncIconOnlyButtons(event.detail && event.detail.element);
     });
-    observer.observe(document.body, {subtree:true, childList:true, characterData:true});
   }
 
   function labeledSelect(labelText, field, choices) {
@@ -455,7 +464,7 @@
     var modeBar = element('div', 'theme-mode-bar');
     modeBar.appendChild(element('span', 'theme-mode-label', 'Appearance'));
     var modeGroup = element('div', 'theme-segmented');
-    [['dark','🌙 Dark'],['light','☀️ Light']].forEach(function (choice) {
+    [['dark','Dark'],['light','Light']].forEach(function (choice) {
       var button = element('button', '', choice[1]);
       button.type = 'button';
       button.dataset.themeMode = choice[0];
@@ -665,6 +674,8 @@
   }
 
   window.VOThemeSuite = {
+    tagIconButtons:syncIconOnlyButtons,
+    palettes:palettes,
     applyPreset:applyPreset,
     setMode:setMode,
     getPreset:currentPreset,

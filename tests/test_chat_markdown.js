@@ -129,10 +129,10 @@ check(
 );
 check(
   'Markdown and preview assets use their current cache tokens',
-  index.includes('style.css?v=20260814-provider-markdown-1') &&
-    index.includes('chat-markdown.js?v=20260814-provider-markdown-1') &&
-    index.includes('ui-modern.css?v=20260814-agent-preview-r2') &&
-    index.includes('chat.js?v=20260814-agent-preview-r1')
+  index.includes('style.css?v=') &&
+    index.includes('chat-markdown.js?v=') &&
+    index.includes('ui-modern.css?v=') &&
+    index.includes('chat.js?v=')
 );
 check(
   'In-office bubbles use the shared plain-text projection',

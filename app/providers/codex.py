@@ -22,13 +22,23 @@ import tomllib
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .file_safety import backup_files
+from .file_safety import backup_files, directory_has_content, remove_agent_folder
+from .cli_runner import safe_session_id
+from .process_env import agent_env
+import data_owner   # (folders and files made as root keep the data folder's owner)
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 _ACTIVE_RUNS: dict[str, "CodexAppServerClient"] = {}
 _ACTIVE_RUNS_LOCK = threading.Lock()
+
+def _flag(value, env_key, default=True):
+    """An on/off setting: the value given (the office's settings), else the environment's, else default."""
+    if value is None:
+        value = os.environ.get(env_key, default)
+    return str(value).lower() not in ("0", "false", "no", "off")
+
 
 
 @dataclass
@@ -43,11 +53,11 @@ class CodexProvider:
     model: str = ""
     sandbox: str = "workspace-write"
     approval_policy: str = "never"
-    prefer_app_server: bool = True
+    prefer_app_server: bool | None = None
     main_workspace: str | None = None
-    include_main: bool = True
-    include_native_agents: bool = True
-    register_native_agents: bool = True
+    include_main: bool | None = None
+    include_native_agents: bool | None = None
+    register_native_agents: bool | None = None
 
     provider_kind: str = "codex"
     provider_type: str = "harness"
@@ -74,10 +84,10 @@ class CodexProvider:
         self.sandbox = str(self.sandbox or "workspace-write")
         self.approval_policy = str(self.approval_policy or "never")
         self.model = str(self.model or "")
-        self.prefer_app_server = str(os.environ.get("VO_CODEX_PREFER_APP_SERVER", str(self.prefer_app_server))).lower() not in ("0", "false", "no", "off")
-        self.include_main = str(os.environ.get("VO_CODEX_INCLUDE_MAIN", str(self.include_main))).lower() not in ("0", "false", "no", "off")
-        self.include_native_agents = str(os.environ.get("VO_CODEX_INCLUDE_NATIVE_AGENTS", str(self.include_native_agents))).lower() not in ("0", "false", "no", "off")
-        self.register_native_agents = str(os.environ.get("VO_CODEX_REGISTER_NATIVE_AGENTS", str(self.register_native_agents))).lower() not in ("0", "false", "no", "off")
+        self.prefer_app_server = _flag(self.prefer_app_server, "VO_CODEX_PREFER_APP_SERVER")
+        self.include_main = _flag(self.include_main, "VO_CODEX_INCLUDE_MAIN")
+        self.include_native_agents = _flag(self.include_native_agents, "VO_CODEX_INCLUDE_NATIVE_AGENTS")
+        self.register_native_agents = _flag(self.register_native_agents, "VO_CODEX_REGISTER_NATIVE_AGENTS")
         self._auth_state_path = os.path.join(
             os.environ.get("VO_STATUS_DIR", "/data"),
             "provider-health-codex.json",
@@ -96,7 +106,8 @@ class CodexProvider:
     def test(self) -> dict[str, Any]:
         self._sync_auth_error_state()
         if not self.binary or not os.path.isfile(self.binary):
-            return {"ok": False, "error": f"Codex CLI not found. Set VO_CODEX_BIN or install codex on PATH.", "agents": []}
+            where = f" at {self.binary}" if self.binary and os.path.basename(self.binary) != self.binary else ""
+            return {"ok": False, "error": f"Codex CLI not found{where}. Set its Executable in More tools > Providers > Codex (or VO_CODEX_BIN), or install codex on PATH.", "agents": []}
         if not os.access(self.binary, os.X_OK):
             return {"ok": False, "error": f"Codex CLI is not executable at {self.binary}", "agents": []}
 
@@ -217,7 +228,7 @@ class CodexProvider:
         custom_directory: str | None = None,
     ) -> dict[str, Any]:
         if not self.is_available():
-            return {"ok": False, "error": f"Codex CLI is not available. Set VO_CODEX_BIN or install codex on PATH."}
+            return {"ok": False, "error": f"Codex CLI is not available. Set its Executable in More tools > Providers > Codex (or VO_CODEX_BIN), or install codex on PATH."}
 
         safe_profile = self._safe_profile_name(profile or name)
         if not safe_profile:
@@ -241,14 +252,17 @@ class CodexProvider:
         meta_path = os.path.join(agent_dir, "office-agent.json")
         if os.path.exists(meta_path):
             return {"ok": False, "error": f"Codex agent '{safe_profile}' already exists"}
+        if directory_has_content(agent_dir):
+            # Never adopt (and later delete) an existing folder such as a real project (BE-06).
+            return {"ok": False, "error": f"The folder {agent_dir} already exists and is not empty. Choose another agent ID or parent folder."}
 
         native_agent_path = self._native_agent_file_path(safe_profile) if mode == "standard" else ""
         should_register_native = mode == "standard" and self.register_native_agents and native_agent_path
         if should_register_native and os.path.exists(native_agent_path):
             return {"ok": False, "error": f"Native Codex agent '{safe_profile}' already exists in {native_agent_path}"}
 
-        os.makedirs(os.path.join(agent_dir, ".codex", "agents"), exist_ok=True)
-        os.makedirs(os.path.join(agent_dir, ".agents", "skills"), exist_ok=True)
+        data_owner.makedirs(os.path.join(agent_dir, ".codex", "agents"), exist_ok=True)
+        data_owner.makedirs(os.path.join(agent_dir, ".agents", "skills"), exist_ok=True)
         model_value = (model or self.model or "").strip()
         instructions = (prompt or role or "Codex Agent").strip()
         meta = {
@@ -263,6 +277,7 @@ class CodexProvider:
             "creationMode": mode,
             "customParentDirectory": os.path.dirname(agent_dir) if mode == "custom" else "",
             "createdAt": int(time.time()),
+            "writtenFiles": self._written_files(safe_profile),
         }
         if should_register_native:
             meta["nativeAgentPath"] = native_agent_path
@@ -302,11 +317,15 @@ class CodexProvider:
                 return {"ok": True, "deleted": True, "profile": safe_profile, "agentId": f"codex-{safe_profile}", "nativeAgentPath": native_path}
             external_dir = self._external_agent_dir(safe_profile)
             if external_dir and os.path.isdir(external_dir):
-                shutil.rmtree(external_dir)
+                external_meta = self._load_meta(external_dir)
+                # Custom parent folders may be a real project: remove only what the office wrote.
+                remove_agent_folder(external_dir, external_meta.get("writtenFiles") or self._written_files(safe_profile),
+                                    marker="office-agent.json")
                 self._remove_external_agent(safe_profile)
                 return {"ok": True, "deleted": True, "profile": safe_profile, "agentId": f"codex-{safe_profile}"}
             return {"ok": True, "deleted": False, "profile": safe_profile, "agentId": f"codex-{safe_profile}"}
-        shutil.rmtree(agent_dir)
+        remove_agent_folder(agent_dir, meta.get("writtenFiles") or self._written_files(safe_profile),
+                            managed_root=self.workspace_root or "", marker="office-agent.json")
         self._remove_external_agent(safe_profile)
         native_path = str(meta.get("nativeAgentPath") or "")
         if native_path and os.path.isfile(native_path) and self._is_native_agent_path(native_path):
@@ -500,9 +519,9 @@ class CodexProvider:
             "authFileMtime": self._auth_file_mtime(),
         }
         try:
-            os.makedirs(os.path.dirname(self._auth_state_path), exist_ok=True)
+            data_owner.makedirs(os.path.dirname(self._auth_state_path), exist_ok=True)
             tmp_path = f"{self._auth_state_path}.tmp-{os.getpid()}"
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            with data_owner.open_new(tmp_path, "w", encoding="utf-8") as f:
                 json.dump(state, f)
             os.replace(tmp_path, self._auth_state_path)
         except OSError:
@@ -769,6 +788,10 @@ class CodexProvider:
         if not os.path.isdir(agent_dir):
             return {"ok": False, "error": f"Codex agent workspace not found: {agent_dir}", "reply": "", "sessionId": session_id or ""}
 
+        try:
+            session_id = safe_session_id(session_id)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "reply": "", "sessionId": ""}
         prompt = self._delivery_prompt(agent_dir, message, safe_profile)
         cmd = [self.binary, "exec"]
         if session_id:
@@ -807,7 +830,7 @@ class CodexProvider:
             return {"ok": False, "error": str(exc), "reply": "", "sessionId": session_id or "", "exitCode": None}
 
     def _subprocess_env(self) -> dict[str, str]:
-        env = os.environ.copy()
+        env = agent_env()
         if self.home_path:
             env["CODEX_HOME"] = self.home_path
         return env
@@ -825,11 +848,11 @@ class CodexProvider:
 
     def _ensure_paths(self) -> None:
         if self.home_path:
-            os.makedirs(self.home_path, exist_ok=True)
+            data_owner.makedirs(self.home_path, exist_ok=True)
         if self.workspace_root:
-            os.makedirs(self.workspace_root, exist_ok=True)
+            data_owner.makedirs(self.workspace_root, exist_ok=True)
         if self.main_workspace:
-            os.makedirs(self.main_workspace, exist_ok=True)
+            data_owner.makedirs(self.main_workspace, exist_ok=True)
 
     def _thread_instructions(self, agent_dir: str, profile: str | None = None) -> str:
         meta = self._load_meta(agent_dir)
@@ -1106,13 +1129,21 @@ class CodexProvider:
 
     def _save_external_agents(self, agents: dict[str, str]) -> None:
         path = self._registry_path()
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data_owner.makedirs(os.path.dirname(path), exist_ok=True)
         data = {
             "schema": "my-virtual-office.codex-agent-registry.v1",
             "updatedAt": int(time.time()),
             "agents": {self._safe_profile_name(k): os.path.abspath(os.path.expanduser(v)) for k, v in sorted(agents.items()) if k and v},
         }
         self._write_json(path, data)
+
+    @staticmethod
+    def _written_files(profile: str) -> list[str]:
+        """Files and folders the office creates inside a Codex agent folder."""
+        return [
+            "IDENTITY.md", "AGENTS.md", ".codex/config.toml", f".codex/agents/{profile}.toml",
+            ".codex/agents", ".codex", ".agents/skills", ".agents",
+        ]
 
     def _save_external_agent(self, profile: str, agent_dir: str) -> None:
         agents = self._load_external_agents()
@@ -1183,6 +1214,12 @@ class CodexProvider:
 
     @staticmethod
     def _resolve_binary(value: str | None) -> str:
+        # A path that names a folder (set in Settings, the setup wizard or VO_CODEX_BIN) is that file and only that
+        # one: a missing one is reported as missing, by its path, never swapped for another codex found on PATH or
+        # through the environment (Docker's compose always sets VO_CODEX_BIN=codex). A bare name is looked up.
+        chosen = os.path.expanduser(str(value or "").strip())
+        if chosen and os.path.basename(chosen) != chosen:
+            return chosen
         candidates = [
             value,
             os.environ.get("VO_CODEX_BIN"),
@@ -1249,14 +1286,14 @@ class CodexProvider:
 
     @staticmethod
     def _write_text(path: str, content: str) -> None:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        data_owner.makedirs(os.path.dirname(path), exist_ok=True)
+        with data_owner.open_new(path, "w", encoding="utf-8") as f:
             f.write(content)
 
     @staticmethod
     def _write_json(path: str, data: dict[str, Any]) -> None:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        data_owner.makedirs(os.path.dirname(path), exist_ok=True)
+        with data_owner.open_new(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
     @staticmethod
@@ -1727,6 +1764,9 @@ class CodexAppRunState:
         self._reply_delta = ""
         self._reply_final = ""
         self._reasoning_parts: list[str] = []
+        # (one entry per reasoning item, in order: its streamed summary deltas, replaced by the completed item's own
+        # summary/content when it comes: the protocol sends both, and appending both showed the thinking twice)
+        self._reasoning_items: dict[str, dict[str, Any]] = {}
         self._plan = ""
         self._errors: list[str] = []
         self._tools: dict[str, dict[str, Any]] = {}
@@ -1751,7 +1791,8 @@ class CodexAppRunState:
         elif method in {"item/reasoning/summaryTextDelta", "item/reasoning/textDelta"}:
             delta = str(params.get("delta") or "")
             if delta:
-                self._reasoning_parts.append(delta)
+                self._reasoning_delta(str(params.get("itemId") or ""), delta,
+                                      params.get("summaryIndex", params.get("contentIndex")))
         elif method == "turn/plan/updated":
             plan = params.get("plan") if isinstance(params.get("plan"), list) else []
             lines = []
@@ -1871,6 +1912,17 @@ class CodexAppRunState:
     def reply_text(self) -> str:
         return self._reply_final or self._reply_delta
 
+    def _reasoning_delta(self, item_id: str, delta: str, index: Any = None) -> None:
+        entry = self._reasoning_items.get(item_id) if item_id else None
+        if entry is None:
+            self._reasoning_parts.append(delta)
+            if item_id:
+                self._reasoning_items[item_id] = {"at": len(self._reasoning_parts) - 1, "index": index}
+            return
+        sep = "\n\n" if index is not None and entry["index"] is not None and index != entry["index"] else ""
+        entry["index"] = index if index is not None else entry["index"]
+        self._reasoning_parts[entry["at"]] += sep + delta
+
     def thinking(self) -> str:
         parts = []
         if self._plan:
@@ -1903,9 +1955,17 @@ class CodexAppRunState:
                 self._reply_final = text
             return
         if item_type == "reasoning":
-            for part in (item.get("summary") or []) + (item.get("content") or []):
-                if isinstance(part, str) and part.strip():
-                    self._reasoning_parts.append(part)
+            parts = [p for p in (item.get("summary") or []) + (item.get("content") or []) if isinstance(p, str) and p.strip()]
+            if not parts:
+                return
+            text = "\n\n".join(parts)
+            entry = self._reasoning_items.get(str(item.get("id") or ""))
+            if entry is not None:
+                self._reasoning_parts[entry["at"]] = text
+            else:
+                self._reasoning_parts.append(text)
+                if item.get("id"):
+                    self._reasoning_items[str(item["id"])] = {"at": len(self._reasoning_parts) - 1, "index": None}
             return
 
         tool = self._tool_from_app_item(item, completed=completed)

@@ -3,66 +3,149 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Virtual Office — Setup</title>
-    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <meta name="theme-color" content="#070b13">
+    <title>Setup - My Virtual Office</title>
+    <script>try{document.documentElement.dataset.uiTheme=localStorage.getItem('vo-ui-theme')==='light'?'light':'dark';var p=localStorage.getItem('vo-ui-preset')||'classic';document.documentElement.dataset.uiPreset=/^(classic|retro|cyberpunk|gameboy|custom)$/.test(p)?p:'classic'}catch(e){document.documentElement.dataset.uiTheme='dark';document.documentElement.dataset.uiPreset='classic'}</script>
+    <script src="vo-auth.js"></script>
+    <link rel="stylesheet" href="ui-tokens.css?v=20261101-v08">
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
-            background: #0a0a0f;
-            color: #e8e8f0;
-            font-family: Arial, sans-serif;
+            background: var(--vo-surface-0, #070b13);
+            color: var(--vo-text-1, #f3f6fb);
+            font-family: var(--vo-font-ui, system-ui, sans-serif);
             display: flex;
             justify-content: center;
-            align-items: center;
+            align-items: flex-start;
             min-height: 100vh;
-            padding: 20px;
+            padding: 24px 16px 48px;
         }
+        a { color: var(--vo-info, #60a5fa); }
+        code { color: var(--vo-info, #60a5fa); font-family: var(--vo-font-mono, monospace); font-size: .9em; overflow-wrap: anywhere; }
         .setup-card {
-            background: #1a1a2e;
-            border: 2px solid #ffd700;
-            border-radius: 16px;
-            padding: 40px;
-            max-width: 600px;
+            background: var(--vo-surface-1, #0d1422);
+            border: var(--vo-border-w, 1px) solid var(--vo-border-strong, #5b6f8c);
+            border-radius: var(--vo-radius-lg, 16px);
+            padding: 32px;
+            max-width: 640px;
             width: 100%;
-            box-shadow: 0 0 40px rgba(255, 215, 0, 0.15);
+            box-shadow: var(--vo-shadow-3, 0 24px 64px rgba(0,0,0,.5));
         }
-        h1 { font-family: 'Press Start 2P', cursive; font-size: 16px; color: #ffd700; text-align: center; margin-bottom: 8px; }
-        .subtitle { text-align: center; color: #888; font-size: 15px; margin-bottom: 32px; }
+        h1 { font-family: var(--vo-font-pixel, monospace); font-size: 16px; color: var(--vo-accent, #f5c84c); text-align: center; margin-bottom: 8px; line-height: 1.5; }
+        .subtitle { text-align: center; color: var(--vo-text-2, #c3cddc); font-size: 15px; margin-bottom: 24px; }
         .step { display: none; }
         .step.active { display: block; }
-        .step-title { font-family: 'Press Start 2P', cursive; font-size: 10px; color: #ffd700; margin-bottom: 16px; }
-        .step-desc { color: #aaa; font-size: 15px; margin-bottom: 20px; line-height: 1.6; }
-        label { display: block; font-size: 14px; color: #ccc; margin-bottom: 6px; margin-top: 16px; }
-        input[type=text], input[type=password], input[type=number], select { width: 100%; padding: 12px 16px; background: #0d0d1e; border: 1px solid #2a2a4e; border-radius: 8px; color: #e8e8f0; font-size: 15px; outline: none; }
-        input:focus { border-color: #ffd700; }
-        .btn-row { display: flex; justify-content: space-between; margin-top: 28px; gap: 12px; }
-        button { padding: 12px 28px; border: 2px solid #ffd700; background: #1a1a2e; color: #ffd700; font-family: 'Press Start 2P', cursive; font-size: 10px; border-radius: 8px; cursor: pointer; transition: all 0.2s; }
-        button:hover { background: #ffd700; color: #0a0a0f; }
-        button.secondary { border-color: #555; color: #888; }
-        button.secondary:hover { background: #333; color: #fff; }
-        .status-box { margin-top: 16px; padding: 14px; border-radius: 8px; font-size: 15px; }
-        .status-box.success { background: rgba(76,175,80,0.15); border: 1px solid #4caf50; color: #81c784; }
-        .status-box.error { background: rgba(244,67,54,0.15); border: 1px solid #f44336; color: #ef9a9a; }
-        .status-box.info { background: rgba(33,150,243,0.15); border: 1px solid #2196f3; color: #90caf9; }
-        .agent-list-preview { max-height: 200px; overflow-y: auto; margin-top: 12px; }
-        .agent-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #1a1a2e; font-size: 15px; }
+        .step-title { font-family: var(--vo-font-pixel, monospace); font-size: 11px; color: var(--vo-accent, #f5c84c); margin-bottom: 14px; line-height: 1.6; }
+        .step-desc { color: var(--vo-text-2, #c3cddc); font-size: 15px; margin-bottom: 18px; line-height: 1.6; }
+        label { display: block; font-size: 14px; color: var(--vo-text-2, #c3cddc); margin-bottom: 6px; margin-top: 16px; }
+        .optional { color: var(--vo-text-3, #8d9ab0); font-size: 12px; }
+        input[type=text], input[type=password], input[type=number], input[type=url], select {
+            width: 100%; min-height: 44px; padding: 10px 14px;
+            background: var(--vo-surface-2, #131c2c); border: 1px solid var(--vo-border-strong, #5b6f8c);
+            border-radius: var(--vo-radius-sm, 8px); color: var(--vo-text-1, #f3f6fb); font-size: 15px; font-family: inherit; outline: none;
+        }
+        input:focus-visible, select:focus-visible, button:focus-visible, a:focus-visible { outline: none; box-shadow: var(--vo-focus, 0 0 0 2px #0d1422, 0 0 0 4px #f5c84c); }
+        input.mono { font-family: var(--vo-font-mono, monospace); letter-spacing: 1px; }
+        .check { display: flex; align-items: center; gap: 10px; margin-top: 12px; color: var(--vo-text-1, #f3f6fb); cursor: pointer; }
+        .check input { width: 18px; height: 18px; accent-color: var(--vo-accent, #f5c84c); }
+        .row2 { display: flex; gap: 8px; }
+        .row2 > :first-child { flex: 2; }
+        .row2 > :last-child { flex: 1; }
+        .btn-row { display: flex; justify-content: space-between; align-items: center; margin-top: 28px; gap: 12px; flex-wrap: wrap; }
+        .inline-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+        button {
+            min-height: 44px; padding: 10px 20px; border: 1px solid var(--vo-accent, #f5c84c);
+            background: var(--vo-accent, #f5c84c); color: var(--vo-accent-ink, #1a1405);
+            font-family: var(--vo-font-ui, system-ui, sans-serif); font-size: 14px; font-weight: 700;
+            border-radius: var(--vo-radius-sm, 8px); cursor: pointer; transition: filter .15s;
+        }
+        button:hover { filter: brightness(1.08); }
+        /* Pixel icons (the sprite is the first thing in the body). */
+        .vo-icon { width: 14px; height: 14px; margin-right: 6px; fill: currentColor; shape-rendering: crispEdges; vertical-align: -2px; flex: none; }
+        h1 .vo-icon { width: 16px; height: 16px; color: var(--vo-accent, #f5c84c); vertical-align: -1px; }
+        button:disabled { opacity: .55; cursor: progress; }
+        button.secondary { border-color: var(--vo-border-strong, #5b6f8c); background: var(--vo-surface-3, #1b2638); color: var(--vo-text-1, #f3f6fb); }
+        button.small { min-height: 38px; padding: 8px 14px; font-size: 13px; }
+        button.danger { border-color: var(--vo-danger, #fb7185); background: transparent; color: var(--vo-danger, #fb7185); }
+        .status-box { margin-top: 12px; padding: 12px 14px; border-radius: var(--vo-radius-sm, 8px); font-size: 14px; line-height: 1.55; overflow-wrap: anywhere; }
+        .status-box.success { background: var(--vo-success-soft, rgba(74,222,128,.14)); border: 1px solid var(--vo-success, #4ade80); color: var(--vo-text-1, #f3f6fb); }
+        .status-box.error { background: var(--vo-danger-soft, rgba(251,113,133,.14)); border: 1px solid var(--vo-danger, #fb7185); color: var(--vo-text-1, #f3f6fb); }
+        .status-box.info { background: var(--vo-info-soft, rgba(96,165,250,.14)); border: 1px solid var(--vo-info, #60a5fa); color: var(--vo-text-1, #f3f6fb); }
+        .status-box.warn { background: var(--vo-warning-soft, rgba(251,191,36,.14)); border: 1px solid var(--vo-warning, #fbbf24); color: var(--vo-text-1, #f3f6fb); }
+        .status-box .sub { color: var(--vo-text-2, #c3cddc); font-size: 13px; }
+        .agent-list-preview { max-height: 220px; overflow-y: auto; margin-top: 12px; }
+        .agent-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--vo-border-subtle, #243247); font-size: 15px; }
         .agent-row .emoji { font-size: 18px; }
-        .agent-row .name { color: #e8e8f0; }
-        .agent-row .role { color: #888; font-size: 13px; }
+        .agent-row .role { color: var(--vo-text-3, #8d9ab0); font-size: 13px; }
         .progress-dots { display: flex; justify-content: center; gap: 8px; margin-bottom: 24px; }
-        .dot { width: 10px; height: 10px; border-radius: 50%; background: #2a2a4e; transition: background 0.3s; }
-        .dot.active { background: #ffd700; }
-        .dot.done { background: #4caf50; }
-        .note { background: #0d0d1e; border: 1px solid #2a2a4e; border-radius: 8px; padding: 16px; margin-top: 12px; font-size: 13px; color: #999; line-height: 1.6; }
-        .note b { color: #ffd700; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--vo-border-strong, #5b6f8c); transition: background .3s; }
+        .dot.active { background: var(--vo-accent, #f5c84c); }
+        .dot.done { background: var(--vo-success, #4ade80); }
+        .note { background: var(--vo-surface-2, #131c2c); border: 1px solid var(--vo-border-subtle, #243247); border-radius: var(--vo-radius-sm, 8px); padding: 16px; margin-top: 14px; font-size: 14px; color: var(--vo-text-2, #c3cddc); line-height: 1.6; }
+        .note b { color: var(--vo-text-1, #f3f6fb); }
+        .note.warn { border-color: var(--vo-warning, #fbbf24); }
+        .hint { font-size: 13px; color: var(--vo-text-3, #8d9ab0); margin: 6px 0 4px; line-height: 1.5; }
+        .section { border-top: 1px solid var(--vo-border-subtle, #243247); padding-top: 16px; margin-top: 20px; }
+        .section-title { font-size: 15px; color: var(--vo-accent, #f5c84c); font-weight: 700; margin-bottom: 6px; }
+        .hermes-connection { border: 1px solid var(--vo-border-subtle, #243247); padding: 12px; margin: 0 0 10px; border-radius: var(--vo-radius-sm, 8px); }
+        .hermes-connection .conn-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+        .section-subtitle { font-size: 13px; font-weight: 700; margin: 14px 0 4px; }
+        .hermes-ap-form { margin: 10px 0; }
+        /* The layer's OpenClaw connection in the OpenClaw step (Agent Providers' card; its colours from provider-settings) */
+        #oc-layer-status { --ps-border: var(--vo-border-subtle, #2a3346); --ps-card: var(--vo-surface-2, #131c2c); --ps-muted: var(--vo-text-3, #9aa3b5);
+            --ps-green: var(--vo-success, #4caf7d); --ps-red: var(--vo-danger, #e5534b); margin-top: 14px; }
+        #oc-layer-status .ap-tags { margin-bottom: 2px; }
+        #oc-layer-status .ap-status-link { display: inline-block; padding: 8px 0; }
+        #hermes-ap-form select.ap-input { min-height: 44px; background: var(--vo-surface-2, #131c2c); border: 1px solid var(--vo-border-strong, #5b6f8c); }
+        .hermes-bridge { margin-top: 12px; }
+        .hermes-bridge > summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; font-size: 13px; color: var(--vo-text-2, #b8c3d6); }
+        .rerun-banner { margin-bottom: 20px; }
+        .summary-list { margin: 8px 0 0 1.2em; line-height: 1.7; }
+        [hidden] { display: none !important; }
+        @media (max-width: 640px) {
+            body { padding: 12px 8px 32px; }
+            .setup-card { padding: 20px 16px; border-radius: var(--vo-radius-md, 12px); }
+            h1 { font-size: 13px; }
+            .btn-row > button { flex: 1 1 auto; }
+        }
     </style>
+    <link rel="stylesheet" href="v08-panels.css?v=20261101-v08">
+    <link rel="stylesheet" href="agent-providers.css?v=20261101-hp3">
 </head>
-<body>
-    <div class="setup-card">
-        <h1>⚡ MY VIRTUAL OFFICE</h1>
-        <p class="subtitle">First-time setup</p>
+<body class="setup-page">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+      <symbol id="i-office" viewBox="0 0 10 10"><path d="M0 0h10v1h-10zM0 1h1v1h-1zM3 1h1v1h-1zM6 1h1v1h-1zM9 1h1v1h-1zM0 2h1v1h-1zM3 2h1v1h-1zM6 2h1v1h-1zM9 2h1v1h-1zM0 3h10v1h-10zM0 4h1v1h-1zM3 4h1v1h-1zM6 4h1v1h-1zM9 4h1v1h-1zM0 5h1v1h-1zM3 5h1v1h-1zM6 5h1v1h-1zM9 5h1v1h-1zM0 6h10v1h-10zM0 7h1v1h-1zM4 7h2v1h-2zM9 7h1v1h-1zM0 8h1v1h-1zM4 8h2v1h-2zM9 8h1v1h-1zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-key" viewBox="0 0 10 10"><path d="M2 0h4v1h-4zM1 1h1v1h-1zM6 1h1v1h-1zM1 2h1v1h-1zM3 2h2v1h-2zM6 2h1v1h-1zM1 3h1v1h-1zM6 3h1v1h-1zM2 4h4v1h-4zM3 5h1v1h-1zM3 6h3v1h-3zM3 7h1v1h-1zM3 8h3v1h-3z"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 10 10"><path d="M3 0h4v1h-4zM2 1h1v1h-1zM7 1h1v1h-1zM2 2h1v1h-1zM7 2h1v1h-1zM1 3h8v1h-8zM1 4h8v1h-8zM1 5h3v1h-3zM6 5h3v1h-3zM1 6h3v1h-3zM6 6h3v1h-3zM1 7h8v1h-8zM1 8h8v1h-8z"/></symbol>
+      <symbol id="i-play" viewBox="0 0 10 10"><path d="M2 1h1v8h-1zM3 2h2v6h-2zM5 3h2v4h-2zM7 4h1v2h-1z"/></symbol>
+      <symbol id="i-check" viewBox="0 0 10 10"><path d="M9 1h1v1h-1zM8 2h2v1h-2zM7 3h2v1h-2zM0 4h1v1h-1zM6 4h2v1h-2zM0 5h2v1h-2zM5 5h2v1h-2zM1 6h2v1h-2zM4 6h2v1h-2zM2 7h3v1h-3zM3 8h1v1h-1z"/></symbol>
+      <symbol id="i-close" viewBox="0 0 10 10"><path d="M1 1h1v1h-1zM8 1h1v1h-1zM2 2h1v1h-1zM7 2h1v1h-1zM3 3h1v1h-1zM6 3h1v1h-1zM4 4h2v1h-2zM4 5h2v1h-2zM3 6h1v1h-1zM6 6h1v1h-1zM2 7h1v1h-1zM7 7h1v1h-1zM1 8h1v1h-1zM8 8h1v1h-1z"/></symbol>
+      <symbol id="i-warn" viewBox="0 0 10 10"><path d="M4 0h2v1h-2zM4 1h2v1h-2zM3 2h4v1h-4zM3 3h1v1h-1zM6 3h1v1h-1zM4 3h2v3h-2zM2 4h1v2h-1zM7 4h1v2h-1zM1 6h1v2h-1zM8 6h1v2h-1zM4 7h2v1h-2zM0 8h1v1h-1zM9 8h1v1h-1zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-agents" viewBox="0 0 10 10"><path d="M1 1h2v1h-2zM7 1h2v1h-2zM0 2h4v1h-4zM6 2h4v1h-4zM0 3h4v1h-4zM6 3h4v1h-4zM1 4h2v1h-2zM7 4h2v1h-2zM0 6h4v1h-4zM6 6h4v1h-4zM0 7h4v1h-4zM6 7h4v1h-4zM0 8h4v1h-4zM6 8h4v1h-4z"/></symbol>
+      <symbol id="i-chat" viewBox="0 0 10 10"><path d="M1 1h8v1h-8zM0 2h1v1h-1zM9 2h1v1h-1zM0 3h1v1h-1zM2 3h2v1h-2zM5 3h2v1h-2zM9 3h1v1h-1zM0 4h1v1h-1zM9 4h1v1h-1zM0 5h1v1h-1zM9 5h1v1h-1zM1 6h3v1h-3zM5 6h4v1h-4zM3 7h1v1h-1zM5 7h1v1h-1zM3 8h2v1h-2z"/></symbol>
+      <symbol id="i-code" viewBox="0 0 10 10"><path d="M3 2h1v1h-1zM2 3h1v1h-1zM1 4h1v2h-1zM2 6h1v1h-1zM3 7h1v1h-1zM6 2h1v1h-1zM7 3h1v1h-1zM8 4h1v2h-1zM7 6h1v1h-1zM6 7h1v1h-1z"/></symbol>
+      <symbol id="i-edit" viewBox="0 0 10 10"><path d="M7 0h2v1h-2zM6 1h4v1h-4zM5 2h5v1h-5zM4 3h5v1h-5zM3 4h5v1h-5zM2 5h5v1h-5zM1 6h5v1h-5zM1 7h4v1h-4zM0 8h2v1h-2zM0 9h1v1h-1z"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 10 10"><path d="M0 1h4v1h-4zM0 2h10v1h-10zM0 3h1v6h-1zM9 3h1v6h-1zM1 4h8v1h-8zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><path fill-rule="evenodd" shape-rendering="geometricPrecision" d="M9.57 4.06 L10.06 0.97 L13.94 0.97 L14.43 4.06 L15.90 4.67 L18.42 2.83 L21.17 5.58 L19.33 8.10 L19.94 9.57 L23.03 10.06 L23.03 13.94 L19.94 14.43 L19.33 15.90 L21.17 18.42 L18.42 21.17 L15.90 19.33 L14.43 19.94 L13.94 23.03 L10.06 23.03 L9.57 19.94 L8.10 19.33 L5.58 21.17 L2.83 18.42 L4.67 15.90 L4.06 14.43 L0.97 13.94 L0.97 10.06 L4.06 9.57 L4.67 8.10 L2.83 5.58 L5.58 2.83 L8.10 4.67Z M15.6 12A3.6 3.6 0 1 0 8.4 12A3.6 3.6 0 1 0 15.6 12Z"/></symbol>
+      <symbol id="i-help" viewBox="0 0 10 10"><path d="M2 0h4v1h-4zM1 1h2v1h-2zM5 1h2v1h-2zM5 2h2v1h-2zM4 3h2v1h-2zM3 4h2v1h-2zM3 5h2v1h-2zM3 7h2v1h-2zM3 8h2v1h-2z"/></symbol>
+      <symbol id="i-plug" viewBox="0 0 10 10"><path d="M2 0h1v1h-1zM5 0h1v1h-1zM2 1h1v1h-1zM5 1h1v1h-1zM1 2h6v1h-6zM1 3h6v1h-6zM1 4h6v1h-6zM2 5h4v1h-4zM3 6h2v1h-2zM3 7h2v1h-2zM3 8h2v1h-2z"/></symbol>
+      <symbol id="i-pulse" viewBox="0 0 10 10"><path d="M3 2h1v1h-1zM3 3h1v1h-1zM0 4h1v1h-1zM2 4h1v1h-1zM4 4h1v1h-1zM8 4h2v1h-2zM1 5h1v1h-1zM4 5h1v1h-1zM7 5h1v1h-1zM4 6h1v1h-1zM6 6h1v1h-1zM5 7h1v1h-1z"/></symbol>
+      <symbol id="i-search" viewBox="0 0 10 10"><path d="M2 0h4v1h-4zM1 1h1v1h-1zM6 1h1v1h-1zM0 2h1v3h-1zM7 2h1v3h-1zM1 5h1v1h-1zM6 5h1v1h-1zM2 6h4v1h-4zM6 6h2v1h-2zM7 7h2v1h-2zM8 8h2v2h-2z"/></symbol>
+    </svg>
+    <main class="setup-card">
+        <h1><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-office"/></svg> MY VIRTUAL OFFICE</h1>
+        <p class="subtitle" id="setup-subtitle">First-time setup</p>
 
-        <div class="progress-dots">
+        <div id="rerun-banner" class="status-box warn rerun-banner" role="note" hidden>
+            <b>This office is already set up.</b> Every step shows your current settings. Only the steps you change are saved; everything else stays exactly as it is.
+        </div>
+        <div id="prefill-error" class="status-box error" role="alert" hidden>
+            <span id="prefill-error-text">Your current settings could not be read.</span>
+            Saving is paused so nothing gets overwritten.
+            <div class="inline-actions"><button type="button" class="small" data-action="retry-prefill">↻ Retry</button></div>
+        </div>
+
+        <div class="progress-dots" aria-hidden="true">
             <div class="dot active" id="dot-0"></div>
             <div class="dot" id="dot-1"></div>
             <div class="dot" id="dot-2"></div>
@@ -70,964 +153,1129 @@
             <div class="dot" id="dot-4"></div>
             <div class="dot" id="dot-5"></div>
             <div class="dot" id="dot-6"></div>
+            <div class="dot" id="dot-7"></div>
         </div>
+        <p class="hint" id="step-counter" aria-live="polite" style="text-align:center;margin:-14px 0 18px">Step 1 of 8</p>
 
         <!-- Step 0: License Key -->
-        <div class="step active" id="step-0">
-            <div class="step-title">LICENSE KEY</div>
+        <section class="step active" id="step-0" aria-labelledby="t-0">
+            <h2 class="step-title" id="t-0">LICENSE KEY</h2>
             <div class="step-desc">Enter your license key to unlock all features, or continue with the free demo.</div>
-            <label>License Key</label>
-            <input type="text" id="s-license-key" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" style="font-family:monospace;letter-spacing:1px;" autocomplete="off">
-            <div id="license-status" style="margin-top:12px;"></div>
-            <div class="btn-row" style="margin-top:12px;">
-                <button onclick="activateLicense()" style="font-size:9px;padding:8px 16px;">🔑 ACTIVATE</button>
+            <label for="s-license-key">License Key</label>
+            <input type="text" id="s-license-key" class="mono" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" autocomplete="off" spellcheck="false">
+            <div id="license-status"></div>
+            <div class="inline-actions">
+                <button type="button" class="small" data-action="activate-license"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-key"/></svg>Activate</button>
             </div>
-            <div class="note" style="margin-top:20px;">
-                <b>Demo mode:</b> Free to use with up to 3 agents. Browser panel, SMS panel, model manager, cron manager, and whisper are locked.<br><br>
+            <div class="note">
+                <b>Demo mode:</b> Free to use with up to 3 agents. Browser panel, SMS panel, cron manager, and voice input are locked.<br><br>
                 <b>Full license ($35.99):</b> Unlimited agents, all features unlocked.<br>
-                <b>Early bird ($9.99):</b> Same as full — limited-time launch price.<br><br>
-                Get your key at <a href="https://myvirtualoffice.ai" style="color:#90caf9;" target="_blank">myvirtualoffice.ai</a>
+                <b>Early bird ($9.99):</b> Same as full, at the launch price.<br><br>
+                Get your key at <a href="https://myvirtualoffice.ai" target="_blank" rel="noopener noreferrer">myvirtualoffice.ai</a>
             </div>
             <div class="btn-row">
                 <span></span>
-                <button onclick="nextStep(1)">SKIP / CONTINUE →</button>
+                <button type="button" data-step="1">Skip / Continue →</button>
             </div>
-        </div>
+        </section>
 
         <!-- Step 1: Office Name -->
-        <div class="step" id="step-1">
-            <div class="step-title">1. NAME YOUR OFFICE</div>
+        <section class="step" id="step-1" aria-labelledby="t-1">
+            <h2 class="step-title" id="t-1">1. NAME YOUR OFFICE</h2>
             <div class="step-desc">Give your virtual office a name. This appears in the sidebar and page title.</div>
-            <label>Office Name</label>
-            <input type="text" id="s-name" value="My Virtual Office" placeholder="e.g. Acme Corp HQ">
-            <label>Weather Location <span style="color:#666;font-size:12px">(optional)</span></label>
-            <div style="display:flex;gap:8px">
-                <input type="text" id="s-weather-city" value="" placeholder="e.g. Miami" style="flex:2">
-                <input type="text" id="s-weather-state" value="" placeholder="e.g. FL" style="flex:1">
+            <label for="s-name">Office Name</label>
+            <input type="text" id="s-name" data-section="office" placeholder="e.g. Acme Corp HQ" autocomplete="off">
+            <label for="s-weather-city">Weather Location <span class="optional">(optional)</span></label>
+            <div class="row2">
+                <input type="text" id="s-weather-city" data-section="weather" placeholder="City, e.g. Austin" aria-label="Weather city" autocomplete="off">
+                <input type="text" id="s-weather-state" data-section="weather" placeholder="State or country" aria-label="Weather state or country" autocomplete="off">
             </div>
             <div class="btn-row">
-                <button class="secondary" onclick="nextStep(0)">← BACK</button>
-                <button onclick="nextStep(2)">NEXT →</button>
+                <button type="button" class="secondary" data-step="0">← Back</button>
+                <button type="button" data-step="2">Next →</button>
             </div>
-        </div>
+        </section>
 
         <!-- Step 2: Connect Agent Providers -->
-        <div class="step" id="step-2">
-            <div class="step-title">2. CONNECT AGENT PROVIDERS</div>
+        <section class="step" id="step-2" aria-labelledby="t-2">
+            <h2 class="step-title" id="t-2">2. CONNECT AGENT PROVIDERS</h2>
             <div class="step-desc">Tell the Virtual Office where your agent runtimes live. OpenClaw, Hermes, Codex, and Claude Code agents can appear together in the same office.</div>
 
-            <label>OpenClaw Home Directory</label>
-            <input type="text" id="s-ocpath" value="" placeholder="/home/youruser/.openclaw">
-            <div style="font-size:13px;color:#999;margin:6px 0 4px;line-height:1.5;">
-                This is the folder that contains your <code style="color:#90caf9;">openclaw.json</code> and <code style="color:#90caf9;">agents/</code> directory.
+            <label for="s-ocpath">OpenClaw Home Directory</label>
+            <input type="text" id="s-ocpath" placeholder="/home/youruser/.openclaw" autocomplete="off" spellcheck="false">
+            <div class="hint">The folder that contains your <code>openclaw.json</code> and <code>agents/</code> directory.</div>
+
+            <div class="note">
+                <b><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-folder"/></svg>Where to find it:</b><br><br>
+                <b>Linux/Mac (most common):</b> <code>/home/youruser/.openclaw</code><br><br>
+                <b>Running Virtual Office in Docker?</b> Use the path you mounted with <code>-v</code>. For example
+                <code>docker run -v /home/youruser/.openclaw:/openclaw ...</code> → enter <code>/openclaw</code><br><br>
+                <b>Not sure?</b> Run <code>ls ~/.openclaw/openclaw.json</code> in a terminal. If it prints a path, use the folder part.
             </div>
 
-            <div class="note" style="margin:12px 0;">
-                <b>📁 Where to find it:</b><br><br>
-                <b>Linux/Mac (most common):</b><br>
-                <code style="color:#90caf9;">/home/youruser/.openclaw</code><br><br>
-                <b>Running Virtual Office in Docker?</b><br>
-                Use the path you mounted with <code>-v</code>. For example:<br>
-                <code style="color:#90caf9;font-size:13px;">docker run -v /home/youruser/.openclaw:/openclaw ...</code><br>
-                → enter <code style="color:#90caf9;">/openclaw</code><br><br>
-                <b>Not sure?</b> Run this in your terminal:<br>
-                <code style="color:#90caf9;font-size:13px;">ls ~/.openclaw/openclaw.json</code><br>
-                If it prints a path, use the folder part (e.g. <code style="color:#90caf9;">/home/youruser/.openclaw</code>).
+            <div class="inline-actions">
+                <button type="button" class="small" data-action="detect-agents"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-search"/></svg>Detect agents</button>
             </div>
+            <div class="hint" id="detect-hint">If you changed the folder above, Detect saves it first so the office can look there.</div>
 
-            <button onclick="savePathAndDetect()" style="margin:8px 0 16px;padding:8px 16px;font-size:9px;">🔍 DETECT AGENTS</button>
-
-            <div id="agent-status"></div>
+            <div id="agent-status" role="status"></div>
             <div class="agent-list-preview" id="agent-preview"></div>
 
-            <div id="gateway-config-section" style="display:none;margin-top:16px;">
-                <div style="border-top:1px solid #333;padding-top:16px;margin-top:8px;">
-                    <div style="font-size:13px;color:#ffd700;font-weight:bold;margin-bottom:8px;">🔌 Gateway Connection</div>
-                    <div style="font-size:13px;color:#aaa;margin-bottom:12px;line-height:1.5;">
-                        Configure the gateway to allow this browser to connect for live agent status and chat.
+            <div id="gateway-config-section" class="section" hidden>
+                <div class="section-title"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-plug"/></svg>Gateway Connection</div>
+                <div class="hint">Lets this office show live agent status and chat through your OpenClaw gateway.</div>
+                <label for="s-gateway-token">Gateway Token <span class="optional">(read from openclaw.json)</span></label>
+                <input type="password" id="s-gateway-token" data-section="openclaw" class="mono" placeholder="Leave blank to keep using the token from OpenClaw" autocomplete="new-password" spellcheck="false">
+                <div class="hint">Only fill this in to connect to a different OpenClaw instance.</div>
+                <div id="oc-allow-origin">
+                    <div class="inline-actions">
+                        <button type="button" class="small" data-action="configure-gateway"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-plug"/></svg>Allow this office in the gateway</button>
                     </div>
-                    <label style="font-size:11px;color:#999;display:block;margin-bottom:4px;">Gateway Token <span style="color:#666;font-size:9px">(auto-detected)</span></label>
-                    <input type="text" id="s-gateway-token" placeholder="Auto-detected from openclaw.json" style="width:100%;padding:8px;background:#1a1a2e;color:#ccc;border:1px solid #333;border-radius:4px;font-family:monospace;font-size:11px;margin-bottom:4px;box-sizing:border-box;">
-                    <div style="font-size:10px;color:#666;margin-bottom:12px;">Auth token for chat & live status. Auto-read from OpenClaw config. Override to connect to a different instance.</div>
-                    <button onclick="configureGateway()" style="margin:0 0 12px;padding:8px 16px;font-size:9px;">🔌 CONFIGURE GATEWAY CONNECTION</button>
-                    <div id="gateway-config-status"></div>
+                    <div class="hint">This adds this page's address to the gateway's allowed origins in <code>openclaw.json</code>, then tests the connection.</div>
+                </div>
+                <div id="oc-layer-connect" hidden>
+                    <div class="inline-actions">
+                        <button type="button" class="small" data-action="connect-openclaw"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-plug"/></svg>Connect</button>
+                    </div>
+                    <div class="hint">Saves the token if you entered one and connects. From Docker or another computer, OpenClaw asks you to approve this office once; the command to run shows below.</div>
+                </div>
+                <div id="gateway-config-status" role="status"></div>
+                <div id="oc-layer-status" aria-live="polite" hidden></div>
+            </div>
+
+            <div id="no-agents-help" hidden>
+                <div class="note warn">
+                    <b><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-help"/></svg>No agents found? Here's what to check:</b><br><br>
+                    <b>1. Is the path correct?</b> The folder should contain <code>openclaw.json</code> and an <code>agents/</code> directory.<br><br>
+                    <b>2. Do you have agents configured?</b> Open <code>openclaw.json</code> and look for <code>"agents"</code>. Each agent needs a workspace directory.<br><br>
+                    <b>3. Running in Docker?</b> Make sure you mounted your OpenClaw directory into the container: <code>docker run -v /path/to/.openclaw:/openclaw ...</code><br><br>
+                    <b>4. Permissions?</b> The Virtual Office server needs read access to the agents/ folder.<br><br>
+                    <b>Still stuck?</b> You can skip this step and set the path later in Settings. The office works; agents appear once connected.
                 </div>
             </div>
 
-            <div id="no-agents-help" style="display:none;">
-                <div class="note" style="border-color:#f4a236;">
-                    <b>🔧 No agents found? Here's what to check:</b><br><br>
-                    <b>1. Is the path correct?</b><br>
-                    The folder should contain <code>openclaw.json</code> and an <code>agents/</code> directory.<br><br>
-                    <b>2. Do you have agents configured?</b><br>
-                    Open your <code>openclaw.json</code> and look for <code>"agents"</code> → <code>"list"</code>. Each agent needs a workspace directory.<br><br>
-                    <b>3. Running in Docker?</b><br>
-                    Make sure you mounted your OpenClaw directory into the container:<br>
-                    <code style="color:#90caf9;font-size:13px;">docker run -v /path/to/.openclaw:/openclaw ...</code><br><br>
-                    <b>4. Permissions?</b><br>
-                    The Virtual Office server needs read access to the agents/ folder.<br><br>
-                    <b>Still stuck?</b> You can skip this step and set the path later from ☰ Menu. The office will work — agents just won't appear until connected.
+            <div class="section">
+                <div class="section-title"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-agents"/></svg>Hermes Agents</div>
+                <label class="check"><input type="checkbox" id="s-hermes-enable" data-section="hermes"> Show native Hermes agents</label>
+                <div class="hint">Connect Hermes' own backend (<code>hermes serve</code>): each Hermes profile becomes an agent, with its settings, approvals, files and the Bot Desktop. Hermes stays the runtime; Virtual Office only connects to it.</div>
+                <div id="hermes-fields">
+                    <div id="hermes-ap-existing" class="hint" role="status" hidden></div>
+                    <div id="hermes-ap-form" class="hermes-ap-form"></div>
+                    <div id="hermes-ap-later" class="note" hidden>
+                        <span id="hermes-ap-later-text">Skipped. You can connect Hermes any time in Agent Providers (Settings &gt; Connections).</span>
+                        <div class="inline-actions"><button type="button" class="small secondary" data-action="hermes-ap-again">Connect Hermes now</button></div>
+                    </div>
+                    <div id="hermes-legacy" hidden>
+                        <div class="section-subtitle">Older API server connections</div>
+                        <div class="hint">These use Hermes' older API server. In Agent Providers you can switch their agents to the full connection.</div>
+                        <div id="s-hermes-connections"></div>
+                        <div class="inline-actions"><button type="button" class="small" data-action="test-hermes"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-search"/></svg>Test these connections</button></div>
+                        <div id="hermes-test-status" role="status"></div>
+                    </div>
+                    <details class="hermes-bridge">
+                        <summary>Messaging gateway bridge (optional)</summary>
+                        <label class="check"><input type="checkbox" id="s-hermes-platform-enable" data-section="hermes"> Hermes Messaging Gateway Platform</label>
+                        <label for="s-hermes-platform-token">Gateway Platform Token <span class="optional">(shared with MY_VIRTUAL_OFFICE_TOKEN)</span></label>
+                        <input type="password" id="s-hermes-platform-token" data-section="hermes" placeholder="long shared token" autocomplete="new-password">
+                        <label for="s-hermes-platform-agent">Gateway Platform Agent ID</label>
+                        <input type="text" id="s-hermes-platform-agent" data-section="hermes" placeholder="hermes-gateway" autocomplete="off">
+                        <div class="hint">Optional separate bridge for a Hermes Messaging Gateway plugin.</div>
+                    </details>
                 </div>
             </div>
 
-            <div style="border-top:1px solid #333;padding-top:16px;margin-top:18px;">
-                <div style="font-size:13px;color:#ffd700;font-weight:bold;margin-bottom:8px;">⚕️ Hermes Agents</div>
-                <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
-                    <input type="checkbox" id="s-hermes-enable" checked> Show native Hermes agents
-                </label>
-                <div style="font-size:13px;color:#999;margin:6px 0 10px;line-height:1.5;">
-                    Add one authenticated API connection per native Hermes profile. Hermes remains the runtime and Virtual Office only connects to it.
-                </div>
-                <div id="hermes-fields" style="margin-top:10px;">
-                    <div id="s-hermes-connections"></div>
-                    <button type="button" onclick="setupAddHermesConnection()" style="margin:0 8px 12px 0;padding:8px 16px;font-size:9px;">＋ ADD CONNECTION</button>
-                    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
-                        <input type="checkbox" id="s-hermes-platform-enable"> Hermes Messaging Gateway Platform
-                    </label>
-                    <label>Gateway Platform Token <span style="color:#666;font-size:12px">(shared with MY_VIRTUAL_OFFICE_TOKEN)</span></label>
-                    <input type="password" id="s-hermes-platform-token" placeholder="long shared token">
-                    <label>Gateway Platform Agent ID</label>
-                    <input type="text" id="s-hermes-platform-agent" placeholder="hermes-gateway">
-                    <div style="font-size:12px;color:#666;margin:6px 0 12px;line-height:1.5;">Optional separate bridge for a Hermes Messaging Gateway plugin.</div>
-                    <button onclick="testHermesConnection()" style="margin:0 0 12px;padding:8px 16px;font-size:9px;">🔍 TEST HERMES</button>
-                    <div id="hermes-test-status"></div>
-                </div>
-            </div>
-
-            <div style="border-top:1px solid #333;padding-top:16px;margin-top:18px;">
-                <div style="font-size:13px;color:#ffd700;font-weight:bold;margin-bottom:8px;">⌘ Codex CLI Agents</div>
-                <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
-                    <input type="checkbox" id="s-codex-enable" checked> Auto-detect Codex CLI Agents
-                </label>
-                <div style="font-size:13px;color:#999;margin:6px 0 10px;line-height:1.5;">
-                    Virtual Office can create and chat with Codex-backed workspace agents through the native Codex CLI app-server protocol.
-                </div>
-                <div id="codex-fields" style="margin-top:10px;">
-                    <label>Codex Home Directory</label>
-                    <input type="text" id="s-codex-home" placeholder="/home/youruser/.codex">
-                    <label>Codex CLI Path</label>
-                    <input type="text" id="s-codex-bin" placeholder="codex or /home/youruser/.local/bin/codex">
-                    <label>Codex Workspace Root</label>
-                    <input type="text" id="s-codex-workspace" placeholder="/data/codex-agents">
-                    <label>Codex Main Workspace</label>
-                    <input type="text" id="s-codex-main-workspace" placeholder="/data/codex-main">
-                    <label>Default Model <span style="color:#666;font-size:12px">(optional)</span></label>
-                    <input type="text" id="s-codex-model" placeholder="leave blank to use Codex default">
-                    <label>Sandbox</label>
-                    <select id="s-codex-sandbox">
+            <div class="section">
+                <div class="section-title">⌘ Codex CLI Agents</div>
+                <label class="check"><input type="checkbox" id="s-codex-enable" data-section="codex"> Auto-detect Codex CLI agents</label>
+                <div class="hint">Create and chat with Codex-backed workspace agents through the native Codex CLI app-server protocol.</div>
+                <div id="codex-fields">
+                    <label for="s-codex-home">Codex Home Directory</label>
+                    <input type="text" id="s-codex-home" data-section="codex" placeholder="/home/youruser/.codex" autocomplete="off" spellcheck="false">
+                    <label for="s-codex-bin">Codex CLI Path</label>
+                    <input type="text" id="s-codex-bin" data-section="codex" placeholder="codex or /home/youruser/.local/bin/codex" autocomplete="off" spellcheck="false">
+                    <label for="s-codex-workspace">Codex Workspace Root</label>
+                    <input type="text" id="s-codex-workspace" data-section="codex" placeholder="/data/codex-agents" autocomplete="off" spellcheck="false">
+                    <label for="s-codex-main-workspace">Codex Main Workspace</label>
+                    <input type="text" id="s-codex-main-workspace" data-section="codex" placeholder="/data/codex-main" autocomplete="off" spellcheck="false">
+                    <label for="s-codex-model">Default Model <span class="optional">(optional)</span></label>
+                    <input type="text" id="s-codex-model" data-section="codex" placeholder="leave blank to use the Codex default" autocomplete="off">
+                    <label for="s-codex-sandbox">Sandbox</label>
+                    <select id="s-codex-sandbox" data-section="codex">
                         <option value="workspace-write">workspace-write</option>
                         <option value="danger-full-access">danger-full-access</option>
                         <option value="read-only">read-only</option>
                     </select>
-                    <label>Approval Policy</label>
-                    <select id="s-codex-approval">
+                    <label for="s-codex-approval">Approval Policy</label>
+                    <select id="s-codex-approval" data-section="codex">
                         <option value="never">never</option>
                         <option value="on-request">on-request</option>
                         <option value="on-failure">on-failure</option>
                         <option value="untrusted">untrusted</option>
                     </select>
-                    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
-                        <input type="checkbox" id="s-codex-appserver" checked> Prefer app-server protocol
-                    </label>
-                    <button onclick="testCodexConnection()" style="margin:0 0 12px;padding:8px 16px;font-size:9px;">🔍 TEST CODEX</button>
-                    <div id="codex-test-status"></div>
+                    <label class="check"><input type="checkbox" id="s-codex-appserver" data-section="codex"> Prefer app-server protocol</label>
+                    <div class="inline-actions"><button type="button" class="small" data-action="test-codex"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-search"/></svg>Test Codex</button></div>
+                    <div id="codex-test-status" role="status"></div>
                 </div>
             </div>
 
-            <div style="border-top:1px solid #333;padding-top:16px;margin-top:18px;">
-                <div style="font-size:13px;color:#ffd700;font-weight:bold;margin-bottom:8px;">◇ Claude Code Agents</div>
-                <label style="display:flex;align-items:center;gap:8px;margin-top:8px;">
-                    <input type="checkbox" id="s-claude-enable" checked> Auto-detect Claude Code Agents
-                </label>
-                <div style="font-size:13px;color:#999;margin:6px 0 10px;line-height:1.5;">
-                    Virtual Office can create and chat with Claude Code-backed workspace agents through the native Claude Code CLI stream-json protocol.
-                </div>
-                <div id="claude-fields" style="margin-top:10px;">
-                    <label>Claude Config Directory</label>
-                    <input type="text" id="s-claude-home" placeholder="/home/youruser/.claude">
-                    <label>Claude CLI Path</label>
-                    <input type="text" id="s-claude-bin" placeholder="claude or /home/youruser/.local/bin/claude">
-                    <label>Claude Workspace Root</label>
-                    <input type="text" id="s-claude-workspace" placeholder="/data/claude-code-agents">
-                    <label>Claude Main Workspace</label>
-                    <input type="text" id="s-claude-main-workspace" placeholder="/data/claude-code-main">
-                    <label>Default Model <span style="color:#666;font-size:12px">(optional)</span></label>
-                    <input type="text" id="s-claude-model" placeholder="leave blank to use Claude Code default">
-                    <label>Permission Mode</label>
-                    <select id="s-claude-permission">
-                        <option value="acceptEdits">acceptEdits</option>
-                        <option value="default">default</option>
-                        <option value="auto">auto</option>
-                        <option value="dontAsk">dontAsk</option>
-                        <option value="plan">plan</option>
-                        <option value="bypassPermissions">bypassPermissions</option>
+            <div class="section">
+                <div class="section-title"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-code"/></svg>Claude Code Agents</div>
+                <label class="check"><input type="checkbox" id="s-claude-enable" data-section="claudeCode"> Auto-detect Claude Code agents</label>
+                <div class="hint">Create and chat with Claude Code-backed workspace agents through the native Claude Code CLI stream-json protocol.</div>
+                <div id="claude-fields">
+                    <label for="s-claude-home">Claude Config Directory</label>
+                    <input type="text" id="s-claude-home" data-section="claudeCode" placeholder="/home/youruser/.claude" autocomplete="off" spellcheck="false">
+                    <label for="s-claude-bin">Claude CLI Path</label>
+                    <input type="text" id="s-claude-bin" data-section="claudeCode" placeholder="claude or /home/youruser/.local/bin/claude" autocomplete="off" spellcheck="false">
+                    <label for="s-claude-workspace">Claude Workspace Root</label>
+                    <input type="text" id="s-claude-workspace" data-section="claudeCode" placeholder="/data/claude-code-agents" autocomplete="off" spellcheck="false">
+                    <label for="s-claude-main-workspace">Claude Main Workspace</label>
+                    <input type="text" id="s-claude-main-workspace" data-section="claudeCode" placeholder="/data/claude-code-main" autocomplete="off" spellcheck="false">
+                    <label for="s-claude-model">Default Model <span class="optional">(optional)</span></label>
+                    <input type="text" id="s-claude-model" data-section="claudeCode" placeholder="leave blank to use the Claude Code default" autocomplete="off">
+                    <label for="s-claude-permission">Permission Mode</label>
+                    <select id="s-claude-permission" data-section="claudeCode">
+                        <option value="acceptEdits">Accept edits</option>
+                        <option value="default">Default (ask)</option>
+                        <option value="plan">Plan only</option>
+                        <option value="bypassPermissions">Bypass permissions</option>
                     </select>
-                    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
-                        <input type="checkbox" id="s-claude-main" checked> Show Claude Code Main agent
-                    </label>
-                    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
-                        <input type="checkbox" id="s-claude-native" checked> Discover native Claude Code subagents
-                    </label>
-                    <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
-                        <input type="checkbox" id="s-claude-register" checked> Register new standard agents in native Claude Code
-                    </label>
-                    <button onclick="testClaudeCodeConnection()" style="margin:0 0 12px;padding:8px 16px;font-size:9px;">🔍 TEST CLAUDE CODE</button>
-                    <div id="claude-test-status"></div>
+                    <label class="check"><input type="checkbox" id="s-claude-main" data-section="claudeCode"> Show Claude Code Main agent</label>
+                    <label class="check"><input type="checkbox" id="s-claude-native" data-section="claudeCode"> Discover native Claude Code subagents</label>
+                    <label class="check"><input type="checkbox" id="s-claude-register" data-section="claudeCode"> Register new standard agents in native Claude Code</label>
+                    <div class="inline-actions"><button type="button" class="small" data-action="test-claude"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-search"/></svg>Test Claude Code</button></div>
+                    <div id="claude-test-status" role="status"></div>
                 </div>
             </div>
 
             <div class="btn-row">
-                <button class="secondary" onclick="nextStep(1)">← BACK</button>
-                <button onclick="nextStep(3)">NEXT →</button>
+                <button type="button" class="secondary" data-step="1">← Back</button>
+                <button type="button" data-step="3">Next →</button>
             </div>
-        </div>
+        </section>
 
         <!-- Step 3: Browser -->
-        <div class="step" id="step-3">
-            <div class="step-title">3. AGENT BROWSER (OPTIONAL)</div>
+        <section class="step" id="step-3" aria-labelledby="t-3">
+            <h2 class="step-title" id="t-3">3. AGENT BROWSER (OPTIONAL)</h2>
             <div class="step-desc">Connect a browser so your agents can browse the web and you can watch live. You can skip this and set it up later.</div>
-
-            <label style="display:flex;align-items:center;gap:8px;margin-top:12px;">
-                <input type="checkbox" id="s-browser-enable"> Enable Agent Browser
-            </label>
-
-            <div id="browser-fields" style="display:none;margin-top:16px;">
-                <label>CDP URL <span style="color:#666;font-size:12px">(Chrome DevTools Protocol)</span></label>
-                <input type="text" id="s-cdp-url" placeholder="e.g. http://your-host:9222">
-                <div style="font-size:12px;color:#666;margin:4px 0 12px;">The address where Chrome/Chromium remote debugging is running.</div>
-
-                <label>Browser Viewer URL <span style="color:#666;font-size:12px">(VNC / live view)</span></label>
-                <input type="text" id="s-viewer-url" placeholder="e.g. http://your-host:6902">
-                <div style="font-size:12px;color:#666;margin:4px 0 12px;">URL for the live browser view (KasmVNC, noVNC, etc.). This is what shows in the floating browser window so you can watch your agents browse in real time.</div>
-
-                <button onclick="testBrowserConnection()" style="margin:8px 0 16px;padding:8px 16px;font-size:9px;">🔍 TEST CONNECTION</button>
-                <div id="browser-test-status"></div>
+            <label class="check"><input type="checkbox" id="s-browser-enable" data-section="browser"> Enable Agent Browser</label>
+            <div id="browser-fields">
+                <label for="s-cdp-url">CDP URL <span class="optional">(Chrome DevTools Protocol)</span></label>
+                <input type="text" id="s-cdp-url" data-section="browser" placeholder="e.g. http://your-host:9222" autocomplete="off" spellcheck="false">
+                <div class="hint">The address where Chrome/Chromium remote debugging is running.</div>
+                <label for="s-viewer-url">Browser Viewer URL <span class="optional">(VNC / live view)</span></label>
+                <input type="text" id="s-viewer-url" data-section="browser" placeholder="e.g. http://your-host:6902" autocomplete="off" spellcheck="false">
+                <div class="hint">The live browser view (KasmVNC, noVNC, etc.) shown in the floating browser window.</div>
+                <div class="inline-actions"><button type="button" class="small" data-action="test-browser"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-search"/></svg>Test connection</button></div>
+                <div id="browser-test-status" role="status"></div>
             </div>
-
             <div class="note">
                 <b>What is this?</b> The Agent Browser gives your AI agents a real web browser you can watch live. You need two things:<br><br>
-                <b>1. CDP (Chrome DevTools Protocol)</b> — how agents control the browser<br>
-                <b>2. VNC Viewer</b> — how you watch the browser live in the office<br><br>
-                <b>Easiest setup — one Docker command:</b><br>
-                <code style="color:#90caf9;font-size:13px;">docker run -d --name vo-browser \<br>&nbsp;&nbsp;-p 9222:9222 -p 6902:6902 -p 6901:6901 \<br>&nbsp;&nbsp;kasmweb/chromium:1.17.0</code><br><br>
-                This gives you both:<br>
-                • CDP URL: <code style="color:#90caf9;">http://127.0.0.1:9222</code><br>
-                • Viewer URL: <code style="color:#90caf9;">http://127.0.0.1:6902</code> (HTTP, no cert needed)<br><br>
-                <b>Or use your own Chrome + VNC:</b><br>
-                <code style="color:#90caf9;font-size:13px;">google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/vo-browser</code><br>
-                Then point Viewer URL to your VNC/noVNC server.<br><br>
-                <b>Not sure?</b> Skip this step — everything else works without it. You can set it up later from ☰ Menu.
+                <b>1. CDP (Chrome DevTools Protocol):</b> how agents control the browser<br>
+                <b>2. VNC Viewer:</b> how you watch the browser live in the office<br><br>
+                <b>Easiest setup, one Docker command:</b><br>
+                <code>docker run -d --name vo-browser -p 9222:9222 -p 6902:6902 -p 6901:6901 kasmweb/chromium:1.17.0</code><br><br>
+                This gives you CDP URL <code>http://127.0.0.1:9222</code> and Viewer URL <code>http://127.0.0.1:6902</code>.<br><br>
+                <b>Or use your own Chrome + VNC:</b> <code>google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/vo-browser</code>, then point Viewer URL to your VNC/noVNC server.<br><br>
+                <b>Not sure?</b> Skip this step; everything else works without it.
             </div>
-
             <div class="btn-row">
-                <button class="secondary" onclick="nextStep(2)">← BACK</button>
-                <button onclick="nextStep(4)">NEXT →</button>
+                <button type="button" class="secondary" data-step="2">← Back</button>
+                <button type="button" data-step="4">Next →</button>
             </div>
-        </div>
+        </section>
 
         <!-- Step 4: SMS -->
-        <div class="step" id="step-4">
-            <div class="step-title">4. SMS PANEL (OPTIONAL)</div>
+        <section class="step" id="step-4" aria-labelledby="t-4">
+            <h2 class="step-title" id="t-4">4. SMS PANEL (OPTIONAL)</h2>
             <div class="step-desc">Let an AI agent send and receive SMS messages through your office. You can skip this and set it up later.</div>
-
-            <label style="display:flex;align-items:center;gap:8px;margin-top:12px;">
-                <input type="checkbox" id="s-sms-enable"> Enable SMS Panel
-            </label>
-
-            <div id="sms-fields" style="display:none;margin-top:16px;">
-                <label>SMS Owner Agent <span style="color:#666;font-size:12px">(which agent owns this inbox)</span></label>
-                <select id="s-sms-agent" style="width:100%;padding:10px 14px;background:#0d0d1e;border:1px solid #2a2a4e;border-radius:8px;color:#e8e8f0;font-size:14px;">
+            <label class="check"><input type="checkbox" id="s-sms-enable" data-section="sms"> Enable SMS Panel</label>
+            <div id="sms-fields">
+                <label for="s-sms-agent">SMS Owner Agent <span class="optional">(which agent owns this inbox)</span></label>
+                <select id="s-sms-agent" data-section="sms">
                     <option value="">Select an agent...</option>
                 </select>
-                <div style="font-size:12px;color:#666;margin:4px 0 12px;">This agent owns the Twilio inbox and is the default AI responder for every contact thread.</div>
-
-                <label>Twilio Account SID</label>
-                <input type="text" id="s-twilio-sid" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off">
-
-                <label>Twilio Auth Token</label>
-                <input type="text" id="s-twilio-token" placeholder="Your Twilio auth token" autocomplete="off">
-
-                <label>Twilio Phone Number <span style="color:#666;font-size:12px">(your Twilio number)</span></label>
-                <input type="text" id="s-twilio-from" placeholder="+1XXXXXXXXXX" autocomplete="off">
-
-                <div style="font-size:12px;color:#666;margin:8px 0 4px;">All three Twilio fields are required for sending SMS.</div>
+                <div class="hint">This agent owns the Twilio inbox and is the default AI responder for every contact thread.</div>
+                <label for="s-twilio-sid">Twilio Account SID</label>
+                <input type="text" id="s-twilio-sid" data-section="sms" class="mono" placeholder="ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" autocomplete="off" spellcheck="false">
+                <label for="s-twilio-token">Twilio Auth Token</label>
+                <input type="password" id="s-twilio-token" data-section="sms" class="mono" placeholder="Your Twilio auth token" autocomplete="new-password" spellcheck="false">
+                <label for="s-twilio-from">Twilio Phone Number <span class="optional">(your Twilio number)</span></label>
+                <input type="text" id="s-twilio-from" data-section="sms" placeholder="+1XXXXXXXXXX" autocomplete="off">
+                <div class="hint" id="sms-cred-hint">All three Twilio fields are required for sending SMS.</div>
             </div>
-
             <div class="note">
                 <b>What is this?</b> The SMS Panel lets you send and receive text messages through an AI agent in your office.<br><br>
-                <b>What you need:</b><br>
-                <b>1.</b> A <a href="https://www.twilio.com/try-twilio" style="color:#90caf9;" target="_blank">Twilio account</a> (free trial works)<br>
-                <b>2.</b> A Twilio phone number (you get one free with trial)<br>
-                <b>3.</b> Your Account SID and Auth Token from the <a href="https://console.twilio.com/" style="color:#90caf9;" target="_blank">Twilio Console</a> dashboard<br><br>
-                <b>How to get started:</b><br>
-                • Sign up at <code style="color:#90caf9;">twilio.com/try-twilio</code><br>
-                • Copy your Account SID and Auth Token from the dashboard<br>
-                • Get a phone number from Console → Phone Numbers → Buy a Number<br>
-                • Paste all three values above<br><br>
-                <b>Photos, videos, and attachments:</b><br>
-                • Incoming MMS media can display in the SMS inbox when Twilio credentials are configured.<br>
-                • Outgoing MMS attachments require the office to have a public HTTPS media URL that Twilio can fetch. If the office is only local/private, sending uploaded attachments will not work until a public media endpoint is configured.<br>
-                • Text-only SMS still works without a public media URL.<br><br>
-                <b>Not sure?</b> Skip this step — everything else works without it. You can enable it later from ☰ Menu.
+                <b>What you need:</b> a <a href="https://www.twilio.com/try-twilio" target="_blank" rel="noopener noreferrer">Twilio account</a> (free trial works), a Twilio phone number, and your Account SID and Auth Token from the <a href="https://console.twilio.com/" target="_blank" rel="noopener noreferrer">Twilio Console</a>.<br><br>
+                <b>Photos and attachments:</b> incoming MMS media shows in the SMS inbox. Sending attachments needs a public HTTPS media URL that Twilio can fetch; text-only SMS works without it.<br><br>
+                <b>Not sure?</b> Skip this step; you can enable it later in Settings.
             </div>
-
             <div class="btn-row">
-                <button class="secondary" onclick="nextStep(3)">← BACK</button>
-                <button onclick="nextStep(5)">NEXT →</button>
+                <button type="button" class="secondary" data-step="3">← Back</button>
+                <button type="button" data-step="5">Next →</button>
             </div>
-        </div>
+        </section>
 
-        
         <!-- Step 5: PC Performance -->
-        <div class="step" id="step-5">
-            <div class="step-title">5. PC PERFORMANCE (OPTIONAL)</div>
-            <div class="step-desc">Monitor a PC's CPU, RAM, and GPU stats live in your office dashboard. You can skip this and set it up later.</div>
-
-            <label style="display:flex;align-items:center;gap:8px;margin-top:12px;">
-                <input type="checkbox" id="s-pcmetrics-enable"> Enable PC Performance Monitor
-            </label>
-
-            <div id="pcmetrics-fields" style="display:none;margin-top:16px;">
-                <label>Metrics Server URL</label>
-                <input type="text" id="s-pcmetrics-url" placeholder="http://192.168.1.100:8099">
-                <div style="font-size:12px;color:#666;margin:4px 0 12px;">The address where the PC Metrics Server is running. This can be a local or remote machine.</div>
-
-                <button onclick="testPcMetrics()" style="margin:8px 0 16px;padding:8px 16px;font-size:9px;">🔍 TEST CONNECTION</button>
-                <div id="pcmetrics-test-status"></div>
+        <section class="step" id="step-5" aria-labelledby="t-5">
+            <h2 class="step-title" id="t-5">5. PC PERFORMANCE (OPTIONAL)</h2>
+            <div class="step-desc">Show a computer's CPU, RAM, and GPU use live in your office dashboard. You can skip this and set it up later.</div>
+            <label class="check"><input type="checkbox" id="s-pcmetrics-enable" data-section="pcMetrics"> Enable PC Performance Monitor</label>
+            <div id="pcmetrics-fields">
+                <label for="s-pcmetrics-url">Metrics Server URL</label>
+                <input type="text" id="s-pcmetrics-url" data-section="pcMetrics" placeholder="http://192.168.1.100:8099" autocomplete="off" spellcheck="false">
+                <div class="hint" id="pcmetrics-url-hint">The address where the PC Metrics Server runs, on this machine or another one.</div>
+                <div class="inline-actions"><button type="button" class="small" data-action="test-pcmetrics"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-search"/></svg>Test connection</button></div>
+                <div id="pcmetrics-test-status" role="status"></div>
             </div>
-
             <div class="note">
-                <b>What is this?</b> The PC Performance panel shows live CPU, RAM, and GPU usage graphs in your office sidebar.<br><br>
-                <b>How it works:</b><br>
-                You run a small Python script on the PC you want to monitor. It exposes metrics on a port, and the Virtual Office reads from it.<br><br>
-                <b>Quick setup (on the target PC):</b><br>
-                <code style="color:#90caf9;font-size:13px;">pip install psutil</code><br>
-                <code style="color:#90caf9;font-size:13px;">python pc-metrics-server.py 8099</code><br><br>
-                The script is included with the Virtual Office at <code style="color:#90caf9;">/app/pc-metrics-server.py</code>. Copy it to any PC you want to monitor.<br><br>
-                <b>For GPU monitoring</b> (NVIDIA only):<br>
-                <code style="color:#90caf9;font-size:13px;">pip install pynvml</code><br><br>
-                <b>URL examples:</b><br>
-                • Same machine: <code style="color:#90caf9;">http://127.0.0.1:8099</code><br>
-                • LAN PC: <code style="color:#90caf9;">http://192.168.1.100:8099</code><br>
-                • Tailscale: <code style="color:#90caf9;">http://100.x.x.x:8099</code><br><br>
-                <b>Not sure?</b> Skip this step — you can enable it later from ☰ Menu → Settings.
+                <b>How it works:</b> run a small Python script on the computer you want to watch. It shares its stats on a port, and the office reads them.<br><br>
+                <b>On that computer:</b> <code>pip install psutil</code> then <code>python pc-metrics-server.py 8099</code>. The script ships with Virtual Office at <code>/app/pc-metrics-server.py</code>.<br><br>
+                <b>For NVIDIA GPU stats:</b> <code>pip install pynvml</code><br><br>
+                <b>URL examples:</b> same machine <code>http://127.0.0.1:8099</code>, another computer on your network <code>http://192.168.1.100:8099</code>.
             </div>
-
             <div class="btn-row">
-                <button class="secondary" onclick="nextStep(4)">← BACK</button>
-                <button onclick="nextStep(6)">NEXT →</button>
+                <button type="button" class="secondary" data-step="4">← Back</button>
+                <button type="button" data-step="6">Next →</button>
             </div>
-        </div>
+        </section>
 
-        <!-- Step 6: Done -->
-        <div class="step" id="step-6">
-            <div class="step-title">6. YOU'RE ALL SET!</div>
-            <div class="step-desc">Your Virtual Office is ready. You can always change settings later from the ☰ Menu button in the toolbar.</div>
+        <!-- Step 6: Protect your office -->
+        <section class="step" id="step-6" aria-labelledby="t-6">
+            <h2 class="step-title" id="t-6">6. PROTECT YOUR OFFICE (OPTIONAL)</h2>
+            <div class="step-desc">Anyone on your network who opens this office's address can use it, chat as you and change settings. A passcode keeps other devices out. The computer running the office never needs it.</div>
+            <div id="access-loading" class="status-box info" role="status">Checking access settings…</div>
+            <div id="access-on" class="status-box success" hidden>A passcode is already on. Other devices must enter it once. You can change or remove it in Settings, under Security.</div>
+            <div id="access-cannot" class="status-box warn" hidden>Only someone signed in to this office can set a passcode.</div>
+            <div id="access-form" hidden>
+                <label for="s-passcode">New passcode <span class="optional">(at least 4 characters)</span></label>
+                <input type="password" id="s-passcode" autocomplete="new-password" spellcheck="false">
+                <label for="s-passcode-2">Type it again</label>
+                <input type="password" id="s-passcode-2" autocomplete="new-password" spellcheck="false">
+                <div class="inline-actions"><button type="button" class="small" data-action="set-passcode"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-lock"/></svg>Turn on passcode</button></div>
+                <div class="hint">Write it down. If you forget it, open the office on the computer that runs it and change it in Settings.</div>
+            </div>
+            <div id="access-status" role="status"></div>
+            <div class="btn-row">
+                <button type="button" class="secondary" data-step="5">← Back</button>
+                <button type="button" data-step="7" id="access-next">Skip for now →</button>
+            </div>
+        </section>
+
+        <!-- Step 7: Done -->
+        <section class="step" id="step-7" aria-labelledby="t-7">
+            <h2 class="step-title" id="t-7">7. YOU'RE ALL SET!</h2>
+            <div class="step-desc">Your Virtual Office is ready. You can change these settings later in Settings.</div>
+            <div id="change-summary" class="note"></div>
             <div class="note">
                 <b>What you can do:</b>
-                <br>• <b>✏️ Edit Office</b> — Place furniture, resize canvas, paint walls & floors
-                <br>• <b>👤 Agents</b> — Customize agent appearance, assign desks, set branches
-                <br>• <b>💬 Chat</b> — Talk to any agent through the chat panel
-                <br>• <b>☰ Menu</b> — Change office name, connection settings, export/import config
+                <br>• <b><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-edit"/></svg>Edit Office</b>: place furniture, resize the canvas, paint walls and floors
+                <br>• <b><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-agents"/></svg>Agents</b>: customize agent appearance, assign desks, set branches
+                <br>• <b><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-chat"/></svg>Chat</b>: talk to any agent through the chat panel
+                <br>• <b><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-gear"/></svg>Settings</b>: office name, connections, security, export and import
                 <br><br>
-                <b>Live presence:</b> Virtual Office tracks agent activity through the gateway and keeps long-running work visible until it finishes.
-                <br><br>
-                <b>☁️ API Usage:</b> The sidebar automatically detects your AI providers (Anthropic, OpenAI, Google, etc.) from your OpenClaw config and shows live usage, quotas, and API key health. No extra setup needed — just connect to OpenClaw above.
+                <b><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-pulse"/></svg>API Usage:</b> the sidebar detects your AI providers from your OpenClaw config and shows usage, quotas, and API key health.
             </div>
-            <div id="save-status"></div>
+            <div id="save-status" role="status"></div>
             <div class="btn-row">
-                <button class="secondary" onclick="nextStep(5)">← BACK</button>
-                <button onclick="finishSetup()">🚀 LAUNCH OFFICE</button>
+                <button type="button" class="secondary" data-step="6">← Back</button>
+                <button type="button" data-action="finish" id="finish-btn"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-play"/></svg>Launch Office</button>
             </div>
-        </div>
-    </div>
+        </section>
+    </main>
 
+    <script src="agent-providers.js?v=20261113-relfix3"></script>
     <script>
+    (function () {
+        'use strict';
+        var STEPS = 8;
         var currentStep = 0;
+        var prefill = { ok: false, loading: true, cfg: null, rerun: false, smsStatus: null };
+        var initial = {};          // field id -> value right after pre-fill
+        var initialHermes = '[]';  // serialized connections right after pre-fill
+        var smsAgentsLoaded = false;
+
+        function $(id) { return document.getElementById(id); }
 
         function escapeHtml(value) {
-            return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
-                return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[ch];
+            return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+                return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch];
             });
         }
 
-        function nextStep(n) {
-            document.getElementById('step-' + currentStep).classList.remove('active');
-            document.getElementById('step-' + n).classList.add('active');
-            for (var i = 0; i <= 6; i++) {
-                var dot = document.getElementById('dot-' + i);
-                dot.className = 'dot';
-                if (i < n) dot.className = 'dot done';
-                if (i === n) dot.className = 'dot active';
+        // Pixel status icons (N8): the sprite symbols are in the page body.
+        function icon(name) { return '<svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-' + name + '"/></svg>'; }
+        var OK = icon('check'), NO = icon('close'), WARN = icon('warn');
+        function box(el, kind, html) { el.innerHTML = '<div class="status-box ' + kind + '">' + html + '</div>'; }
+
+        // Never throws: network errors, non-JSON and HTTP errors come back as {ok:false, error, _status}.
+        function jsonRequest(url, body) {
+            var opts = { credentials: 'same-origin', cache: 'no-store' };
+            if (body !== undefined) { opts.method = 'POST'; opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body); }
+            return fetch(url, opts).then(function (r) {
+                return r.text().then(function (text) {
+                    var data = null;
+                    try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
+                    if (!data || typeof data !== 'object') data = { ok: false, error: r.ok ? 'The server sent an unreadable answer.' : 'The request failed (HTTP ' + r.status + ').' };
+                    if (!r.ok && data.ok === undefined) data.ok = false;
+                    if (data.error && typeof data.error === 'object') data.error = data.error.message || data.error.code || 'Request failed';
+                    data._status = r.status;
+                    return data;
+                });
+            }).catch(function () { return { ok: false, error: 'Could not reach this office server.', _status: 0 }; });
+        }
+
+        function busy(btn, on) {
+            if (!btn) return;
+            btn.disabled = !!on;
+            if (on) btn.setAttribute('aria-busy', 'true'); else btn.removeAttribute('aria-busy');
+        }
+
+        // ---------- steps ----------
+        function showStep(n) {
+            $('step-' + currentStep).classList.remove('active');
+            $('step-' + n).classList.add('active');
+            for (var i = 0; i < STEPS; i++) {
+                var dot = $('dot-' + i);
+                dot.className = 'dot' + (i < n ? ' done' : (i === n ? ' active' : ''));
             }
             currentStep = n;
+            $('step-counter').textContent = 'Step ' + (n + 1) + ' of ' + STEPS;
+            var title = $('t-' + n);
+            if (title) { title.setAttribute('tabindex', '-1'); title.focus({ preventScroll: true }); }
+            window.scrollTo(0, 0);
             if (n === 0) checkExistingLicense();
             if (n === 2) discoverAgents();
+            if (n === 4 && $('s-sms-enable').checked) populateSmsAgentSelect();
+            if (n === 6) loadAccess();
+            if (n === 7) renderSummary();
         }
 
-        function activateLicense() {
-            var key = document.getElementById('s-license-key').value.trim();
-            var statusEl = document.getElementById('license-status');
-            if (!key) {
-                statusEl.innerHTML = '<div class="status-box error">Please enter a license key</div>';
-                return;
-            }
-            statusEl.innerHTML = '<div class="status-box info">Validating...</div>';
-            fetch('/api/license/activate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key: key })
-            }).then(function(r) { return r.json(); }).then(function(d) {
-                if (d.ok) {
-                    statusEl.innerHTML = '<div class="status-box success">✅ ' + d.tierName + ' license activated! All features unlocked.</div>';
-                } else {
-                    statusEl.innerHTML = '<div class="status-box error">❌ ' + (d.error || 'Invalid key') + '</div>';
-                }
-            }).catch(function(e) {
-                statusEl.innerHTML = '<div class="status-box error">Error: ' + e.message + '</div>';
-            });
+        // ---------- license ----------
+        function activateLicense(btn) {
+            var key = $('s-license-key').value.trim();
+            var statusEl = $('license-status');
+            if (!key) { box(statusEl, 'error', 'Please enter a license key'); return; }
+            box(statusEl, 'info', 'Validating…');
+            busy(btn, true);
+            jsonRequest('/api/license/activate', { key: key }).then(function (d) {
+                if (d.ok) box(statusEl, 'success', OK + '' + escapeHtml(d.tierName || 'License') + ' activated! All features unlocked.');
+                else box(statusEl, 'error', NO + '' + escapeHtml(d.error || 'Invalid key'));
+            }).finally(function () { busy(btn, false); });
         }
 
         function checkExistingLicense() {
-            fetch('/api/license').then(function(r) { return r.json(); }).then(function(d) {
-                if (d.licensed) {
-                    document.getElementById('license-status').innerHTML =
-                        '<div class="status-box success">✅ ' + d.tierName + ' license active</div>';
-                }
-            }).catch(function(){});
+            jsonRequest('/api/license').then(function (d) {
+                if (d && d.licensed) box($('license-status'), 'success', OK + '' + escapeHtml(d.tierName || 'License') + ' active');
+            });
         }
-        checkExistingLicense();
 
-        // Browser enable toggle
-        document.getElementById('s-browser-enable').addEventListener('change', function() {
-            document.getElementById('browser-fields').style.display = this.checked ? 'block' : 'none';
+        // ---------- toggles ----------
+        function syncToggles() {
+            [['s-browser-enable', 'browser-fields'], ['s-sms-enable', 'sms-fields'], ['s-pcmetrics-enable', 'pcmetrics-fields'],
+             ['s-hermes-enable', 'hermes-fields'], ['s-codex-enable', 'codex-fields'], ['s-claude-enable', 'claude-fields']].forEach(function (pair) {
+                $(pair[1]).hidden = !$(pair[0]).checked;
+            });
+        }
+        ['s-browser-enable', 's-sms-enable', 's-pcmetrics-enable', 's-hermes-enable', 's-codex-enable', 's-claude-enable'].forEach(function (id) {
+            $(id).addEventListener('change', function () {
+                syncToggles();
+                if (id === 's-sms-enable' && this.checked) populateSmsAgentSelect();
+            });
         });
 
-        // SMS enable toggle
-        document.getElementById('s-sms-enable').addEventListener('change', function() {
-            document.getElementById('sms-fields').style.display = this.checked ? 'block' : 'none';
-            if (this.checked) populateSmsAgentSelect();
-        });
+        // ---------- pre-fill every step from the current config (CH-12) ----------
+        function setValue(id, value) { var el = $(id); if (el && value !== undefined && value !== null) el.value = value; }
+        function setChecked(id, value) { var el = $(id); if (el) el.checked = !!value; }
+        function ensureOption(select, value, label) {
+            if (!select || !value) return;
+            for (var i = 0; i < select.options.length; i++) if (select.options[i].value === value) return;
+            var opt = document.createElement('option');
+            opt.value = value; opt.textContent = label || (value + ' (current)');
+            select.insertBefore(opt, select.firstChild);
+        }
+        function setSelect(id, value) { var el = $(id); if (!el || !value) return; ensureOption(el, value); el.value = value; }
 
-        // PC Metrics enable toggle
-        document.getElementById('s-pcmetrics-enable').addEventListener('change', function() {
-            document.getElementById('pcmetrics-fields').style.display = this.checked ? 'block' : 'none';
-        });
+        function parseWeather(location) {
+            var text = String(location || '').replace(/\+/g, ' ').trim();
+            if (!text) return ['', ''];
+            var idx = text.lastIndexOf(',');
+            return idx < 0 ? [text, ''] : [text.slice(0, idx).trim(), text.slice(idx + 1).trim()];
+        }
 
-        // Hermes enable toggle
-        document.getElementById('s-hermes-enable').addEventListener('change', function() {
-            document.getElementById('hermes-fields').style.display = this.checked ? 'block' : 'none';
-        });
+        function readField(el) { return el.type === 'checkbox' ? el.checked : String(el.value || '').trim(); }
 
-        // Codex enable toggle
-        document.getElementById('s-codex-enable').addEventListener('change', function() {
-            document.getElementById('codex-fields').style.display = this.checked ? 'block' : 'none';
-        });
+        function snapshot() {
+            initial = {};
+            document.querySelectorAll('[data-section]').forEach(function (el) { if (el.id) initial[el.id] = readField(el); });
+            initialHermes = JSON.stringify(hermesRows().map(stripForCompare));
+        }
 
-        // Claude Code enable toggle
-        document.getElementById('s-claude-enable').addEventListener('change', function() {
-            document.getElementById('claude-fields').style.display = this.checked ? 'block' : 'none';
-        });
-
-        // Pre-populate provider fields from current config
-        fetch('/vo-config').then(function(r) { return r.json(); }).then(function(cfg) {
+        function looksSetUp(cfg) {
+            if (cfg.setupComplete === true || cfg._setupComplete === true) return true;
+            var office = cfg.office || {};
             var h = cfg.hermes || {};
-            var hEnable = document.getElementById('s-hermes-enable');
-            if (hEnable) hEnable.checked = h.enabled !== false;
-            setupRenderHermesConnections(h.connections || []);
-            var hPlatformEnable = document.getElementById('s-hermes-platform-enable');
-            var hPlatformToken = document.getElementById('s-hermes-platform-token');
-            var hPlatformAgent = document.getElementById('s-hermes-platform-agent');
-            if (hPlatformEnable) hPlatformEnable.checked = !!h.platformEnabled;
-            if (hPlatformToken && h.platformTokenConfigured) hPlatformToken.placeholder = 'Configured - leave blank to keep';
-            if (hPlatformAgent) hPlatformAgent.value = h.platformAgentId || 'hermes-gateway';
-            var hFields = document.getElementById('hermes-fields');
-            if (hFields && hEnable) hFields.style.display = hEnable.checked ? 'block' : 'none';
+            // (the server's and docker-compose's default name is 'Virtual Office', the wizard's 'My Virtual Office': neither is a choice)
+            var named = office.name && office.name !== 'My Virtual Office' && office.name !== 'Virtual Office';
+            return !!(named || (cfg.weather && cfg.weather.location) ||
+                (cfg.browser && (cfg.browser.cdpUrl || cfg.browser.viewerUrl)) || (h.connections || []).length ||
+                (cfg.features && (cfg.features.smsPanel || cfg.features.pcMetrics || cfg.features.browserPanel)));
+        }
+
+        function loadPrefill() {
+            prefill.loading = true;
+            $('prefill-error').hidden = true;
+            return Promise.all([jsonRequest('/vo-config'), jsonRequest('/sms-status')]).then(function (res) {
+                var cfg = res[0];
+                if (!cfg || cfg.ok === false || !cfg.office) {
+                    prefill.ok = false;
+                    $('prefill-error-text').textContent = 'Your current settings could not be read (' + (cfg && cfg.error ? cfg.error : 'no answer') + ').';
+                    $('prefill-error').hidden = false;
+                    return;
+                }
+                prefill.cfg = cfg;
+                prefill.smsStatus = res[1] && res[1].ok !== false ? res[1] : null;
+                applyPrefill(cfg, prefill.smsStatus);
+                prefill.ok = true;
+                prefill.rerun = looksSetUp(cfg);
+                $('rerun-banner').hidden = !prefill.rerun;
+                $('setup-subtitle').textContent = prefill.rerun ? 'Setup wizard' : 'First-time setup';
+                snapshot();
+            }).finally(function () { prefill.loading = false; syncToggles(); });
+        }
+
+        function applyPrefill(cfg, sms) {
+            var office = cfg.office || {};
+            var features = cfg.features || {};
+            setValue('s-name', office.name || 'My Virtual Office');
+            var w = parseWeather(cfg.weather && cfg.weather.location);
+            setValue('s-weather-city', w[0]); setValue('s-weather-state', w[1]);
+            setValue('s-ocpath', (cfg.openclaw || {}).homePath || '');
+
+            var h = cfg.hermes || {};
+            setChecked('s-hermes-enable', h.enabled !== false);
+            renderHermesConnections(h.connections || []);
+            setChecked('s-hermes-platform-enable', !!h.platformEnabled);
+            if (h.platformTokenConfigured) $('s-hermes-platform-token').placeholder = 'Saved. Leave blank to keep it';
+            setValue('s-hermes-platform-agent', h.platformAgentId || 'hermes-gateway');
+
             var c = cfg.codex || {};
-            var cEnable = document.getElementById('s-codex-enable');
-            var cFields = document.getElementById('codex-fields');
-            if (cEnable) cEnable.checked = c.enabled !== false;
-            if (cFields && cEnable) cFields.style.display = cEnable.checked ? 'block' : 'none';
-            var cHome = document.getElementById('s-codex-home');
-            var cBin = document.getElementById('s-codex-bin');
-            var cWorkspace = document.getElementById('s-codex-workspace');
-            var cMainWorkspace = document.getElementById('s-codex-main-workspace');
-            var cModel = document.getElementById('s-codex-model');
-            var cSandbox = document.getElementById('s-codex-sandbox');
-            var cApproval = document.getElementById('s-codex-approval');
-            var cAppServer = document.getElementById('s-codex-appserver');
-            if (cHome && c.homePath) cHome.value = c.homePath;
-            if (cBin && c.binary) cBin.value = c.binary;
-            if (cWorkspace && c.workspaceRoot) cWorkspace.value = c.workspaceRoot;
-            if (cMainWorkspace && c.mainWorkspace) cMainWorkspace.value = c.mainWorkspace;
-            if (cModel && c.model) cModel.value = c.model;
-            if (cSandbox && c.sandbox) cSandbox.value = c.sandbox;
-            if (cApproval && c.approvalPolicy) cApproval.value = c.approvalPolicy;
-            if (cAppServer) cAppServer.checked = c.preferAppServer !== false;
+            setChecked('s-codex-enable', c.enabled !== false);
+            setValue('s-codex-home', c.homePath || ''); setValue('s-codex-bin', c.binary || '');
+            setValue('s-codex-workspace', c.workspaceRoot || ''); setValue('s-codex-main-workspace', c.mainWorkspace || '');
+            setValue('s-codex-model', c.model || '');
+            setSelect('s-codex-sandbox', c.sandbox || 'workspace-write');
+            setSelect('s-codex-approval', c.approvalPolicy || 'never');
+            setChecked('s-codex-appserver', c.preferAppServer !== false);
 
             var cl = cfg.claudeCode || {};
-            var clEnable = document.getElementById('s-claude-enable');
-            var clFields = document.getElementById('claude-fields');
-            if (clEnable) clEnable.checked = cl.enabled !== false;
-            if (clFields && clEnable) clFields.style.display = clEnable.checked ? 'block' : 'none';
-            var clHome = document.getElementById('s-claude-home');
-            var clBin = document.getElementById('s-claude-bin');
-            var clWorkspace = document.getElementById('s-claude-workspace');
-            var clMainWorkspace = document.getElementById('s-claude-main-workspace');
-            var clModel = document.getElementById('s-claude-model');
-            var clPermission = document.getElementById('s-claude-permission');
-            var clMain = document.getElementById('s-claude-main');
-            var clNative = document.getElementById('s-claude-native');
-            var clRegister = document.getElementById('s-claude-register');
-            if (clHome && cl.homePath) clHome.value = cl.homePath;
-            if (clBin && cl.binary) clBin.value = cl.binary;
-            if (clWorkspace && cl.workspaceRoot) clWorkspace.value = cl.workspaceRoot;
-            if (clMainWorkspace && cl.mainWorkspace) clMainWorkspace.value = cl.mainWorkspace;
-            if (clModel && cl.model) clModel.value = cl.model;
-            if (clPermission && cl.permissionMode) clPermission.value = cl.permissionMode;
-            if (clMain) clMain.checked = cl.includeMain !== false;
-            if (clNative) clNative.checked = cl.includeNativeAgents !== false;
-            if (clRegister) clRegister.checked = cl.registerNativeAgents !== false;
-        }).catch(function(){});
+            setChecked('s-claude-enable', cl.enabled !== false);
+            setValue('s-claude-home', cl.homePath || ''); setValue('s-claude-bin', cl.binary || '');
+            setValue('s-claude-workspace', cl.workspaceRoot || ''); setValue('s-claude-main-workspace', cl.mainWorkspace || '');
+            setValue('s-claude-model', cl.model || '');
+            setSelect('s-claude-permission', cl.permissionMode || 'acceptEdits');
+            setChecked('s-claude-main', cl.includeMain !== false);
+            setChecked('s-claude-native', cl.includeNativeAgents !== false);
+            setChecked('s-claude-register', cl.registerNativeAgents !== false);
 
-        function testPcMetrics() {
-            var url = document.getElementById('s-pcmetrics-url').value.trim();
-            var statusEl = document.getElementById('pcmetrics-test-status');
-            if (!url) {
-                statusEl.innerHTML = '<div class="status-box error">Please enter a Metrics Server URL</div>';
-                return;
-            }
-            statusEl.innerHTML = '<div class="status-box info">Saving and testing...</div>';
-            // Save config so server can proxy
-            fetch('/setup/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ features: { pcMetrics: true }, pcMetrics: { url: url } })
-            }).then(function() {
-                return fetch('/pc-metrics');
-            }).then(function(r) { return r.json(); }).then(function(data) {
-                if (data.error) {
-                    statusEl.innerHTML = '<div class="status-box error">❌ ' + data.error + '<br>Make sure pc-metrics-server.py is running on the target PC.</div>';
-                } else if (data.cpu) {
-                    var info = 'CPU: ' + (data.cpu.percent || 0).toFixed(0) + '% (' + (data.cpu.threads || '?') + ' threads)';
-                    info += ' · RAM: ' + (data.memory.percent || 0).toFixed(0) + '%';
-                    if (data.gpus && data.gpus.length > 0) info += ' · GPU: ' + data.gpus[0].name;
-                    statusEl.innerHTML = '<div class="status-box success">✅ Connected!<br>' + info + '</div>';
-                } else {
-                    statusEl.innerHTML = '<div class="status-box error">❌ Unexpected response. Make sure pc-metrics-server.py is running.</div>';
+            var b = cfg.browser || {};
+            setChecked('s-browser-enable', !!features.browserPanel);
+            setValue('s-cdp-url', b.cdpUrl || ''); setValue('s-viewer-url', b.viewerUrl || '');
+
+            setChecked('s-sms-enable', !!features.smsPanel);
+            if (sms) {
+                var owner = sms.ownerAgentId || sms.agentId || '';
+                if (owner) { ensureOption($('s-sms-agent'), owner, owner); $('s-sms-agent').value = owner; }
+                if (sms.hasCredentials) {
+                    ['s-twilio-sid', 's-twilio-token', 's-twilio-from'].forEach(function (id) { $(id).placeholder = 'Saved. Leave blank to keep it'; });
+                    $('sms-cred-hint').textContent = 'Twilio is already set up. Leave these blank to keep the saved values.';
                 }
-            }).catch(function(e) {
-                statusEl.innerHTML = '<div class="status-box error">Error: ' + e.message + '</div>';
-            });
+            }
+
+            setChecked('s-pcmetrics-enable', !!features.pcMetrics);
+            var pc = cfg.pcMetrics || {};
+            if (pc.url) setValue('s-pcmetrics-url', pc.url);
+            else if (features.pcMetrics || pc.urlConfigured) $('s-pcmetrics-url').placeholder = 'Saved address kept. Type a new one to change it';
         }
 
-        function setupAddHermesConnection(connection) {
-            var container = document.getElementById('s-hermes-connections');
-            if (!container) return;
+        // ---------- Hermes connections ----------
+        function connectionRow(connection) {
             connection = connection || {};
             var row = document.createElement('div');
-            row.className = 's-hermes-connection';
-            row.style.cssText = 'border:1px solid #333;padding:10px;margin:0 0 10px;border-radius:4px;';
-            row.innerHTML = '<label>Connection ID</label><input class="hermes-connection-id" value="' + escapeHtml(connection.id || '') + '" placeholder="aster">' +
-                '<label>Display Name</label><input class="hermes-connection-name" value="' + escapeHtml(connection.name || '') + '" placeholder="Aster">' +
-                '<label>Native Gateway URL</label><input class="hermes-connection-url" value="' + escapeHtml(connection.apiUrl || '') + '" placeholder="http://host.docker.internal:8642">' +
-                '<label>API Server Key</label><input type="password" class="hermes-connection-key" placeholder="' + (connection.apiKeyConfigured ? 'Configured - leave blank to keep' : 'API_SERVER_KEY') + '">' +
-                '<button type="button" onclick="this.parentNode.remove()" style="padding:6px 12px;font-size:9px;">REMOVE</button>';
-            container.appendChild(row);
+            row.className = 'hermes-connection';
+            row.dataset.originalId = connection.id || '';
+            row.dataset.enabled = connection.enabled === false ? 'false' : 'true';
+            var uid = 'hc' + Math.random().toString(36).slice(2, 8);
+            row.innerHTML =
+                '<div class="conn-head"><b>' + escapeHtml(connection.name || connection.id || 'New connection') + '</b>' +
+                '<button type="button" class="small danger" data-action="remove-hermes">Remove</button></div>' +
+                '<label for="' + uid + '-id">Connection ID</label><input type="text" id="' + uid + '-id" class="hermes-connection-id" placeholder="research" autocomplete="off">' +
+                '<label for="' + uid + '-name">Display Name</label><input type="text" id="' + uid + '-name" class="hermes-connection-name" placeholder="Research" autocomplete="off">' +
+                '<label for="' + uid + '-url">Native Gateway URL</label><input type="text" id="' + uid + '-url" class="hermes-connection-url" placeholder="http://host.docker.internal:8642" autocomplete="off" spellcheck="false">' +
+                '<label for="' + uid + '-key">API Server Key</label><input type="password" id="' + uid + '-key" class="hermes-connection-key" autocomplete="new-password">';
+            row.querySelector('.hermes-connection-id').value = connection.id || '';
+            row.querySelector('.hermes-connection-name').value = connection.name || '';
+            row.querySelector('.hermes-connection-url').value = connection.apiUrl || '';
+            row.querySelector('.hermes-connection-key').placeholder = connection.apiKeyConfigured ? 'Saved. Leave blank to keep it' : 'API_SERVER_KEY';
+            return row;
         }
 
-        function setupRenderHermesConnections(connections) {
-            var container = document.getElementById('s-hermes-connections');
-            if (!container) return;
+        // Older API server rows stay editable when they already exist; new
+        // connections are added with the Agent Providers form below.
+        function renderHermesConnections(connections) {
+            var container = $('s-hermes-connections');
             container.innerHTML = '';
-            (connections || []).forEach(setupAddHermesConnection);
-            if (!(connections || []).length) setupAddHermesConnection({ id: 'default', name: 'Hermes' });
+            (connections || []).forEach(function (c) { container.appendChild(connectionRow(c)); });
+            $('hermes-legacy').hidden = !(connections || []).length;
         }
 
-        function _setupHermesPayload() {
-            var enabled = document.getElementById('s-hermes-enable').checked;
-            var connections = [];
-            document.querySelectorAll('#s-hermes-connections .s-hermes-connection').forEach(function(row, index) {
-                var id = (row.querySelector('.hermes-connection-id').value || '').trim() || ('connection-' + (index + 1));
-                var name = (row.querySelector('.hermes-connection-name').value || '').trim();
-                var apiUrl = (row.querySelector('.hermes-connection-url').value || '').trim();
-                var apiKey = (row.querySelector('.hermes-connection-key').value || '').trim();
-                if (!apiUrl) return;
-                var item = { id: id, name: name, apiUrl: apiUrl, enabled: true };
-                if (apiKey) item.apiKey = apiKey;
-                connections.push(item);
-            });
-            var platformToken = (document.getElementById('s-hermes-platform-token') || {}).value || '';
-            var platformAgent = (document.getElementById('s-hermes-platform-agent') || {}).value || '';
-            var hermesPayload = {
-                enabled: enabled,
-                connections: connections,
-                platformEnabled: !!(document.getElementById('s-hermes-platform-enable') || {}).checked,
-                platformAgentId: platformAgent.trim() || 'hermes-gateway'
-            };
-            if (platformToken.trim()) hermesPayload.platformToken = platformToken.trim();
-            return { enabled: enabled, hermes: hermesPayload };
+        // ---------- Hermes: the Agent Providers connection form ----------
+        var AP_STATE_WORDS = { connected: 'Connected', connecting: 'Connecting...', checking: 'Checking...', pairing: 'Waiting for approval', error: 'Needs attention', offline: 'Offline' };
+        function hermesApStateWord(p) {
+            if (p.enabled === false) return 'Switched off';
+            return AP_STATE_WORDS[(p.status || {}).state] || 'Offline';
         }
 
-        function testHermesConnection() {
-            var payload = _setupHermesPayload();
-            var statusEl = document.getElementById('hermes-test-status');
-            if (!payload.enabled) {
-                statusEl.innerHTML = '<div class="status-box info">Hermes is disabled.</div>';
+        function showHermesExisting(rows) {
+            var el = $('hermes-ap-existing');
+            var serve = (rows || []).filter(function (p) { return p && p.kind === 'hermes' && p.transport !== 'api'; });
+            el.textContent = '';
+            el.hidden = !serve.length;
+            if (!serve.length) return;
+            el.appendChild(document.createTextNode('Already connected: ' + serve.map(function (p) {
+                var n = (p.agents || []).filter(function (a) { return a && !a.hidden; }).length;
+                return (p.name || p.label || p.id) + ' (' + hermesApStateWord(p) + ', ' + n + (n === 1 ? ' agent' : ' agents') + ')';
+            }).join(', ') + '. '));
+            var link = document.createElement('a');
+            link.href = '/providers.html?provider=hermes';
+            link.target = '_blank';
+            link.rel = 'noopener';
+            link.textContent = 'Manage in Agent Providers';
+            el.appendChild(link);
+        }
+
+        function showHermesLater(text, againLabel) {
+            var host = $('hermes-ap-form');
+            host.replaceChildren();
+            host.hidden = true;
+            $('hermes-ap-later-text').textContent = text;
+            var again = document.querySelector('[data-action="hermes-ap-again"]');
+            again.hidden = !againLabel;
+            if (againLabel) again.textContent = againLabel;
+            $('hermes-ap-later').hidden = false;
+        }
+
+        function mountHermesForm() {
+            var api = window.VOAgentProviders;
+            var host = $('hermes-ap-form');
+            if (!api || typeof api.mountForm !== 'function') {
+                showHermesLater('The Hermes connection form could not load here. Connect Hermes later in Agent Providers (Settings > Connections).', '');
                 return;
             }
-            if (!payload.hermes.connections.length) {
-                statusEl.innerHTML = '<div class="status-box error">Add at least one gateway URL.</div>';
-                return;
-            }
-            statusEl.innerHTML = '<div class="status-box info">Saving and testing native gateways...</div>';
-            fetch('/setup/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ hermes: payload.hermes })
-            }).then(function() {
-                return fetch('/api/hermes/test', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload.hermes)
+            $('hermes-ap-later').hidden = true;
+            host.hidden = false;
+            // Server manifests first (the form falls back to its built-in fields if this read fails).
+            api.load().then(showHermesExisting, function () {}).then(function () {
+                api.mountForm(host, {
+                    kind: 'hermes', transport: 'serve', skipLabel: 'Skip',
+                    onSkip: function () {
+                        showHermesLater('Skipped. You can connect Hermes any time in Agent Providers (Settings > Connections).', 'Connect Hermes now');
+                    },
+                    onDone: function () {
+                        showHermesLater('Hermes is connected. Its profiles appear as agents in a moment; manage it any time in Agent Providers.', 'Add another Hermes connection');
+                        api.load().then(showHermesExisting, function () {});
+                    }
                 });
-            }).then(function(r) { return r.json(); }).then(function(d) {
-                var lines = (d.connections || []).map(function(c) {
-                    return (c.ok ? '✅ ' : '❌ ') + escapeHtml(c.name || c.id || 'Hermes') +
-                        (c.model ? ' · ' + escapeHtml(c.model) : '') + '<br><span style="color:#9bb;">' + escapeHtml(c.url || '') + '</span>' +
-                        (!c.ok && c.error ? '<br>' + escapeHtml(c.error) : '');
+            });
+        }
+
+        function hermesRows() {
+            return Array.prototype.map.call(document.querySelectorAll('#s-hermes-connections .hermes-connection'), function (row) {
+                return {
+                    id: row.querySelector('.hermes-connection-id').value.trim(),
+                    name: row.querySelector('.hermes-connection-name').value.trim(),
+                    apiUrl: row.querySelector('.hermes-connection-url').value.trim(),
+                    apiKey: row.querySelector('.hermes-connection-key').value.trim(),
+                    enabled: row.dataset.enabled !== 'false',
+                    originalId: row.dataset.originalId || ''
+                };
+            });
+        }
+
+        function stripForCompare(row) { return [row.id, row.name, row.apiUrl, row.apiKey ? '*' : '', row.enabled]; }
+
+        // Returns {connections} or {error}. Rows keep their own enabled state; empty rows are an error, not silently dropped.
+        function hermesConnectionsPayload() {
+            var rows = hermesRows();
+            var out = [];
+            for (var i = 0; i < rows.length; i++) {
+                var r = rows[i];
+                if (!r.apiUrl) return { error: 'Connection ' + (i + 1) + ' has no gateway URL. Fill it in or remove it.' };
+                var item = { id: r.id || ('connection-' + (i + 1)), name: r.name, apiUrl: r.apiUrl, enabled: r.enabled };
+                if (r.apiKey) item.apiKey = r.apiKey;
+                if (r.originalId && r.originalId !== item.id) item.originalId = r.originalId;
+                out.push(item);
+            }
+            return { connections: out };
+        }
+
+        // ---------- payloads: only touched sections, only changed fields (CH-12) ----------
+        function changed(id) { var el = $(id); return !!el && readField(el) !== initial[id]; }
+        function hermesChanged() { return JSON.stringify(hermesRows().map(stripForCompare)) !== initialHermes; }
+
+        function buildPayload() {
+            var payload = {}; var sections = []; var errors = [];
+            function add(section, key, value, label) {
+                payload[section] = payload[section] || {};
+                payload[section][key] = value;
+                if (label && sections.indexOf(label) < 0) sections.push(label);
+            }
+            if (changed('s-name')) add('office', 'name', $('s-name').value.trim() || 'My Virtual Office', 'Office name');
+            if (changed('s-weather-city') || changed('s-weather-state')) {
+                var city = $('s-weather-city').value.trim(); var state = $('s-weather-state').value.trim();
+                add('weather', 'location', city ? (state ? city.replace(/ /g, '+') + ',' + state.replace(/ /g, '+') : city.replace(/ /g, '+')) : null, 'Weather');
+            }
+            var token = $('s-gateway-token').value.trim();
+            if (token) add('openclaw', 'gatewayToken', token, 'Gateway token');
+
+            if (changed('s-hermes-enable')) add('hermes', 'enabled', $('s-hermes-enable').checked, 'Hermes');
+            if (hermesChanged()) {
+                var hc = hermesConnectionsPayload();
+                if (hc.error) errors.push(hc.error); else add('hermes', 'connections', hc.connections, 'Hermes');
+            }
+            if (changed('s-hermes-platform-enable')) add('hermes', 'platformEnabled', $('s-hermes-platform-enable').checked, 'Hermes');
+            if (changed('s-hermes-platform-agent')) add('hermes', 'platformAgentId', $('s-hermes-platform-agent').value.trim() || 'hermes-gateway', 'Hermes');
+            if ($('s-hermes-platform-token').value.trim()) add('hermes', 'platformToken', $('s-hermes-platform-token').value.trim(), 'Hermes');
+
+            var codexMap = { 's-codex-enable': 'enabled', 's-codex-home': 'homePath', 's-codex-bin': 'binary', 's-codex-workspace': 'workspaceRoot',
+                's-codex-main-workspace': 'mainWorkspace', 's-codex-model': 'model', 's-codex-sandbox': 'sandbox', 's-codex-approval': 'approvalPolicy', 's-codex-appserver': 'preferAppServer' };
+            Object.keys(codexMap).forEach(function (id) { if (changed(id)) add('codex', codexMap[id], fieldPayloadValue(id, codexMap[id]), 'Codex'); });
+            var claudeMap = { 's-claude-enable': 'enabled', 's-claude-home': 'homePath', 's-claude-bin': 'binary', 's-claude-workspace': 'workspaceRoot',
+                's-claude-main-workspace': 'mainWorkspace', 's-claude-model': 'model', 's-claude-permission': 'permissionMode', 's-claude-main': 'includeMain',
+                's-claude-native': 'includeNativeAgents', 's-claude-register': 'registerNativeAgents' };
+            Object.keys(claudeMap).forEach(function (id) { if (changed(id)) add('claudeCode', claudeMap[id], fieldPayloadValue(id, claudeMap[id]), 'Claude Code'); });
+
+            if (changed('s-browser-enable')) add('features', 'browserPanel', $('s-browser-enable').checked, 'Agent browser');
+            if (changed('s-cdp-url')) add('browser', 'cdpUrl', $('s-cdp-url').value.trim() || null, 'Agent browser');
+            if (changed('s-viewer-url')) add('browser', 'viewerUrl', $('s-viewer-url').value.trim() || null, 'Agent browser');
+
+            if (changed('s-sms-enable')) add('features', 'smsPanel', $('s-sms-enable').checked, 'SMS');
+            if (changed('s-sms-agent') && $('s-sms-agent').value) { add('sms', 'ownerAgentId', $('s-sms-agent').value, 'SMS'); add('sms', 'agentId', $('s-sms-agent').value); }
+            if ($('s-twilio-sid').value.trim()) add('sms', 'twilioAccountSid', $('s-twilio-sid').value.trim(), 'SMS');
+            if ($('s-twilio-token').value.trim()) add('sms', 'twilioAuthToken', $('s-twilio-token').value.trim(), 'SMS');
+            if ($('s-twilio-from').value.trim()) add('sms', 'fromNumber', $('s-twilio-from').value.trim(), 'SMS');
+
+            if (changed('s-pcmetrics-enable')) add('features', 'pcMetrics', $('s-pcmetrics-enable').checked, 'PC performance');
+            if (changed('s-pcmetrics-url') && $('s-pcmetrics-url').value.trim()) add('pcMetrics', 'url', $('s-pcmetrics-url').value.trim(), 'PC performance');
+            if ($('s-pcmetrics-enable').checked && changed('s-pcmetrics-enable') && !$('s-pcmetrics-url').value.trim() && !(prefill.cfg && prefill.cfg.features && prefill.cfg.features.pcMetrics)) {
+                errors.push('PC Performance is on but has no Metrics Server URL. Add the URL or turn it off.');
+            }
+            return { payload: payload, sections: sections, errors: errors };
+        }
+
+        function fieldPayloadValue(id, key) {
+            var el = $(id);
+            if (el.type === 'checkbox') return el.checked;
+            var v = el.value.trim();
+            if (key === 'model') return v;
+            return v || null;
+        }
+
+        function renderSummary() {
+            var el = $('change-summary');
+            if (!prefill.ok) { el.innerHTML = '<b>Settings not loaded.</b> Go back to the top of the wizard and press Retry before saving.'; return; }
+            var built = buildPayload();
+            if (built.errors.length) {
+                el.innerHTML = '<b>Fix these first:</b><ul class="summary-list">' + built.errors.map(function (e) { return '<li>' + escapeHtml(e) + '</li>'; }).join('') + '</ul>';
+                return;
+            }
+            if (!built.sections.length) {
+                el.innerHTML = prefill.rerun ? '<b>Nothing changed.</b> Launching keeps all your current settings.' : '<b>No settings changed.</b> You can set everything up later in Settings.';
+                return;
+            }
+            el.innerHTML = '<b>Launch saves these changes:</b><ul class="summary-list">' + built.sections.map(function (s) { return '<li>' + escapeHtml(s) + '</li>'; }).join('') + '</ul>' +
+                (prefill.rerun ? '<div class="hint">Everything else stays as it is.</div>' : '');
+        }
+
+        // ---------- tests: use the form values, never save first (CH-36) ----------
+        function codexTestPayload() {
+            return { enabled: true, homePath: $('s-codex-home').value.trim() || null, binary: $('s-codex-bin').value.trim() || null,
+                workspaceRoot: $('s-codex-workspace').value.trim() || null, mainWorkspace: $('s-codex-main-workspace').value.trim() || null,
+                model: $('s-codex-model').value.trim(), sandbox: $('s-codex-sandbox').value, approvalPolicy: $('s-codex-approval').value,
+                preferAppServer: $('s-codex-appserver').checked };
+        }
+        function claudeTestPayload() {
+            return { enabled: true, homePath: $('s-claude-home').value.trim() || null, binary: $('s-claude-bin').value.trim() || null,
+                workspaceRoot: $('s-claude-workspace').value.trim() || null, mainWorkspace: $('s-claude-main-workspace').value.trim() || null,
+                model: $('s-claude-model').value.trim(), permissionMode: $('s-claude-permission').value,
+                includeMain: $('s-claude-main').checked, includeNativeAgents: $('s-claude-native').checked, registerNativeAgents: $('s-claude-register').checked };
+        }
+
+        function agentListHtml(agents, fallbackRole) {
+            if (!agents.length) return '';
+            return '<div class="agent-list-preview">' + agents.slice(0, 10).map(function (a) {
+                return '<div class="agent-row"><span class="emoji">' + (a.emoji ? escapeHtml(a.emoji) : icon('agents')) + '</span><span class="name">' + escapeHtml(a.name || a.id || '') + '</span><span class="role">' + escapeHtml(a.model || a.providerAgentId || fallbackRole) + '</span></div>';
+            }).join('') + '</div>';
+        }
+
+        function testCli(btn, url, payload, statusId, label, binId) {
+            var statusEl = $(statusId);
+            // A test never runs a program path it is sent (the server takes it from the saved settings only): a CLI
+            // path typed here and not saved yet is not what the test runs, so the result says so.
+            var pathNote = binId && changed(binId)
+                ? ' The CLI path you typed is used once you finish setup; this test ran the saved one (or the one on PATH).' : '';
+            box(statusEl, 'info', 'Testing ' + label + ' with the values above (nothing is saved)…' + pathNote);
+            busy(btn, true);
+            jsonRequest(url, payload).then(function (d) {
+                // (a test never runs a CLI path that is not saved yet: it says which one it ran and to save the typed one)
+                var unsaved = d.unsavedBinary ? '<div class="status-box info">This test ran the saved ' + escapeHtml(label) + ' CLI' +
+                    (d.testedBinary ? ' (' + escapeHtml(d.testedBinary) + ')' : '') + ', not ' + escapeHtml(d.unsavedBinary) +
+                    ': a CLI path is only run once it is saved. Press Launch to save it, then test again in Settings.</div>' : '';
+                if (d.ok) {
+                    var agents = d.agents || [];
+                    statusEl.innerHTML = '<div class="status-box success">' + OK + escapeHtml(label) + ' connected' + (d.protocol ? ' · ' + escapeHtml(d.protocol) : '') +
+                        ' · found ' + agents.length + ' agent' + (agents.length === 1 ? '' : 's') + (unsaved ? '' : escapeHtml(pathNote)) + '</div>' + unsaved + agentListHtml(agents, label);
+                } else {
+                    box(statusEl, 'error', NO + '' + escapeHtml(label) + ' not reachable: ' + escapeHtml(d.error || 'unknown error') + (unsaved ? '' : escapeHtml(pathNote)));
+                    if (unsaved) statusEl.insertAdjacentHTML('beforeend', unsaved);
+                }
+            }).finally(function () { busy(btn, false); });
+        }
+
+        function testHermes(btn) {
+            var statusEl = $('hermes-test-status');
+            var hc = hermesConnectionsPayload();
+            if (hc.error) { box(statusEl, 'error', escapeHtml(hc.error)); return; }
+            if (!hc.connections.length) { box(statusEl, 'error', 'Add at least one gateway URL.'); return; }
+            box(statusEl, 'info', 'Testing the gateways above (nothing is saved)…');
+            busy(btn, true);
+            var body = { connections: hc.connections.map(function (c) { var o = { id: c.originalId || c.id, name: c.name, apiUrl: c.apiUrl }; if (c.apiKey) o.apiKey = c.apiKey; return o; }) };
+            jsonRequest('/api/hermes/test', body).then(function (d) {
+                var lines = (d.connections || []).map(function (c) {
+                    return (c.ok ? OK + '' : NO + '') + escapeHtml(c.name || c.id || 'Hermes') + (c.model ? ' · ' + escapeHtml(c.model) : '') +
+                        '<br><span class="sub">' + escapeHtml(c.url || '') + '</span>' + (!c.ok && c.error ? '<br>' + escapeHtml(c.error) : '');
                 }).join('<br>');
                 var count = (d.agents || []).length;
-                statusEl.innerHTML = '<div class="status-box ' + (d.ok ? 'success' : 'error') + '">' +
-                    (d.ok ? 'Native Hermes connected — ' + count + ' agent' + (count === 1 ? '' : 's') : 'Hermes connection failed') +
+                box(statusEl, d.ok ? 'success' : 'error', (d.ok ? 'Hermes connected: ' + count + ' agent' + (count === 1 ? '' : 's') : 'Hermes connection failed' + (d.error && !lines ? ': ' + escapeHtml(d.error) : '')) +
                     (lines ? '<br>' + lines : '') +
-                    (d.platform && d.platform.enabled ? '<br>Gateway Platform: ' + (d.platform.configured ? 'configured' : 'missing token') : '') + '</div>';
-            }).catch(function(e) {
-                statusEl.innerHTML = '<div class="status-box error">Error: ' + escapeHtml(e.message || String(e)) + '</div>';
+                    (d.platform && d.platform.enabled ? '<br>Gateway Platform: ' + (d.platform.configured ? 'configured' : 'missing token') : ''));
+            }).finally(function () { busy(btn, false); });
+        }
+
+        // Browser and PC metrics need a server endpoint that tests an address without saving it.
+        function testUrl(btn, url, body, statusId, describe) {
+            var statusEl = $(statusId);
+            box(statusEl, 'info', 'Testing (nothing is saved)…');
+            busy(btn, true);
+            jsonRequest(url, body).then(function (d) {
+                if (d._status === 404 || d._status === 405 || d._status === 501) {
+                    box(statusEl, 'warn', 'This office server cannot test an address before it is saved. Finish the wizard, then use Test in Settings.');
+                    return;
+                }
+                box(statusEl, d.ok ? 'success' : 'error', describe(d));
+            }).finally(function () { busy(btn, false); });
+        }
+
+        function testBrowser(btn) {
+            var cdpUrl = $('s-cdp-url').value.trim(); var viewerUrl = $('s-viewer-url').value.trim();
+            if (!cdpUrl) { box($('browser-test-status'), 'error', 'Please enter a CDP URL'); return; }
+            if (!viewerUrl) { box($('browser-test-status'), 'error', 'Please enter a Browser Viewer URL so you can watch the browser live'); return; }
+            testUrl(btn, '/api/browser/test', { cdpUrl: cdpUrl, viewerUrl: viewerUrl }, 'browser-test-status', function (d) {
+                return d.ok ? OK + 'Connected! CDP is reachable' + (d.browser ? ' (' + escapeHtml(d.browser) + ')' : '') + '.'
+                    : NO + 'Could not reach CDP at ' + escapeHtml(cdpUrl) + (d.error ? ': ' + escapeHtml(d.error) : '') + '<br>Make sure the browser is running with remote debugging enabled.';
             });
         }
 
-        function codexPayloadFromSetup() {
-            return {
-                enabled: document.getElementById('s-codex-enable').checked,
-                homePath: document.getElementById('s-codex-home').value.trim() || null,
-                binary: document.getElementById('s-codex-bin').value.trim() || null,
-                workspaceRoot: document.getElementById('s-codex-workspace').value.trim() || null,
-                mainWorkspace: document.getElementById('s-codex-main-workspace').value.trim() || null,
-                model: document.getElementById('s-codex-model').value.trim() || '',
-                sandbox: document.getElementById('s-codex-sandbox').value || 'workspace-write',
-                approvalPolicy: document.getElementById('s-codex-approval').value || 'never',
-                preferAppServer: document.getElementById('s-codex-appserver').checked
-            };
+        function testPcMetrics(btn) {
+            var url = $('s-pcmetrics-url').value.trim();
+            if (!url) { box($('pcmetrics-test-status'), 'error', 'Please enter a Metrics Server URL'); return; }
+            testUrl(btn, '/api/pc-metrics/test', { url: url }, 'pcmetrics-test-status', function (d) {
+                if (!d.ok) return NO + '' + escapeHtml(d.error || 'No answer') + '<br>Make sure pc-metrics-server.py is running on that computer.';
+                var m = d.metrics || d;
+                var info = m.cpu ? 'CPU: ' + Number(m.cpu.percent || 0).toFixed(0) + '% (' + escapeHtml(m.cpu.threads || '?') + ' threads)' : '';
+                if (m.memory) info += ' · RAM: ' + Number(m.memory.percent || 0).toFixed(0) + '%';
+                if (m.gpus && m.gpus.length) info += ' · GPU: ' + escapeHtml(m.gpus[0].name);
+                return OK + 'Connected!' + (info ? '<br>' + info : '');
+            });
         }
 
-        function claudeCodePayloadFromSetup() {
-            return {
-                enabled: document.getElementById('s-claude-enable').checked,
-                homePath: document.getElementById('s-claude-home').value.trim() || null,
-                binary: document.getElementById('s-claude-bin').value.trim() || null,
-                workspaceRoot: document.getElementById('s-claude-workspace').value.trim() || null,
-                mainWorkspace: document.getElementById('s-claude-main-workspace').value.trim() || null,
-                model: document.getElementById('s-claude-model').value.trim() || '',
-                permissionMode: document.getElementById('s-claude-permission').value || 'acceptEdits',
-                includeMain: document.getElementById('s-claude-main').checked,
-                includeNativeAgents: document.getElementById('s-claude-native').checked,
-                registerNativeAgents: document.getElementById('s-claude-register').checked
-            };
+        // ---------- OpenClaw ----------
+        function detectAgents(btn) {
+            var path = $('s-ocpath').value.trim();
+            var current = prefill.cfg && prefill.cfg.openclaw ? (prefill.cfg.openclaw.homePath || '') : '';
+            if (!path) { box($('agent-status'), 'error', 'Please enter a path'); return; }
+            if (path === current) { discoverAgents(true); return; }
+            if (!prefill.ok) { box($('agent-status'), 'error', 'Current settings are not loaded yet. Press Retry at the top first.'); return; }
+            box($('agent-status'), 'info', 'Saving the folder and looking for agents…');
+            busy(btn, true);
+            jsonRequest('/setup/save', { openclaw: { homePath: path } }).then(function (d) {
+                if (!d.ok) { box($('agent-status'), 'error', 'Could not save the folder: ' + escapeHtml(d.error || 'unknown error')); return; }
+                if (prefill.cfg && prefill.cfg.openclaw) prefill.cfg.openclaw.homePath = path;
+                discoverAgents(true);
+            }).finally(function () { busy(btn, false); });
         }
 
-        function testCodexConnection() {
-            var payload = codexPayloadFromSetup();
-            var statusEl = document.getElementById('codex-test-status');
-            if (!payload.enabled) {
-                statusEl.innerHTML = '<div class="status-box info">Codex auto-detect is disabled.</div>';
+        // With the provider layer on (0.11 default) the office's agent list comes from OpenClaw's gateway through the
+        // layer's connection, so the folder is checked on its own and the step shows that connection: its state, the
+        // `openclaw devices approve` command while it waits, and Agent Providers (the same card as there).
+        var ocLayer = { on: null, asked: null, status: null, listed: false };
+        function layerOn() {
+            if (ocLayer.asked) return ocLayer.asked;
+            ocLayer.asked = jsonRequest('/api/office/provider-layer').then(function (d) {
+                ocLayer.on = !!(d && d.enabled);
+                return ocLayer.on;
+            });
+            return ocLayer.asked;
+        }
+
+        function discoverAgents(connect) {
+            layerOn().then(function (on) { if (on) layerDetect(connect); else legacyDiscover(); });
+        }
+
+        function layerSection() {
+            $('gateway-config-section').hidden = false;
+            $('oc-allow-origin').hidden = true;   // (0.7.x: openclaw.json's allowed origins; the layer pairs instead)
+            $('oc-layer-connect').hidden = false;
+            $('oc-layer-status').hidden = false;
+        }
+
+        function layerDetect(connect) {
+            var statusEl = $('agent-status');
+            $('no-agents-help').hidden = true;
+            box(statusEl, 'info', icon('search') + 'Checking the folder…');
+            layerSection();
+            jsonRequest('/api/setup/openclaw-folder').then(function (f) {
+                var listed = (f.agents || []).map(function (a) { return (a.emoji ? a.emoji + ' ' : '') + (a.name || a.id); });
+                var typed = $('s-ocpath').value.trim().replace(/\/+$/, '');
+                // (VO_OPENCLAW_PATH, Docker's mounted folder, wins over the folder typed here)
+                var where = f.path && typed && typed !== String(f.path).replace(/\/+$/, '') ? '<br><span class="sub">The office reads OpenClaw from <code>' + escapeHtml(f.path) + '</code> (set when it was started, for example the folder Docker mounts).</span>' : '';
+                if (!f.found) {
+                    box(statusEl, 'warn', WARN + 'No <code>openclaw.json</code> in this folder. Check the tips below, or enter a different path and try again.' + where);
+                    $('no-agents-help').hidden = false;
+                } else if (!f.readable) {
+                    box(statusEl, 'warn', WARN + 'Found <code>openclaw.json</code>, but the office cannot read it. Check the tips below.' + where);
+                    $('no-agents-help').hidden = false;
+                } else {
+                    box(statusEl, 'success', OK + 'OpenClaw folder found' + (listed.length ? ': <code>openclaw.json</code> lists ' + listed.length + ' agent' + (listed.length === 1 ? '' : 's') + ' (' + escapeHtml(listed.slice(0, 8).join(', ')) + (listed.length > 8 ? ', …' : '') + ')' : '') + '. They join the office once the OpenClaw connection below is connected.' + where);
+                }
+            });
+            if (connect) layerConnect(null); else layerStatus();
+        }
+
+        function layerConnect(btn) {
+            var statusEl = $('gateway-config-status');
+            var tokenEl = $('s-gateway-token');
+            var token = tokenEl.value.trim();
+            layerSection();
+            busy(btn, true);
+            box(statusEl, 'info', '⏳ Connecting to OpenClaw…');
+            var saved = token ? jsonRequest('/setup/save', { openclaw: { gatewayToken: token } }) : Promise.resolve({ ok: true });
+            return saved.then(function (d) {
+                if (!d.ok) { box(statusEl, 'error', NO + 'Could not save the token: ' + escapeHtml(d.error || 'unknown error')); return; }
+                if (token) { tokenEl.value = ''; tokenEl.placeholder = 'Saved. Leave blank to keep it.'; initial['s-gateway-token'] = ''; }
+                // (hands the saved gateway to the layer while it has no OpenClaw connection, then answers its state)
+                return jsonRequest('/api/gateway/test').then(function (t) {
+                    if (t.gateway === 'not set up') box(statusEl, 'warn', WARN + 'No gateway token yet. Enter it above (<code>gateway.auth.token</code> in <code>openclaw.json</code>) and press Connect.');
+                    else if (t.gateway !== 'reachable') box(statusEl, 'error', NO + escapeHtml(t.error || 'The gateway is not answering.') + (t.fix ? '<br><span class="sub">' + escapeHtml(t.fix) + '</span>' : ''));
+                    else statusEl.innerHTML = '';
+                    layerStatus();
+                });
+            }).finally(function () { busy(btn, false); });
+        }
+
+        function layerStatus() {
+            var el = $('oc-layer-status');
+            var api = window.VOAgentProviders;
+            el.hidden = false;
+            if (!api || typeof api.mountStatus !== 'function') {
+                el.innerHTML = '<div class="note">The connection status could not load here. <a href="/providers.html?provider=openclaw" target="_blank" rel="noopener">Open Agent Providers</a> to see it.</div>';
                 return;
             }
-            statusEl.innerHTML = '<div class="status-box info">Saving and testing Codex...</div>';
-            fetch('/setup/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ codex: payload })
-            }).then(function() {
-                return fetch('/api/codex/test', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-            }).then(function(r) { return r.json(); }).then(function(d) {
-                if (d.ok) {
-                    var agents = d.agents || [];
-                    var html = '<div class="status-box success">✅ Codex connected — ' + escapeHtml(d.protocol || 'codex') + ' · found ' + agents.length + ' agent' + (agents.length === 1 ? '' : 's') + '</div>';
-                    if (agents.length) {
-                        html += '<div class="agent-list-preview">';
-                        agents.slice(0, 10).forEach(function(a) {
-                            html += '<div class="agent-row"><span class="emoji">' + escapeHtml(a.emoji || '🤖') + '</span><span class="name">' + escapeHtml(a.name) + '</span><span class="role">' + escapeHtml(a.model || a.providerAgentId || 'Codex') + '</span></div>';
-                        });
-                        html += '</div>';
-                    }
-                    statusEl.innerHTML = html;
-                } else {
-                    statusEl.innerHTML = '<div class="status-box error">❌ Codex not reachable: ' + escapeHtml(d.error || 'unknown error') + '</div>';
-                }
-            }).catch(function(e) {
-                statusEl.innerHTML = '<div class="status-box error">Error: ' + escapeHtml(e.message) + '</div>';
+            if (ocLayer.status) { ocLayer.status.refresh(); return; }
+            ocLayer.status = api.mountStatus(el, { kind: 'openclaw', onChange: function (p) {
+                var connected = !!(p && p.enabled !== false && p.status && p.status.state === 'connected');
+                if (connected && (p.agents || []).length) layerAgents();
+            } });
+        }
+
+        function layerAgents() {
+            jsonRequest('/api/agents').then(function (d) {
+                var all = d.agents || [];
+                var oc = all.filter(function (a) { return [a.provider, a.providerKind, a.kind].indexOf('openclaw') >= 0; });
+                var agents = oc.length ? oc : all;
+                if (!agents.length) return;
+                if (!ocLayer.listed) box($('agent-status'), 'success', OK + 'Found ' + agents.length + ' agent' + (agents.length === 1 ? '' : 's') + '! OpenClaw is connected.');
+                ocLayer.listed = true;
+                $('no-agents-help').hidden = true;
+                $('agent-preview').innerHTML = agents.map(function (a) {
+                    return '<div class="agent-row"><span class="emoji">' + (a.emoji ? escapeHtml(a.emoji) : icon('agents')) + '</span><span class="name">' + escapeHtml(a.name || a.id || '') + '</span><span class="role">' + escapeHtml(a.role || a.id || '') + '</span></div>';
+                }).join('');
             });
         }
 
-        function testClaudeCodeConnection() {
-            var payload = claudeCodePayloadFromSetup();
-            var statusEl = document.getElementById('claude-test-status');
-            if (!payload.enabled) {
-                statusEl.innerHTML = '<div class="status-box info">Claude Code auto-detect is disabled.</div>';
-                return;
-            }
-            statusEl.innerHTML = '<div class="status-box info">Saving and testing Claude Code...</div>';
-            fetch('/setup/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ claudeCode: payload })
-            }).then(function() {
-                return fetch('/api/claude-code/test', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-            }).then(function(r) { return r.json(); }).then(function(d) {
-                if (d.ok) {
-                    var agents = d.agents || [];
-                    var html = '<div class="status-box success">✅ Claude Code connected — found ' + agents.length + ' agent' + (agents.length === 1 ? '' : 's') + '</div>';
-                    if (agents.length) {
-                        html += '<div class="agent-list-preview">';
-                        agents.slice(0, 10).forEach(function(a) {
-                            html += '<div class="agent-row"><span class="emoji">' + escapeHtml(a.emoji || '🤖') + '</span><span class="name">' + escapeHtml(a.name) + '</span><span class="role">' + escapeHtml(a.model || a.providerAgentId || 'Claude Code') + '</span></div>';
-                        });
-                        html += '</div>';
-                    }
-                    statusEl.innerHTML = html;
-                } else {
-                    statusEl.innerHTML = '<div class="status-box error">❌ Claude Code not reachable: ' + escapeHtml(d.error || 'unknown error') + '</div>';
+        function legacyDiscover() {
+            var statusEl = $('agent-status'); var previewEl = $('agent-preview');
+            box(statusEl, 'info', icon('search') + 'Looking for agents…');
+            $('no-agents-help').hidden = true;
+            jsonRequest('/api/agents').then(function (d) {
+                if (d.ok === false && !d.agents) {
+                    box(statusEl, 'error', 'Could not reach the server: ' + escapeHtml(d.error || 'unknown error'));
+                    $('no-agents-help').hidden = false;
+                    return;
                 }
-            }).catch(function(e) {
-                statusEl.innerHTML = '<div class="status-box error">Error: ' + escapeHtml(e.message) + '</div>';
+                var agents = d.agents || [];
+                if (agents.length) {
+                    box(statusEl, 'success', OK + 'Found ' + agents.length + ' agent' + (agents.length === 1 ? '' : 's') + '!');
+                    $('gateway-config-section').hidden = false;
+                } else {
+                    box(statusEl, 'warn', WARN + 'No agents found at this path. Check the tips below, or enter a different path and try again.');
+                    $('no-agents-help').hidden = false;
+                }
+                previewEl.innerHTML = agents.map(function (a) {
+                    return '<div class="agent-row"><span class="emoji">' + (a.emoji ? escapeHtml(a.emoji) : icon('agents')) + '</span><span class="name">' + escapeHtml(a.name || a.id || '') + '</span><span class="role">' + escapeHtml(a.role || a.id || '') + '</span></div>';
+                }).join('');
             });
+        }
+
+        function configureGateway(btn) {
+            var statusEl = $('gateway-config-status');
+            box(statusEl, 'info', '⏳ Allowing this office in the gateway…');
+            busy(btn, true);
+            jsonRequest('/api/gateway/configure', { origin: location.origin }).then(function (d) {
+                if (!d.ok) { box(statusEl, 'error', NO + 'Could not update the gateway: ' + escapeHtml(d.error || 'unknown error')); return; }
+                box(statusEl, 'info', OK + '' + (d.added ? 'This office was added to the allowed list.' : 'This office was already allowed.') + ' Testing the connection…');
+                return jsonRequest('/api/gateway/test').then(function (t) {
+                    var lines = [];
+                    if (t.gateway === 'reachable') lines.push(OK + 'Gateway: reachable');
+                    else lines.push(NO + 'Gateway: ' + escapeHtml(t.gateway || 'unreachable') + '<br><span class="sub">Make sure the OpenClaw gateway is running.</span>');
+                    if (t.token === true) lines.push(OK + 'Token: found');
+                    else if (t.gateway === 'reachable') lines.push(NO + 'Token: ' + escapeHtml(t.error || 'auth failed'));
+                    if (t.permission === false) lines.push(NO + 'Permission: ' + escapeHtml(t.detail || 'OpenClaw did not give this office permission.') + '<br><span class="sub">' + escapeHtml(t.fix || '') + '</span>');
+                    if (typeof t.agents === 'number') lines.push((t.agents > 0 ? OK : WARN) + 'Agents connected: ' + Number(t.agents));
+                    box(statusEl, (t.gateway === 'reachable' && t.token && t.permission !== false) ? 'success' : 'error', lines.join('<br>'));
+                });
+            }).finally(function () { busy(btn, false); });
         }
 
         function populateSmsAgentSelect() {
-            var sel = document.getElementById('s-sms-agent');
-            if (sel.options.length > 1) return; // already populated
-            fetch('/api/agents').then(function(r) { return r.json(); }).then(function(d) {
-                (d.agents || []).forEach(function(a) {
+            if (smsAgentsLoaded) return;
+            var sel = $('s-sms-agent');
+            jsonRequest('/api/agents').then(function (d) {
+                var keep = sel.value;
+                (d.agents || []).forEach(function (a) {
+                    var id = a.statusKey || a.id;
+                    if (!id) return;
+                    var existing = null;
+                    for (var i = 0; i < sel.options.length; i++) if (sel.options[i].value === id) existing = sel.options[i];
+                    var label = (a.emoji ? a.emoji + ' ' : '') + (a.name || id);
+                    if (existing) { existing.textContent = label; return; }
                     var opt = document.createElement('option');
-                    opt.value = a.key || a.agentId;
-                    opt.textContent = (a.emoji || '🤖') + ' ' + a.name;
+                    opt.value = id; opt.textContent = label;
                     sel.appendChild(opt);
                 });
-            }).catch(function() {});
-        }
-
-        function testBrowserConnection() {
-            var cdpUrl = document.getElementById('s-cdp-url').value.trim();
-            var viewerUrl = document.getElementById('s-viewer-url').value.trim();
-            var statusEl = document.getElementById('browser-test-status');
-            if (!cdpUrl) {
-                statusEl.innerHTML = '<div class="status-box error">Please enter a CDP URL</div>';
-                return;
-            }
-            if (!viewerUrl) {
-                statusEl.innerHTML = '<div class="status-box error">Please enter a Browser Viewer URL — this is needed so you can watch the browser live</div>';
-                return;
-            }
-            statusEl.innerHTML = '<div class="status-box info">Saving and testing...</div>';
-            // Save browser config first so server can test it
-            fetch('/setup/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    features: { browserPanel: true },
-                    browser: { cdpUrl: cdpUrl, viewerUrl: viewerUrl || null }
-                })
-            }).then(function() {
-                return fetch('/browser-status');
-            }).then(function(r) { return r.json(); }).then(function(data) {
-                if (data.cdpAvailable) {
-                    statusEl.innerHTML = '<div class="status-box success">✅ Connected! CDP is reachable' + (viewerUrl ? ' and viewer URL is set.' : '.') + '</div>';
-                } else {
-                    statusEl.innerHTML = '<div class="status-box error">❌ Could not reach CDP at ' + cdpUrl + '<br>Make sure the browser is running with remote debugging enabled.</div>';
-                }
-            }).catch(function(e) {
-                statusEl.innerHTML = '<div class="status-box error">Error: ' + e.message + '</div>';
+                if (keep) sel.value = keep;
+                smsAgentsLoaded = true;
             });
         }
 
-        function savePathAndDetect() {
-            var path = document.getElementById('s-ocpath').value.trim();
-            if (!path) {
-                document.getElementById('agent-status').innerHTML = '<div class="status-box error">Please enter a path</div>';
-                return;
-            }
-            document.getElementById('agent-status').innerHTML = '<div class="status-box info">Saving path and detecting...</div>';
-            fetch('/setup/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ openclaw: { homePath: path } })
-            }).then(function(r) { return r.json(); }).then(function() {
-                // Now re-detect with the new path
-                discoverAgents();
-            }).catch(function(e) {
-                document.getElementById('agent-status').innerHTML = '<div class="status-box error">Failed: ' + e.message + '</div>';
-            });
-        }
-
-        function discoverAgents() {
-            var statusEl = document.getElementById('agent-status');
-            var previewEl = document.getElementById('agent-preview');
-            var helpEl = document.getElementById('no-agents-help');
-            var gwSection = document.getElementById('gateway-config-section');
-
-            // Pre-populate path field from current config
-            fetch('/vo-config').then(function(r) { return r.json(); }).then(function(cfg) {
-                var pathInput = document.getElementById('s-ocpath');
-                if (pathInput && !pathInput.value && cfg.openclaw && cfg.openclaw.homePath) {
-                    pathInput.value = cfg.openclaw.homePath;
-                }
-            }).catch(function(){});
-
-            statusEl.innerHTML = '<div class="status-box info">🔍 Looking for agents...</div>';
-            helpEl.style.display = 'none';
-            if (gwSection) gwSection.style.display = 'none';
-
-            fetch('/api/agents').then(function(r) { return r.json(); }).then(function(d) {
-                var agents = d.agents || [];
-                if (agents.length > 0) {
-                    statusEl.innerHTML = '<div class="status-box success">✅ Found ' + agents.length + ' agent' + (agents.length === 1 ? '' : 's') + '!</div>';
-                    helpEl.style.display = 'none';
-                    if (gwSection) gwSection.style.display = 'block';
-                    // Auto-populate gateway token
-                    fetch('/gateway-info').then(function(r) { return r.json(); }).then(function(gi) {
-                        var tokenInput = document.getElementById('s-gateway-token');
-                        if (tokenInput && !tokenInput.value && gi.token) tokenInput.value = gi.token;
-                    }).catch(function(){});
-                } else {
-                    statusEl.innerHTML = '<div class="status-box error" style="border-color:#f4a236;background:rgba(244,162,54,0.1);color:#f4c36a;">⚠️ No agents found at this path. Check the troubleshooting tips below, or enter a different path and try again.</div>';
-                    helpEl.style.display = 'block';
-                }
-                previewEl.innerHTML = '';
-                agents.forEach(function(a) {
-                    var row = document.createElement('div');
-                    row.className = 'agent-row';
-                    row.innerHTML = '<span class="emoji">' + (a.emoji || '🤖') + '</span>' +
-                        '<span class="name">' + a.name + '</span>' +
-                        '<span class="role">' + (a.role || a.id) + '</span>';
-                    previewEl.appendChild(row);
-                });
-            }).catch(function(e) {
-                statusEl.innerHTML = '<div class="status-box error">Could not reach the server: ' + e.message + '</div>';
-                helpEl.style.display = 'block';
-            });
-        }
-
-        function configureGateway() {
-            var statusEl = document.getElementById('gateway-config-status');
-            var origin = location.protocol + '//' + location.hostname + (location.port ? ':' + location.port : '');
-            statusEl.innerHTML = '<div class="status-box info">⏳ Configuring gateway...</div>';
-
-            fetch('/api/gateway/configure', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ origin: origin })
-            }).then(function(r) { return r.json(); }).then(function(d) {
-                if (!d.ok) {
-                    statusEl.innerHTML = '<div class="status-box error">❌ Configure failed: ' + (d.error || 'unknown error') + '</div>';
+        // ---------- passcode step (C1) ----------
+        function loadAccess() {
+            ['access-on', 'access-cannot', 'access-form'].forEach(function (id) { $(id).hidden = true; });
+            $('access-loading').hidden = false;
+            var getStatus = window.VOAuth && typeof window.VOAuth.status === 'function' ? window.VOAuth.status() : jsonRequest('/api/access/status');
+            Promise.resolve(getStatus).then(function (st) {
+                $('access-loading').hidden = true;
+                if (!st || st._httpStatus === 404 || st._status === 404 || typeof st.protected !== 'boolean') {
+                    box($('access-status'), 'warn', 'This office server does not support a passcode yet.');
+                    $('access-next').textContent = 'Next →';
                     return;
                 }
-                var addedMsg = d.added ? 'Origin added to allowed list.' : 'Origin already allowed.';
-                statusEl.innerHTML = '<div class="status-box info">✅ ' + addedMsg + ' Testing connection...</div>';
-
-                return fetch('/api/gateway/test').then(function(r) { return r.json(); }).then(function(t) {
-                    var lines = [];
-                    if (t.gateway === 'reachable') {
-                        lines.push('✅ Gateway: reachable');
-                    } else {
-                        lines.push('❌ Gateway: ' + (t.gateway || 'unreachable'));
-                        lines.push('<div class="note" style="margin-top:10px;border-color:#f4a236;">Make sure OpenClaw gateway is running. The Virtual Office needs a WebSocket connection to show live agent status and enable the chat panel.</div>');
-                    }
-                    if (t.token === true) {
-                        lines.push('✅ Token: found');
-                    } else if (t.gateway === 'reachable') {
-                        lines.push('❌ Token: ' + (t.error || 'auth failed'));
-                    }
-                    if (typeof t.agents === 'number') {
-                        lines.push((t.agents > 0 ? '✅' : '⚠️') + ' Agents connected: ' + t.agents);
-                    }
-                    var boxClass = (t.gateway === 'reachable' && t.token) ? 'success' : 'error';
-                    statusEl.innerHTML = '<div class="status-box ' + boxClass + '">' + lines.join('<br>') + '</div>';
-                });
-            }).catch(function(e) {
-                statusEl.innerHTML = '<div class="status-box error">Error: ' + e.message + '</div>';
+                if (st.protected) { $('access-on').hidden = false; $('access-next').textContent = 'Next →'; return; }
+                if (!st.canManage) { $('access-cannot').hidden = false; return; }
+                $('access-form').hidden = false;
+            }).catch(function () {
+                $('access-loading').hidden = true;
+                box($('access-status'), 'error', 'Could not read the access settings.');
             });
         }
 
-        function _buildWeatherLocation(city, state) {
-            city = (city || '').trim();
-            state = (state || '').trim();
-            if (!city) return null;
-            // Format: City,State (no spaces — wttr.in friendly)
-            return state ? city.replace(/ /g, '+') + ',' + state.replace(/ /g, '+') : city.replace(/ /g, '+');
-        }
-
-        function finishSetup() {
-            var browserEnabled = document.getElementById('s-browser-enable').checked;
-            var smsEnabled = document.getElementById('s-sms-enable').checked;
-            var pcMetricsEnabled = document.getElementById('s-pcmetrics-enable').checked;
-            var hermesEnabled = document.getElementById('s-hermes-enable').checked;
-            var gwToken = (document.getElementById('s-gateway-token') || {}).value || '';
-            var config = {
-                office: { name: document.getElementById('s-name').value || 'Virtual Office' },
-                weather: { location: _buildWeatherLocation(document.getElementById('s-weather-city').value, document.getElementById('s-weather-state').value) },
-                features: {
-                    browserPanel: browserEnabled,
-                    smsPanel: smsEnabled,
-                    pcMetrics: pcMetricsEnabled,
-                    apiUsage: true
-                },
-                browser: browserEnabled ? {
-                    cdpUrl: document.getElementById('s-cdp-url').value.trim() || null,
-                    viewerUrl: document.getElementById('s-viewer-url').value.trim() || null
-                } : { cdpUrl: null, viewerUrl: null },
-                sms: smsEnabled ? {
-                    ownerAgentId: document.getElementById('s-sms-agent').value || null,
-                    agentId: document.getElementById('s-sms-agent').value || null,
-                    twilioAccountSid: document.getElementById('s-twilio-sid').value.trim() || null,
-                    twilioAuthToken: document.getElementById('s-twilio-token').value.trim() || null,
-                    fromNumber: document.getElementById('s-twilio-from').value.trim() || null
-                } : {},
-                pcMetrics: pcMetricsEnabled ? {
-                    url: document.getElementById('s-pcmetrics-url').value.trim() || null
-                } : {},
-                hermes: _setupHermesPayload().hermes,
-                codex: codexPayloadFromSetup(),
-                claudeCode: claudeCodePayloadFromSetup(),
-                _setupComplete: true
-            };
-
-            var statusEl = document.getElementById('save-status');
-            statusEl.innerHTML = '<div class="status-box info">Saving...</div>';
-
-            fetch('/setup/save', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(config)
-            }).then(function(r) { return r.json(); }).then(function(d) {
+        function setPasscode(btn) {
+            var a = $('s-passcode').value; var b = $('s-passcode-2').value;
+            var statusEl = $('access-status');
+            if (a.length < 4) { box(statusEl, 'error', 'Use at least 4 characters.'); $('s-passcode').focus(); return; }
+            if (a !== b) { box(statusEl, 'error', 'The two passcodes do not match.'); $('s-passcode-2').focus(); return; }
+            busy(btn, true);
+            jsonRequest('/api/access/passcode', { current: '', next: a }).then(function (d) {
                 if (d.ok) {
-                    statusEl.innerHTML = '<div class="status-box success">✅ Launching your office...</div>';
-                    setTimeout(function() { window.location.href = '/'; }, 1000);
+                    $('s-passcode').value = ''; $('s-passcode-2').value = '';
+                    $('access-form').hidden = true; $('access-on').hidden = false;
+                    box(statusEl, 'success', OK + 'Passcode is on.');
+                    $('access-next').textContent = 'Next →';
                 } else {
-                    statusEl.innerHTML = '<div class="status-box error">Save failed</div>';
+                    var msg = d.error === 'invalid_passcode' ? (d.message || 'That passcode cannot be used.')
+                        : d.error === 'forbidden' ? 'Only someone signed in to this office can set a passcode.'
+                        : d.error === 'too_many_attempts' ? 'Too many tries. Wait a few minutes.'
+                        : (d.error || 'Could not set the passcode.');
+                    box(statusEl, 'error', escapeHtml(msg));
                 }
-            }).catch(function(e) {
-                statusEl.innerHTML = '<div class="status-box error">Error: ' + e.message + '</div>';
+            }).finally(function () { busy(btn, false); });
+        }
+
+        // ---------- finish ----------
+        function finishSetup(btn) {
+            var statusEl = $('save-status');
+            if (!prefill.ok) { box(statusEl, 'error', 'Your current settings are not loaded, so saving now could overwrite them. Press Retry at the top first.'); return; }
+            var built = buildPayload();
+            if (built.errors.length) { renderSummary(); box(statusEl, 'error', escapeHtml(built.errors[0])); return; }
+            if (!built.sections.length && prefill.rerun) {
+                box(statusEl, 'success', OK + 'Nothing changed. Opening your office…');
+                setTimeout(function () { window.location.href = '/'; }, 600);
+                return;
+            }
+            busy(btn, true);
+            box(statusEl, 'info', 'Saving…');
+            jsonRequest('/setup/save', built.payload).then(function (d) {
+                if (d.ok) {
+                    box(statusEl, 'success', OK + 'Saved. Launching your office…');
+                    setTimeout(function () { window.location.href = '/'; }, 900);
+                } else {
+                    box(statusEl, 'error', 'Save failed: ' + escapeHtml(d.error || 'unknown error'));
+                    busy(btn, false);
+                }
             });
         }
+
+        // ---------- wiring ----------
+        document.addEventListener('click', function (event) {
+            var stepBtn = event.target.closest('[data-step]');
+            if (stepBtn) { showStep(Number(stepBtn.dataset.step)); return; }
+            var btn = event.target.closest('[data-action]');
+            if (!btn) return;
+            var action = btn.dataset.action;
+            if (action === 'activate-license') activateLicense(btn);
+            else if (action === 'detect-agents') detectAgents(btn);
+            else if (action === 'configure-gateway') configureGateway(btn);
+            else if (action === 'connect-openclaw') layerConnect(btn);
+            else if (action === 'hermes-ap-again') mountHermesForm();
+            else if (action === 'remove-hermes') { var r = btn.closest('.hermes-connection'); if (r) r.remove(); }
+            else if (action === 'test-hermes') testHermes(btn);
+            else if (action === 'test-codex') testCli(btn, '/api/codex/test', codexTestPayload(), 'codex-test-status', 'Codex', 's-codex-bin');
+            else if (action === 'test-claude') testCli(btn, '/api/claude-code/test', claudeTestPayload(), 'claude-test-status', 'Claude Code', 's-claude-bin');
+            else if (action === 'test-browser') testBrowser(btn);
+            else if (action === 'test-pcmetrics') testPcMetrics(btn);
+            else if (action === 'set-passcode') setPasscode(btn);
+            else if (action === 'retry-prefill') loadPrefill();
+            else if (action === 'finish') finishSetup(btn);
+        });
+        $('s-license-key').addEventListener('keydown', function (e) { if (e.key === 'Enter') activateLicense(document.querySelector('[data-action="activate-license"]')); });
+
+        window.VOSetup = { buildPayload: buildPayload, prefill: prefill, showStep: showStep };
+        checkExistingLicense();
+        loadPrefill();
+        syncToggles();
+        mountHermesForm();
+    })();
     </script>
+    <script src="ui-themes.js?v=20260722-5"></script>
 </body>
 </html>

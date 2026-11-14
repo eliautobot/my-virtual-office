@@ -29,7 +29,7 @@ Add an `appearance` object to each agent in officeConfig.agents[]:
     role: 'Office Agent',
     color: '#ff6d00',        // shirt/body color
     gender: 'F',             // M or F
-    openclawAgentId: 'ent-forge',  // linked OpenClaw agent
+    openclawAgentId: 'ops',  // linked OpenClaw agent
     appearance: {
         skinTone: '#ffcc80',     // skin color
         hairStyle: 'long',       // short, medium, long, buzz, curly, wavy, bun, ponytail, mohawk, bald
@@ -58,36 +58,36 @@ Currently each agent's hair, accessories, etc. are in massive if/else chains by 
 **Hair:** Replace the 15+ `if (this.id === 'xxx')` blocks with a single function `drawHairByConfig(style, color, highlight, gender)` that renders based on hairStyle.
 
 Hair styles to support:
-- **bald** — no hair
-- **buzz** — very short all around (like Moe)
-- **short** — standard short (like Mike, Mark)
-- **medium** — ear-length (like Cash, Plan)
-- **long** — shoulder-length
-- **curly** — curly volume (like Mike variant)
-- **wavy** — wavy flow (like Plan, Itty)
-- **bun** — hair pulled up in bun
-- **ponytail** — pulled back ponytail
-- **mohawk** — tall center strip
+- **bald**: no hair
+- **buzz**: very short all around
+- **short**: standard short
+- **medium**: ear-length
+- **long**: shoulder-length
+- **curly**: curly volume
+- **wavy**: wavy flow
+- **bun**: hair pulled up in bun
+- **ponytail**: pulled back ponytail
+- **mohawk**: tall center strip
 
 **Eyebrows:** Replace M/F-only with styles:
-- **thin** — current female style (thin arched)
-- **thick** — current male style (thick blocks)
-- **angular** — sharp angled
-- **arched** — high dramatic arch
+- **thin**: current female style (thin arched)
+- **thick**: current male style (thick blocks)
+- **angular**: sharp angled
+- **arched**: high dramatic arch
 
 **Facial hair (male only):**
-- **stubble** — dotted shadow on jaw
-- **beard** — full beard covering jaw
-- **goatee** — chin beard only
-- **mustache** — above lip only
+- **stubble**: dotted shadow on jaw
+- **beard**: full beard covering jaw
+- **goatee**: chin beard only
+- **mustache**: above lip only
 
 **Headwear:** Replace per-agent if/else with config-driven:
 - Already mostly done per-agent, just switch on `appearance.headwear`
 
 **Glasses:**
-- **round** — circular frames
-- **square** — rectangular frames
-- **sunglasses** — dark lenses
+- **round**: circular frames
+- **square**: rectangular frames
+- **sunglasses**: dark lenses
 
 **Held items / desk items:** Already in switch blocks, just route via config.
 
@@ -127,7 +127,7 @@ A modal/side panel that opens from the "👤 Agents" toolbar button.
 4. **Face**
    - Eyebrow style (4 options with small preview)
    - Eye color (swatches)
-   - Facial hair — only show for male (style dropdown + color)
+   - Facial hair, only show for male (style dropdown + color)
 
 5. **Accessories**
    - Headwear (grid: none, hard hat, cap, crown, tiara, headband, goggles, headset, beanie)
@@ -160,8 +160,8 @@ A modal/side panel that opens from the "👤 Agents" toolbar button.
 - **Reorder:** not needed for v1
 
 ## Implementation Files
-- **game.js** — appearance rendering refactor, creator panel logic, preview canvas
-- **style.css** — creator panel styles
+- **game.js**: appearance rendering refactor, creator panel logic, preview canvas
+- **style.css**: creator panel styles
 
 ## CRITICAL CONSTRAINTS
 - Existing agents must look IDENTICAL with their default appearances

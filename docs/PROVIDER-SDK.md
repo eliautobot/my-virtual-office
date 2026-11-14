@@ -23,10 +23,15 @@ branches to `server.py`, `game.js`, or `chat.js`.
 
 ## Extension discovery
 
-The server loads Python modules named `vo_provider_*.py` from:
+The server loads Python modules named `vo_provider_*.py` (or `vw_provider_*.py`) from:
 
-1. `/data/provider-extensions`
-2. Each directory in `VO_PROVIDER_EXTENSION_DIRS`
+1. `${VO_STATUS_DIR}/provider-extensions` (in Docker `/data/provider-extensions`, inside the
+   `vo-data` volume)
+2. Each directory in `VO_PROVIDER_EXTENSION_DIRS` (separated by `:`)
+
+Extensions load only at startup, so restart Virtual Office after adding or changing one. The
+shipped `docker-compose.yml` does not forward `VO_PROVIDER_EXTENSION_DIRS`; add it to the
+`environment:` list (and mount the folder) before using it.
 
 An extension exports:
 
@@ -65,6 +70,7 @@ class ExampleProvider:
         },
         creation_schema={},
         resource_schema=[],
+        settings_schema={"version": 1, "configKey": "example", "sections": []},
     )
 
     def test(self):
@@ -101,8 +107,9 @@ class ExampleProvider:
         }
 ```
 
-Run `GET /api/providers/conformance` after installation. A provider that fails
-the contract remains visible in diagnostics but should not be treated as ready.
+`settings_schema` is required: conformance fails without it. Run
+`GET /api/office/providers/conformance` after installation. A provider that fails the contract
+remains visible in diagnostics but should not be treated as ready.
 
 ## Required operations
 
@@ -118,6 +125,7 @@ Capabilities determine which operations are required.
 | `agentCreate` | `create_agent(**fields)` |
 | `agentDelete` | `delete_agent(profile)` |
 | `profileEdit` | `update_profile(profile, patch)` |
+| `approvals` | `pending_approval(...)` and `respond_approval(...)` |
 
 Session create, switch, and delete operations are optional:
 
@@ -131,10 +139,10 @@ until the first message, Virtual Office can clear its local history as the
 
 ## Capability names
 
-The `1.0` contract recognizes:
+The `1.1` contract recognizes:
 
 ```text
-discover health chat streaming sessions sessionCreate sessionDelete
+taskProgress discover health chat streaming sessions sessionCreate sessionDelete
 sessionSwitch interrupt approvals agentCreate agentDelete profileEdit
 resourcesRead resourcesWrite skills models projects meetings agentToAgent
 attachments tools
@@ -148,6 +156,24 @@ Examples:
 - A read-only remote connection sets `resourcesWrite: false`.
 - A CLI without persistent sessions sets all session capabilities to `false`.
 - A provider without native approval events sets `approvals: false`.
+
+## Conformance rules
+
+`GET /api/office/providers/conformance` reports these errors:
+
+- A declared capability without its operation (see Required operations), including
+  `approvals` without both `pending_approval()` and `respond_approval()`.
+- `category` other than `agent-runtime`.
+- No `settings_schema`.
+- `agentCreate` without `creation_schema.fields`.
+- `resourcesRead` without a `resource_schema`; `resourcesWrite` without at least one writable
+  resource; resource entries without `id` and `paths`, with unsafe paths or blanket workspace
+  globs; `sensitive` resources that are not hidden.
+- `skills` without a `skill_schema` or without `resourcesRead`; skill entries without `id` and a
+  relative `path`, or with a format other than `agentskills`.
+- `connection_schema` transports that are not objects, have empty or duplicate ids, are
+  `network` without `modeKey`, `urlKey`, `schemes` and `defaultEndpoints`, are `process`
+  without `executableKey`, or have another kind.
 
 ## Canonical agent fields
 
@@ -303,11 +329,134 @@ Health should distinguish installation from readiness:
 An installed but unauthenticated provider may still allow agent creation and
 native file editing while chat remains unavailable.
 
+## Chat capability manifest
+
+The chat window never switches features on by provider name. It reads one manifest per agent and
+chat, and everything the manifest does not say is off.
+
+`GET /api/agent-chat/can?agent=<office agent id>&session=<provider session key>`
+
+| Field | Meaning |
+|---|---|
+| `ok` | `true`, or `false` with `reason` (`offline`, `signin`, `gone`, `licence`), `message` and `fix`. On `false` the chat shows the message and fix and offers nothing. |
+| `agent`, `kind`, `transport` | The office agent and its provider. `transport` is one of `hermes-serve`, `hermes-api`, `openclaw`, `codex`, `claude-code`, `opencode`, `antigravity`, `builtin`; the chat uses it only to pick the send and stream path. |
+| `manage` | `true` when the caller may manage (a browser session or the office machine). The agent API token never manages. |
+| `access` | `full` or `chat` (Chat only). |
+| `connection` | `{id, name, state, detail, fix}` for the connection line in the chat header. |
+| `caps` | The switches below. |
+| `locked` | Why a feature is off, by name (`screen`, `browser`, `computerWrite`, `settings`): a sentence the side panel shows on a locked tab. |
+| `limits` | `attachmentBytes` (default 25 MB) and `maxFiles` (default 10, at most 50). |
+| `prefs` | The chat's current `model` and `effort`. |
+
+`caps` switches (all `true`/`false` unless noted):
+
+| Switch | What the chat shows |
+|---|---|
+| `stream`, `stop` | Live answer, Stop button. |
+| `sessions`, `sessionCreate`, `sessionRename`, `sessionDelete`, `history` | The sessions drawer and its New, Rename and Delete; earlier messages. |
+| `models`, `effort` | Model picker and effort picker above the composer. |
+| `context` | Context meter. |
+| `attachments`, `files` | Attach button; `attachments` without `files` means pictures only. |
+| `approvals` + `approvalOptions` | Approval cards. Options from `allow-once`, `allow-session`, `allow-always`, `deny` (default: Allow once and Deny). |
+| `questions`, `secrets` | Question cards; secret questions with a hidden input. |
+| `plan`, `progressCard` | Plan steps in the chat; the provider's own progress card. |
+| `tasks`, `taskSteer` | Side panel Tasks tab; the Steer box for a running task. |
+| `queue` | `redirect`, `steer` or `local`: what Enter does while an answer is running. With `redirect` or `steer`, Enter adds to the running turn and Ctrl+Enter sends after it; with `local`, Enter sends after the answer. |
+| `observe`, `presence`, `titles`, `media` | Turns started elsewhere, working/waiting dots, live chat titles, inline media. |
+| `browser`, `screen`, `computer`, `computerWrite` | Side panel Browser, Screen, and Files (read; write). |
+
+The chat also applies these rules: `computerWrite` needs `computer`, `secrets` needs `questions`,
+`progressCard` needs `plan`, `taskSteer` needs `tasks`. The server applies two more: a Chat only
+connection never offers `browser`, `screen` or `computerWrite` (it fills `locked` instead), and
+`sessionDelete` is off when the caller cannot manage.
+
+### Manifest for Provider SDK providers
+
+Built-in adapters (Hermes over `hermes serve`, OpenClaw) answer the whole manifest themselves. Every
+other provider, including Python extensions built with this SDK, gets a manifest built from its
+capability names and the agent's `capabilityOverrides`:
+
+| Manifest switch | From |
+|---|---|
+| `stream`, `stop` | always on |
+| `sessions` | `sessions` |
+| `sessionCreate` | `sessionCreate` (default: `sessions`) |
+| `sessionDelete` | `sessionDelete` |
+| `history` | `history` (default: `sessions`) |
+| `attachments` | `attachments` |
+| `approvals` | `approvals`, with Allow once and Deny |
+
+Everything else is off and `queue` is `local`. Declare those capability names only when the provider
+really supports them: the chat offers exactly what they say.
+
+## Universal chat events
+
+The office sends one small event vocabulary to the chat, whatever the provider. In this release the
+built-in Hermes (`hermes serve`) and OpenClaw adapters publish it; Provider SDK extensions keep their
+own chat path (see Required operations). It is documented here so new adapters can target it.
+
+### Stream and snapshot
+
+- `GET /api/agent-chat/state?agent=<id>&session=<key>` answers a snapshot: `{ok, seq, title,
+  working, usage, provider: {status}, runs: [...], approvals: [...], questions: [...]}` plus `plan`,
+  `queue`, `model`, `effort` when known. Pending approvals and questions are listed here so a page
+  opened late still shows their cards.
+- `GET /api/agent-chat/events?agent=<id>&session=<key>` is a Server-Sent Events stream. Each event is
+  `id: <seq>` and `data: {seq, ts, scope, session, run, observed, event: {type, ...}}`, where `scope`
+  is `chat`, `agent` or `connection`. Comments are heartbeats. Reconnect with `Last-Event-ID` or
+  `?since=<seq>`; nothing is sent twice. A `{"type": "resync", "reason": ...}` frame means "read
+  `/history` and `/state` again" (after an overflow the stream closes). At most 8 streams per client
+  address.
+
+### Turn events
+
+| `event.type` | Fields |
+|---|---|
+| `run.start` | `label` or `phase`, `observed` (a turn started outside the office) |
+| `run.status` | `phase` (or `text`): the run's status line, for example "Waiting for your approval" |
+| `run.delta` | `{text, at}` answer piece, `{thinking, tat}` reasoning piece, or `{text, at: 0, replace: true}` whole answer. `at` and `tat` are the piece's offset in the text so far: repeats are dropped, a gap makes the page read the snapshot again. |
+| `tool.start` | `toolId`, `name`, `title`, `toolKind`, `input` |
+| `tool.update` | `toolId`, `text` (more output), `replace` |
+| `tool.end` | `toolId`, `ok` or `status` (`error`/`failed` = failed), `text`, `error`, `exitCode`, `ms` |
+| `approval.requested` | `approvalId`, `title`, `command`, `summary`, `options`, `cwd`, `approvalKind` |
+| `approval.resolved` | `approvalId`, `decision` |
+| `question.requested` | `questionId`, `questions: [{questionId, header, question, options: [{label, recommended, description}], multiSelect, other, secret}]` |
+| `question.resolved` | `questionId`, `status`, `answers` |
+| `plan.update` | `title`, `steps: [{step, status}]` (`pending`, `in_progress`, `completed`, `cancelled`), `explanation`, `revision` |
+| `usage.update` | `used`, `size`, `cost` |
+| `run.end` | `status` (`ok`/`completed`, `stopped`/`cancelled`, `interrupted`, `error`/`failed`), final `text`, `steered`, `media: [{url, name, mime, kind, size}]`, `model`, `effort`, `tokensIn`, `tokensOut`, `cost`, `ms`, `error`, `fix` |
+
+The final `text` of `run.end` wins over the pieces. `interrupted` shows its `error` as the reason
+("The connection to the agent was lost." when none is given). The chat keeps at most 100,000
+characters of an answer, the last 4,000 characters of a tool's output, 5 questions per card, 8
+options per question and 20 media items per answer.
+
+Frames that are not part of a turn: `session.task` (Tasks tab), `agent.activity` (drawer dots and
+presence), `session.card` (progress card), `native` with `op: "title"` (live chat title),
+`provider` / `provider.status` (connection line).
+
+### Answers back
+
+All `POST`, JSON, and only from a browser session or the office machine:
+
+- `/api/agent-chat/runs` `{agent, session, text, files, queue, clientId}`: send. `text` up to
+  100,000 characters, up to 10 uploaded `files`, `queue` one of `""`, `redirect`, `later`, `steer`,
+  `followup`.
+- `/api/agent-chat/stop` `{agent, session, run}`.
+- `/api/agent-chat/approvals` `{agent, session, run, approval, decision}`. A settled one answers 409
+  `not_pending` ("Already answered").
+- `/api/agent-chat/questions` `{agent, session, run, question, answers}` with `answers` as
+  `{questionId: [labels]}`, `{value: "..."}` for a secret, or `cancel: true`. Secret values are
+  never logged or echoed.
+- `/api/agent-chat/prefs` `{agent, session, model, effort}` (only the keys sent change).
+
+Errors everywhere are an HTTP status plus `{ok: false, error, message, fix}`.
+
 ## Validation checklist
 
 Before enabling a provider:
 
-1. Run `/api/providers/conformance`.
+1. Run `/api/office/providers/conformance`.
 2. Confirm native agent discovery and stable IDs across restarts.
 3. Create a namespaced real agent.
 4. Confirm every declared capability works.

@@ -1,0 +1,658 @@
+/* Agent-scoped Chat References drawer and per-message save action. */
+.chat-panel {
+    --chat-tools-rail-top: 12px;
+    --chat-tools-rail-height: 38px;
+    --chat-tools-rail-gap: 6px;
+    --chat-references-drawer-shift: min(310px, calc(100% - 42px));
+}
+
+.chat-panel .chat-bubble.chat-message-actionable,
+.chat-panel .chat-bubble.chat-referenceable {
+    padding-bottom: 33px !important;
+}
+
+.chat-message-actions {
+    position: absolute;
+    left: 8px;
+    bottom: 6px;
+    z-index: 2;
+    display: flex;
+    max-width: calc(100% - 16px);
+    align-items: center;
+    gap: 4px;
+}
+
+.chat-reference-add,
+.chat-read-aloud {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    width: 24px;
+    max-width: 24px;
+    height: 22px;
+    padding: 0 4px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 7px;
+    background: rgba(7, 11, 19, 0.62);
+    color: rgba(226, 233, 244, 0.72);
+    box-shadow: none;
+    cursor: pointer;
+    opacity: 0.42;
+    white-space: nowrap;
+    transition: max-width 0.16s ease, width 0.16s ease, opacity 0.14s ease, color 0.14s ease, background 0.14s ease;
+}
+
+.chat-reference-add svg,
+.chat-read-aloud-icon {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 14px;
+}
+
+.chat-reference-add svg {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.chat-reference-add span,
+.chat-read-aloud-label {
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 9.5px;
+    font-weight: 700;
+    text-overflow: clip;
+}
+
+.chat-reference-add:hover,
+.chat-reference-add:focus-visible,
+.chat-read-aloud:hover,
+.chat-read-aloud:focus-visible,
+.chat-read-aloud.is-speaking {
+    width: auto;
+    max-width: 170px;
+    padding-right: 7px;
+    color: #fff3a6;
+    background: rgba(19, 25, 39, 0.96);
+    border-color: rgba(255, 215, 0, 0.48);
+    opacity: 1;
+}
+
+.chat-reference-add:focus-visible {
+    outline: 2px solid rgba(255, 215, 0, 0.72);
+    outline-offset: 1px;
+}
+
+.chat-read-aloud {
+    box-sizing: border-box;
+    justify-content: center;
+    color: rgba(177, 221, 255, 0.78);
+    opacity: 0.54;
+}
+
+.chat-read-aloud-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 0;
+}
+
+.chat-read-aloud-icon svg {
+    display: block;
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.chat-read-aloud-label {
+    display: none;
+}
+
+.chat-read-aloud:hover,
+.chat-read-aloud:focus-visible,
+.chat-read-aloud.is-speaking {
+    justify-content: flex-start;
+    border-color: rgba(93, 190, 255, 0.58);
+    color: #d9f2ff;
+}
+
+.chat-read-aloud:hover .chat-read-aloud-label,
+.chat-read-aloud:focus-visible .chat-read-aloud-label,
+.chat-read-aloud.is-speaking .chat-read-aloud-label {
+    display: inline-block;
+}
+
+.chat-read-aloud:focus-visible {
+    outline: 2px solid rgba(93, 190, 255, 0.72);
+    outline-offset: 1px;
+}
+
+.chat-read-aloud.is-speaking {
+    border-color: rgba(80, 217, 255, 0.78);
+    background: rgba(15, 81, 110, 0.9);
+    color: #e5fbff;
+    box-shadow: 0 0 10px rgba(74, 211, 255, 0.42);
+    opacity: 1;
+}
+
+.chat-reference-add.is-saved {
+    color: #8af0a0;
+    border-color: rgba(99, 214, 121, 0.38);
+    background: rgba(24, 75, 39, 0.58);
+    cursor: default;
+    opacity: 0.8;
+}
+
+.chat-reference-add.is-saving {
+    cursor: wait;
+    opacity: 0.65;
+}
+
+.chat-references-rail {
+    position: absolute;
+    top: var(--chat-tools-rail-top);
+    right: -1px;
+    z-index: 26;
+    display: inline-flex;
+    width: 31px;
+    min-width: 31px;
+    height: var(--chat-tools-rail-height);
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid rgba(255, 215, 0, 0.44);
+    border-right: 0;
+    border-radius: 9px 0 0 9px;
+    background: rgba(10, 15, 27, 0.95);
+    color: #ffe46e;
+    box-shadow: -5px 5px 16px rgba(0, 0, 0, 0.34);
+    cursor: pointer;
+    transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s ease;
+}
+
+.chat-references-rail:hover,
+.chat-references-rail:focus-visible {
+    background: #20283a;
+    color: #fff4a9;
+    transform: translateX(-2px);
+}
+
+.chat-references-rail:focus-visible {
+    outline: 2px solid rgba(255, 215, 0, 0.7);
+    outline-offset: -1px;
+}
+
+.chat-references-rail:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+}
+
+.chat-references-rail svg {
+    width: 16px;
+    height: 16px;
+    fill: rgba(255, 215, 0, 0.12);
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.chat-references-rail-count {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    min-width: 13px;
+    height: 13px;
+    padding: 0 2px;
+    border-radius: 7px;
+    background: #d8b400;
+    color: #111522;
+    font: 800 8px/13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    text-align: center;
+}
+
+.chat-references-drawer {
+    box-sizing: border-box;
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 32;
+    display: flex;
+    width: var(--chat-references-drawer-shift);
+    min-width: 0;
+    flex-direction: column;
+    overflow: hidden;
+    border-left: 1px solid rgba(255, 215, 0, 0.35);
+    background: #0b1220;
+    color: #e8edf6;
+    box-shadow: -14px 0 34px rgba(0, 0, 0, 0.58);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translate3d(101%, 0, 0);
+    transition: transform 0.22s ease, opacity 0.16s ease, visibility 0s linear 0.22s;
+    will-change: transform;
+}
+
+.chat-panel.chat-references-open .chat-references-drawer {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translate3d(0, 0, 0);
+    transition: transform 0.22s ease, opacity 0.16s ease;
+}
+
+.chat-panel.chat-references-open .chat-references-rail {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(8px);
+}
+
+.chat-prompt-nav {
+    transition: right 0.22s ease;
+}
+
+.chat-panel.chat-references-open .chat-prompt-nav {
+    right: calc(var(--chat-references-drawer-shift) + 7px);
+    z-index: 34;
+}
+
+.chat-references-head {
+    display: flex;
+    min-height: 46px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background: #111a2b;
+    flex: 0 0 auto;
+}
+
+.chat-references-heading-wrap {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    gap: 7px;
+}
+
+.chat-references-heading-wrap strong {
+    overflow: hidden;
+    color: #ffe56e;
+    font: 700 12px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chat-references-count {
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    border-radius: 10px;
+    background: rgba(255, 215, 0, 0.14);
+    color: #ffe56e;
+    font: 800 10px/20px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    text-align: center;
+}
+
+.chat-references-close {
+    width: 29px;
+    min-width: 29px;
+    height: 29px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #aeb8c8;
+    box-shadow: none;
+    font: 400 21px/1 sans-serif;
+    cursor: pointer;
+}
+
+.chat-references-close:hover,
+.chat-references-close:focus-visible {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+}
+
+.chat-references-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 7px 9px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: #0e1626;
+    flex: 0 0 auto;
+}
+
+.chat-references-toolbar label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: #8795aa;
+    font: 600 9px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.chat-references-sort {
+    height: 28px;
+    padding: 0 7px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 7px;
+    outline: 0;
+    background: #090f1b;
+    color: #dfe6f1;
+    font: 600 10px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color-scheme: dark;
+    cursor: pointer;
+}
+
+.chat-references-sort:focus {
+    border-color: rgba(255, 215, 0, 0.6);
+}
+
+.chat-references-list,
+.chat-reference-detail {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+
+.chat-references-list {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 9px;
+}
+
+.chat-references-list[hidden],
+.chat-reference-detail[hidden] {
+    display: none !important;
+}
+
+.chat-references-empty {
+    display: flex;
+    min-height: 130px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 18px 14px;
+    color: #7f8da2;
+    font: 500 11px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    text-align: center;
+}
+
+.chat-references-empty strong {
+    color: #d8dfeb;
+    font-size: 12px;
+}
+
+.chat-references-empty.error { color: #ff9a95; }
+
+.chat-reference-card {
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    flex-direction: column;
+    gap: 6px;
+    padding: 9px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 10px;
+    outline: 0;
+    background: #151e30;
+    color: #dfe6f0;
+    box-shadow: none;
+    cursor: pointer;
+    text-align: left;
+    transition: border-color 0.14s ease, background 0.14s ease, transform 0.14s ease;
+}
+
+.chat-reference-card:hover,
+.chat-reference-card:focus-visible {
+    border-color: rgba(255, 215, 0, 0.45);
+    background: #1b263b;
+    transform: translateX(-2px);
+}
+
+.chat-reference-card.user { border-left: 3px solid #65aef2; }
+.chat-reference-card.assistant { border-left: 3px solid #e3c33b; }
+
+.chat-reference-card-meta {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.chat-reference-card-meta strong {
+    overflow: hidden;
+    color: #f3f6fb;
+    font: 750 10.5px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chat-reference-card-meta time {
+    flex: 0 0 auto;
+    color: #7f8ca0;
+    font: 500 8.5px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.chat-reference-card-preview {
+    display: -webkit-box;
+    overflow: hidden;
+    color: #b9c2d1;
+    font: 500 10.5px/1.42 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+}
+
+.chat-reference-card-expand {
+    color: #d6bd46;
+    font: 700 9px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.chat-reference-detail {
+    padding: 10px;
+}
+
+.chat-reference-detail-nav {
+    display: flex;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.chat-reference-back {
+    padding: 5px 7px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #9ccff6;
+    box-shadow: none;
+    font: 700 10px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    cursor: pointer;
+}
+
+.chat-reference-back:hover,
+.chat-reference-back:focus-visible {
+    background: rgba(126, 207, 255, 0.11);
+    color: #d8efff;
+}
+
+.chat-reference-detail-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin-bottom: 9px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.chat-reference-detail-meta strong {
+    color: #fff0a3;
+    font: 750 11px/1.25 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.chat-reference-detail-meta time {
+    color: #8190a5;
+    font: 500 9px/1.25 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.chat-reference-detail-content {
+    min-height: 120px;
+    padding: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.035);
+    color: #e4e9f2;
+    font-size: 11px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.chat-reference-detail-content pre {
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+.chat-reference-edit-input {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 190px;
+    resize: vertical;
+    padding: 9px;
+    border: 1px solid rgba(126, 207, 255, 0.48);
+    border-radius: 8px;
+    outline: 0;
+    background: #070c15;
+    color: #f3f6fb;
+    font: 500 11px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.chat-reference-edit-input:focus {
+    border-color: #7ecfff;
+    box-shadow: 0 0 0 2px rgba(126, 207, 255, 0.1);
+}
+
+.chat-reference-detail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.chat-reference-action {
+    min-height: 31px;
+    padding: 0 10px;
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.07);
+    color: #dce4ef;
+    box-shadow: none;
+    font: 700 9.5px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    cursor: pointer;
+}
+
+.chat-reference-action:hover,
+.chat-reference-action:focus-visible { background: rgba(255, 255, 255, 0.13); }
+.chat-reference-action.primary { border-color: #e4c335; background: #cfae1d; color: #111521; }
+.chat-reference-action.primary:hover { background: #e2c43c; }
+.chat-reference-action.danger { color: #ff9d98; }
+.chat-reference-action.danger:hover { background: rgba(255, 78, 69, 0.14); }
+
+.chat-references-status {
+    position: absolute;
+    left: 9px;
+    right: 9px;
+    bottom: 9px;
+    z-index: 3;
+    display: flex;
+    min-height: 34px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 9px;
+    border: 1px solid rgba(104, 220, 126, 0.34);
+    border-radius: 9px;
+    background: rgba(16, 53, 27, 0.97);
+    color: #b9f4c5;
+    box-shadow: 0 9px 24px rgba(0, 0, 0, 0.42);
+    font: 650 10px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.chat-references-status[hidden] { display: none !important; }
+.chat-references-status.error { border-color: rgba(255, 105, 97, 0.4); background: rgba(75, 25, 24, 0.98); color: #ffc0bd; }
+.chat-references-status button {
+    flex: 0 0 auto;
+    padding: 4px 7px;
+    border: 0;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.12);
+    color: inherit;
+    box-shadow: none;
+    font: inherit;
+    cursor: pointer;
+}
+
+@media (hover: none), (pointer: coarse) {
+    .chat-reference-add,
+    .chat-read-aloud {
+        width: 24px;
+        max-width: 24px;
+        color: #fff0a0;
+        opacity: 0.84;
+    }
+
+    .chat-reference-add span,
+    .chat-read-aloud-label { display: none; }
+    .chat-reference-card { min-height: 82px; }
+    .chat-reference-action { min-height: 38px; }
+}
+
+@media (max-width: 560px) {
+    .chat-panel {
+        --chat-references-drawer-shift: min(320px, calc(100% - 36px));
+    }
+
+    .chat-references-drawer {
+        background: #0b1220;
+    }
+
+    .chat-panel.chat-references-open .chat-prompt-nav {
+        right: calc(var(--chat-references-drawer-shift) + 3px);
+    }
+
+    .chat-references-sort {
+        min-height: 32px;
+        font-size: 11px;
+    }
+
+    .chat-reference-detail-content,
+    .chat-reference-edit-input {
+        font-size: 12px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .chat-references-drawer,
+    .chat-prompt-nav,
+    .chat-reference-add,
+    .chat-read-aloud,
+    .chat-reference-card {
+        transition-duration: 0.01ms !important;
+    }
+}

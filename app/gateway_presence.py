@@ -17,6 +17,8 @@ import json
 import time
 import threading
 import traceback
+import os
+import data_owner
 
 try:
     import websockets
@@ -68,6 +70,14 @@ _active_approval_last_seen = {}  # approvalId → timestamp (seconds)
 _approval_runs = {}    # approvalId → runId
 _finish_idle_at = {}   # agent_id → timestamp (seconds)
 _provider_health = {}  # agent_id → normalized provider connectivity record
+_activity_observer = None  # optional durable Agent PC observer (the set_activity_observer slot)
+# Read-only taps (Office life). Listeners must be quick and never block: they run on presence
+# threads, some while _lifecycle_lock is held.
+_activity_observers = []   # add_activity_observer: extra tool-activity observers
+_lifecycle_listeners = []  # add_lifecycle_listener: (name, agent_id, run_id, provider_kind, extra)
+_event_taps = []           # add_event_tap: (event_type, payload) for raw OpenClaw session frames
+_TAPPED_EVENTS = frozenset({"session.message", "sessions.changed", "session.tool"})
+_event_provider = ""        # "openclaw" while a gateway frame is processed (under _lifecycle_lock)
 
 # Manual override tracking
 _manual_overrides = {}  # agent_id → {state, task, updated, expires}
@@ -76,6 +86,14 @@ _manual_overrides = {}  # agent_id → {state, task, updated, expires}
 _gw_connected = False
 _gw_error = None
 _gw_origin = ""
+# openclaw_device.OpenClawDevice set by the server: presence adds the device to its connect only once the office
+# is paired (the main connection asks for the pairing).
+_device = None
+
+
+def set_device(device):
+    global _device
+    _device = device
 _debug = {
     "connectedAt": 0,
     "lastEventAt": 0,
@@ -108,6 +126,89 @@ def get_provider_health(agent_id=None):
         if agent_id is not None:
             return dict(_provider_health.get(str(agent_id), {}))
         return {key: dict(value) for key, value in _provider_health.items()}
+
+
+def set_activity_observer(callback):
+    """Install a provider-neutral observer for meaningful tool resources."""
+    global _activity_observer
+    _activity_observer = callback if callable(callback) else None
+
+
+def _add_to(listeners, callback):
+    if not callable(callback):
+        return lambda: None
+    listeners.append(callback)
+
+    def remove():
+        if callback in listeners:
+            listeners.remove(callback)
+    return remove
+
+
+def add_activity_observer(callback):
+    """Add a tool-activity observer next to the set_activity_observer slot (which keeps its
+    meaning). ``callback(agent_id, event)`` gets the same event; returns a remover."""
+    return _add_to(_activity_observers, callback)
+
+
+def add_lifecycle_listener(callback):
+    """``callback(name, agent_id, run_id, provider_kind, extra)`` after run, tool, approval and
+    provider-health lifecycle changes: run_started (a run id seen for the first time),
+    run_finished {outcome, error}, tool_started {toolName}, approval_requested {approvalId},
+    approval_resolved {approvalId, outcome}, provider_connected / provider_disconnected
+    (transitions only). Returns a remover."""
+    return _add_to(_lifecycle_listeners, callback)
+
+
+def add_event_tap(callback):
+    """``callback(event_type, payload)`` for raw gateway ``session.message``, ``sessions.changed``
+    and ``session.tool`` frames (live tool frames nest phase/name/args under ``data``), before
+    presence handles them. Returns a remover."""
+    return _add_to(_event_taps, callback)
+
+
+def _emit_lifecycle(name, agent_id, run_id="", provider_kind="", extra=None):
+    for callback in list(_lifecycle_listeners):
+        try:
+            callback(name, agent_id, run_id or "", provider_kind or "", dict(extra or {}))
+        except Exception:
+            traceback.print_exc()
+
+
+def activity_snapshot():
+    """What presence holds open right now (read-only copies): ``{"runs": {runId: [agent,
+    lastSeen]}, "approvals": {approvalId: [agent, lastSeen]}, "runStaleSec", "approvalStaleSec"}``."""
+    with _lifecycle_lock:
+        runs = {run_id: [agent_id, _active_run_last_seen.get(run_id, 0)]
+                for agent_id, ids in _active_runs_by_agent.items() for run_id in ids}
+        approvals = {approval_id: [agent_id, _active_approval_last_seen.get(approval_id, 0)]
+                     for agent_id, ids in _active_approvals_by_agent.items() for approval_id in ids}
+    return {"runs": runs, "approvals": approvals, "runStaleSec": ACTIVE_RUN_STALE_SEC,
+            "approvalStaleSec": ACTIVE_APPROVAL_STALE_SEC}
+
+
+def _notify_activity(agent_id, *, tool_name="", arguments=None, phase="", result=None,
+                     source="provider", run_id="", session_id="", tool_id=""):
+    callbacks = [cb for cb in [_activity_observer] + list(_activity_observers) if cb]
+    if not callbacks or not agent_id or not tool_name:
+        return
+    event = {
+        "toolName": tool_name,
+        "arguments": arguments if isinstance(arguments, dict) else {},
+        "phase": phase,
+        "result": result,
+        "source": source,
+        "runId": run_id,
+        "sessionId": session_id,
+    }
+    if tool_id:
+        event["toolCallId"] = str(tool_id)   # one tool call reported by two frame kinds can be told apart
+    for index, callback in enumerate(callbacks):
+        try:
+            callback(agent_id, event if index == 0 else dict(event))
+        except Exception:
+            # Presence observation must never break an agent run.
+            traceback.print_exc()
 
 
 def _decorate_agent_snapshot(agent_id, value):
@@ -167,11 +268,14 @@ def lifecycle_provider_connected(agent_id, provider_kind="", connection_state="c
         return
     with _lifecycle_lock:
         _ensure_agent(agent_id, "provider-health")
+        was_connected = (_provider_health.get(agent_id) or {}).get("connected")
         _note_provider_health(agent_id, True, provider_kind, connection_state)
         with _state_lock:
             current = str(_state.get(agent_id, {}).get("state") or "")
         if current == "offline" and not _agent_has_active_activity(agent_id):
             _set_idle(agent_id, "provider-connected")
+        if was_connected is not True:
+            _emit_lifecycle("provider_connected", agent_id, "", provider_kind)
 
 
 def lifecycle_provider_disconnected(agent_id, provider_kind="", connection_state="offline", error=""):
@@ -182,6 +286,7 @@ def lifecycle_provider_disconnected(agent_id, provider_kind="", connection_state
     with _lifecycle_lock:
         now = int(time.time())
         _ensure_agent(agent_id, "provider-health")
+        was_connected = (_provider_health.get(agent_id) or {}).get("connected")
         _note_provider_health(agent_id, False, provider_kind, connection_state, error)
         _finish_idle_at.pop(agent_id, None)
         with _state_lock:
@@ -191,6 +296,8 @@ def lifecycle_provider_disconnected(agent_id, provider_kind="", connection_state
                 "updated": now,
                 "source": "provider-health",
             })
+        if was_connected is not False:
+            _emit_lifecycle("provider_disconnected", agent_id, "", provider_kind)
 
 
 def lifecycle_run_started(agent_id, run_id, provider_kind="", task="Working"):
@@ -218,7 +325,10 @@ def lifecycle_tool_started(agent_id, run_id, tool_id, tool_name="", provider_kin
         if run_id:
             _mark_run_active(agent_id, run_id)
             _tool_runs[tool_id] = run_id
+        new_tool = tool_id not in _active_tool_last_seen
         _mark_tool_active(agent_id, tool_id)
+        if new_tool:
+            _emit_lifecycle("tool_started", agent_id, run_id, provider_kind, {"toolName": str(tool_name or "")})
         label = task or (f"Using {tool_name}" if tool_name else "Using tool")
         _set_working(agent_id, label, f"{provider_kind or 'provider'}-tool", None)
 
@@ -252,9 +362,12 @@ def lifecycle_approval_requested(agent_id, run_id, approval_id, provider_kind=""
         if run_id:
             _mark_run_active(agent_id, run_id)
             _approval_runs[approval_id] = run_id
+        new_approval = approval_id not in _active_approval_last_seen
         _active_approvals_by_agent.setdefault(agent_id, set()).add(approval_id)
         _active_approval_last_seen[approval_id] = time.time()
         _set_working(agent_id, task or "Waiting for approval", f"{provider_kind or 'provider'}-approval", None)
+        if new_approval:
+            _emit_lifecycle("approval_requested", agent_id, run_id, provider_kind, {"approvalId": approval_id})
 
 
 def lifecycle_approval_resolved(agent_id, run_id, approval_id, provider_kind="", outcome="resolved"):
@@ -269,11 +382,13 @@ def lifecycle_approval_resolved(agent_id, run_id, approval_id, provider_kind="",
             if not approvals:
                 _active_approvals_by_agent.pop(agent_id, None)
         _active_approval_last_seen.pop(approval_id, None)
-        _approval_runs.pop(approval_id, None)
+        run_id = _approval_runs.pop(approval_id, None) or run_id
         if _agent_has_active_activity(agent_id):
             _set_working(agent_id, "Resuming work", f"{provider_kind or 'provider'}-approval", None)
         else:
             _set_finishing(agent_id, f"{provider_kind or 'provider'}-approval")
+        _emit_lifecycle("approval_resolved", agent_id, run_id, provider_kind,
+                        {"approvalId": approval_id, "outcome": str(outcome or "resolved")})
 
 
 def _clear_run_children(agent_id, run_id):
@@ -310,10 +425,44 @@ def lifecycle_run_finished(agent_id, run_id, provider_kind="", outcome="complete
             if provider_kind:
                 _state[agent_id]["providerKind"] = str(provider_kind)
         _set_finishing(agent_id, f"{provider_kind or 'provider'}-lifecycle", None)
+        _emit_lifecycle("run_finished", agent_id, run_id, provider_kind,
+                        {"outcome": str(outcome or "completed"), "error": bool(error)})
+
+
+def _open_run_for(agent_id, run_id):
+    """The agent's open run an event of a provider turn belongs to: its own id when that run is open, else the agent's most
+    recently active open run (a progress tick may carry another id than the run's: Claude Code's carries the CLI's
+    session id), else "" (no run open)."""
+    runs = _active_runs_by_agent.get(agent_id) or set()
+    if run_id and run_id in runs:
+        return run_id
+    if not runs:
+        return ""
+    return max(runs, key=lambda r: _active_run_last_seen.get(r, 0))
+
+
+def _provider_progress(agent_id, run_id, provider, task=None):
+    """A provider says its turn is still going (a progress snapshot, a stream tick, an output delta, an event this adapter
+    does not know): that keeps the agent's OPEN run alive (and, with a task, sets the task line). It never opens a run:
+    only run.started/queued/running do, and their run.completed/failed/cancelled under the same id end them; a run
+    opened by a progress event under another id (or a made-up one) was never ended and held the agent working."""
+    agent_id = str(agent_id or "").strip()
+    if not agent_id:
+        return
+    with _lifecycle_lock:
+        target = _open_run_for(agent_id, str(run_id or "").strip())
+        if not target:
+            return
+        _note_provider_health(agent_id, True, provider)
+        _set_working(agent_id, task or _last_event_task.get(agent_id) or "Working", f"{provider or 'provider'}-lifecycle", target)
 
 
 def set_provider_event(agent_id, provider, event):
-    """Compatibility adapter for normalized native-provider lifecycle events."""
+    """Compatibility adapter for normalized native-provider lifecycle events.
+
+    Only run.started/queued/running open a run; run.completed/failed/cancelled end it (same id). Everything else that
+    belongs to a turn (deltas, progress, stream ticks, unknown names) keeps the agent's open run alive and never opens
+    one; a tool or approval of a run that is not open counts for the agent's open run, or alone when none is."""
     if not agent_id or not isinstance(event, dict):
         return
     provider = str(provider or "provider").strip().lower() or "provider"
@@ -327,16 +476,31 @@ def set_provider_event(agent_id, provider, event):
     )
     approval_id = str(event.get("approvalId") or event.get("approval_id") or event.get("id") or "")
 
+    if event_name.startswith("tool."):
+        nested_tool = event.get("tool") if isinstance(event.get("tool"), dict) else {}
+        _notify_activity(
+            agent_id,
+            tool_name=tool_name or nested_tool.get("name") or "",
+            arguments=event.get("arguments") or event.get("args") or nested_tool.get("arguments") or {},
+            phase=event_name.split(".", 1)[-1],
+            result=event.get("result") or event.get("output"),
+            source=f"{provider}-lifecycle",
+            run_id=run_id,
+            session_id=event.get("sessionId") or event.get("sessionKey") or "",
+        )
+
     if event_name in {"run.started", "run.queued", "run.running"}:
         lifecycle_run_started(agent_id, run_id or f"{provider}:{time.time_ns()}", provider, "Working")
     elif event_name in {"message.delta", "assistant.delta"}:
-        lifecycle_output_streaming(agent_id, run_id or f"{provider}:{time.time_ns()}", provider, "Responding")
+        _provider_progress(agent_id, run_id, provider, "Responding")
     elif event_name == "reasoning.available":
-        lifecycle_output_streaming(agent_id, run_id or f"{provider}:{time.time_ns()}", provider, "Reasoning")
+        _provider_progress(agent_id, run_id, provider, "Reasoning")
     elif event_name == "tool.started":
+        with _lifecycle_lock:
+            owner = _open_run_for(str(agent_id).strip(), run_id)
         lifecycle_tool_started(
             agent_id,
-            run_id,
+            owner,
             tool_id or f"{run_id}:tool:{time.time_ns()}",
             tool_name,
             provider,
@@ -345,9 +509,11 @@ def set_provider_event(agent_id, provider, event):
     elif event_name in {"tool.completed", "tool.failed"}:
         lifecycle_tool_finished(agent_id, run_id, tool_id, provider, "failed" if event_name.endswith("failed") else "completed")
     elif event_name == "approval.request":
+        with _lifecycle_lock:
+            owner = _open_run_for(str(agent_id).strip(), run_id)
         lifecycle_approval_requested(
             agent_id,
-            run_id,
+            owner,
             approval_id or f"{run_id}:approval:{time.time_ns()}",
             provider,
         )
@@ -362,9 +528,10 @@ def set_provider_event(agent_id, provider, event):
             str(event.get("error") or ""),
         )
     elif event_name == "run.stop_requested":
-        lifecycle_output_streaming(agent_id, run_id, provider, "Stopping")
+        _provider_progress(agent_id, run_id, provider, "Stopping")
     else:
-        lifecycle_run_started(agent_id, run_id or f"{provider}:{time.time_ns()}", provider, "Working")
+        # (turn.progress, turn.stream, tool.delta, status ticks ...: the open run goes on)
+        _provider_progress(agent_id, run_id, provider)
 
 
 def set_meetings(meetings_list):
@@ -471,7 +638,7 @@ def init_agents(agent_ids, prune=False):
 # ─── Event Processing ────────────────────────────────────────────
 
 def _extract_agent_id(session_key):
-    """Extract agent_id from session key like 'agent:pq-mike:main'."""
+    """Extract agent_id from session key like 'agent:ops:main'."""
     if not session_key or not str(session_key).startswith("agent:"):
         return None
     parts = str(session_key).split(":")
@@ -510,9 +677,13 @@ def _ensure_agent(agent_id, source="discovered"):
 def _mark_run_active(agent_id, run_id):
     if not agent_id or not run_id:
         return
+    new_run = run_id not in _active_run_last_seen
     _run_agents[run_id] = agent_id
     _active_runs_by_agent.setdefault(agent_id, set()).add(run_id)
     _active_run_last_seen[run_id] = time.time()
+    if new_run and _lifecycle_listeners:
+        _emit_lifecycle("run_started", agent_id, run_id,
+                        _event_provider or (_provider_health.get(agent_id) or {}).get("providerKind", ""))
 
 
 def _mark_run_inactive(agent_id, run_id):
@@ -713,7 +884,36 @@ def _format_tool_task(name, arguments):
     return f"Using {name}" if name else "Working"
 
 
+# OpenClaw's deferred tools are called through a wrapper: tool_call (2026.9) / dispatch_action (2026.11) {id, args};
+# the id is the inner tool, bare ("sessions_send") or a tool-search result ("openclaw:core:sessions_send").
+DEFERRED_TOOL_WRAPPERS = frozenset({"tool_call", "dispatch_action"})
+
+
+def _tool_args_dict(args):
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            return {}
+    return args if isinstance(args, dict) else {}
+
+
+def unwrap_tool_call(name, args=None):
+    """(name, args) of the tool a call really runs: a deferred-tool wrapper's inner tool and arguments, and an
+    "openclaw:<group>:" tool-search prefix dropped. Anything else comes back as it was (args as a dict)."""
+    name, args = str(name or ""), _tool_args_dict(args)
+    if name in DEFERRED_TOOL_WRAPPERS:
+        inner = args.get("id") or args.get("name")
+        if isinstance(inner, str) and inner.strip():
+            return inner.strip().rsplit(":", 1)[-1], _tool_args_dict(args.get("args"))
+        return name, args
+    if name.startswith("openclaw:") and name.count(":") >= 2:
+        name = name.rsplit(":", 1)[-1]
+    return name, args
+
+
 def _read_tool_name_and_args(data):
+    """A tool event's (name, args), a deferred-tool wrapper unwrapped (unwrap_tool_call)."""
     if not isinstance(data, dict):
         return "", {}
     name = (
@@ -726,7 +926,7 @@ def _read_tool_name_and_args(data):
         tc = data.get("toolCall")
         name = tc.get("name") or tc.get("toolName") or ""
         args = tc.get("arguments") or tc.get("args") or args
-    return str(name), args if isinstance(args, dict) else {}
+    return unwrap_tool_call(name, args)
 
 
 def _read_tool_id(payload, data=None):
@@ -749,8 +949,19 @@ def _process_event(event_type, payload):
     """
     if not isinstance(payload, dict):
         return
+    if _event_taps and event_type in _TAPPED_EVENTS:
+        for callback in list(_event_taps):
+            try:
+                callback(event_type, payload)
+            except Exception:
+                traceback.print_exc()
+    global _event_provider
     with _lifecycle_lock:
-        _process_event_locked(event_type, payload)
+        _event_provider = "openclaw"
+        try:
+            _process_event_locked(event_type, payload)
+        finally:
+            _event_provider = ""
 
 
 def _process_event_locked(event_type, payload):
@@ -789,6 +1000,11 @@ def _process_event_locked(event_type, payload):
             if task is None:
                 return
             tool_id = _read_tool_id(payload, data)
+            _notify_activity(
+                agent_id, tool_name=name, arguments=args, phase=phase,
+                result=data.get("result") or data.get("output"), source=f"openclaw-agent-{stream}",
+                run_id=run_id, session_id=session_key, tool_id=tool_id,
+            )
             if phase in ("result", "end", "done", "error", "aborted", "cancelled", "canceled", "failed"):
                 _mark_tool_inactive(agent_id, tool_id)
                 if _agent_has_active_activity(agent_id):
@@ -806,12 +1022,21 @@ def _process_event_locked(event_type, payload):
         return
 
     if event_type == "session.tool":
-        name, args = _read_tool_name_and_args(payload)
+        # Live frames nest phase/name/toolCallId/args/result under ``data``
+        # ({runId, stream, data: {...}, sessionKey, agentId, session}); older ones are flat.
+        name, args = _read_tool_name_and_args(data)
+        if not name:
+            name, args = _read_tool_name_and_args(payload)
         task = _format_tool_task(name, args)
         if task is None:
             return
         phase = str(payload.get("phase") or data.get("phase") or payload.get("status") or "")
         tool_id = _read_tool_id(payload, data)
+        _notify_activity(
+            agent_id, tool_name=name, arguments=args, phase=phase,
+            result=payload.get("result") or data.get("result") or payload.get("output"),
+            source="openclaw-session-tool", run_id=run_id, session_id=session_key, tool_id=tool_id,
+        )
         if phase in ("result", "end", "done", "error", "aborted", "cancelled", "canceled", "failed"):
             _mark_tool_inactive(agent_id, tool_id)
             if _agent_has_active_activity(agent_id):
@@ -951,12 +1176,12 @@ async def _gateway_loop(gateway_url, gateway_token, origin, client_version="unkn
             async with ws_connect(
                 gateway_url,
                 max_size=10 * 1024 * 1024,
-                additional_headers={"Origin": origin},
                 close_timeout=5,
             ) as ws:
                 # Wait for challenge
                 raw = await asyncio.wait_for(ws.recv(), timeout=10)
                 msg = json.loads(raw)
+                device = _device
 
                 if msg.get("type") != "event" or msg.get("event") != "connect.challenge":
                     print(f"⚠️  Gateway presence: unexpected first message: {msg.get('type')}")
@@ -972,10 +1197,10 @@ async def _gateway_loop(gateway_url, gateway_token, origin, client_version="unkn
                         "minProtocol": 4,
                         "maxProtocol": 4,
                         "client": {
-                            "id": "openclaw-control-ui",
+                            "id": "gateway-client",
                             "version": client_version or "unknown",
                             "platform": "server",
-                            "mode": "webchat"
+                            "mode": "backend"
                         },
                         "role": "operator",
                         "scopes": ["operator.read"],
@@ -985,6 +1210,12 @@ async def _gateway_loop(gateway_url, gateway_token, origin, client_version="unkn
                         "auth": {"token": gateway_token}
                     }
                 }
+                if device is not None and device.paired_for(gateway_url):
+                    params = connect_msg["params"]
+                    signed = device.sign_connect(msg.get("payload"), params["client"], params["role"],
+                                                 params["scopes"], gateway_token)
+                    if signed:
+                        params["device"] = signed
                 await ws.send(json.dumps(connect_msg))
 
                 # Wait for connect response
@@ -1004,6 +1235,17 @@ async def _gateway_loop(gateway_url, gateway_token, origin, client_version="unkn
                         _origin_tip_shown = True
                     sleep_sec = min(60, 5 * (2 ** min(_consecutive_failures - 1, 4)))
                     await asyncio.sleep(sleep_sec)
+                    continue
+
+                # Up, but a gateway that granted no read scope (a token-only client from outside its computer)
+                # answers nothing presence asks: not connected, say why, retry slowly.
+                granted = ((res.get("payload") or {}).get("auth") or {}).get("scopes")
+                if isinstance(granted, list) and not {"operator.read", "operator.admin"} & set(granted):
+                    _gw_error = "connected, but OpenClaw did not grant operator.read"
+                    _consecutive_failures += 1
+                    if _consecutive_failures == 1 or _consecutive_failures % 10 == 0:
+                        print(f"❌ Gateway presence: {_gw_error} (attempt {_consecutive_failures})")
+                    await asyncio.sleep(min(60, 5 * (2 ** min(_consecutive_failures - 1, 4))))
                     continue
 
                 # Successful connection — reset failure counter
@@ -1234,8 +1476,11 @@ def save_snapshot(filepath):
     """Save current state to disk for crash recovery."""
     data = get_state()
     try:
+        existed = os.path.exists(filepath)
         with open(filepath, "w") as f:
             json.dump(data, f, indent=2)
+        if not existed:
+            data_owner.adopt(filepath)   # (as root in a data folder someone else owns: that owner's)
     except Exception as e:
         print(f"⚠️  Gateway presence: snapshot save error: {e}")
 

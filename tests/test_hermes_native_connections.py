@@ -84,11 +84,11 @@ def check(label, condition):
 
 def main():
     first = start_gateway("native-default", "openai/model-a", "key-a")
-    second = start_gateway("native-cod", "openai/model-b", "key-b")
+    second = start_gateway("native-coby", "openai/model-b", "key-b")
     try:
         connections = [
-            {"id": "aster", "name": "Aster", "apiUrl": f"http://127.0.0.1:{first.server_port}", "apiKey": "key-a"},
-            {"id": "cod", "name": "Cod", "apiUrl": f"http://127.0.0.1:{second.server_port}", "apiKey": "key-b"},
+            {"id": "astra", "name": "Astra", "apiUrl": f"http://127.0.0.1:{first.server_port}", "apiKey": "key-a"},
+            {"id": "coby", "name": "Coby", "apiUrl": f"http://127.0.0.1:{second.server_port}", "apiKey": "key-b"},
         ]
         agents = discover_hermes_agents(
             hermes_home="/path/that/must/not/be/read",
@@ -97,8 +97,8 @@ def main():
             connections=connections,
             timeout_sec=2,
         )
-        check("one office agent is discovered per native gateway", [item["id"] for item in agents] == ["hermes-aster", "hermes-cod"])
-        check("connection names are preserved", [item["name"] for item in agents] == ["Aster", "Cod"])
+        check("one office agent is discovered per native gateway", [item["id"] for item in agents] == ["hermes-astra", "hermes-coby"])
+        check("connection names are preserved", [item["name"] for item in agents] == ["Astra", "Coby"])
         check("models are advertised by separate native runtimes", [item["model"] for item in agents] == ["openai/model-a", "openai/model-b"])
         check("no CLI or Desktop mode is advertised", all(item["connectionModes"] == ["api"] and not item["cliAvailable"] for item in agents))
 
@@ -114,7 +114,7 @@ def main():
         discovery_source = (APP / "discovery.py").read_text(encoding="utf-8")
         check("Virtual Office has no Hermes gateway auto-start", "_ensure_hermes_profile_api" not in server_source)
         check("production discovery only calls API connections", "return discover_api_connections(" in discovery_source)
-        check("retired Hermes Desktop endpoint is explicitly gone", 'self.path == "/api/hermes/desktop/discover"' in server_source and "self.send_response(410)" in server_source)
+        check("retired Hermes Desktop endpoint is explicitly gone", 'request_path == "/api/hermes/desktop/discover"' in server_source and "self.send_response(410)" in server_source)
     finally:
         first.shutdown()
         second.shutdown()

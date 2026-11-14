@@ -1,0 +1,140 @@
+[
+ {
+  "type": "run.status",
+  "phase": "Thinking"
+ },
+ {
+  "type": "run.status",
+  "phase": "waiting on provider — retrying in 3s (attempt 1/3)"
+ },
+ {
+  "type": "run.status",
+  "phase": "waiting on provider — retrying in 5s (attempt 2/3)"
+ },
+ {
+  "type": "run.status",
+  "phase": "Provider temporarily unavailable — retrying automatically in 17s (cycle 1/5); press Esc to stop"
+ },
+ {
+  "type": "run.status",
+  "phase": "waiting on provider — retrying in 2s (attempt 1/3)"
+ },
+ {
+  "type": "run.status",
+  "phase": "waiting on provider — retrying in 5s (attempt 2/3)"
+ },
+ {
+  "type": "run.status",
+  "phase": "Provider temporarily unavailable — retrying automatically in 33s (cycle 2/5); press Esc to stop"
+ },
+ {
+  "type": "run.status",
+  "phase": "waiting on provider — retrying in 2s (attempt 1/3)"
+ },
+ {
+  "type": "run.status",
+  "phase": "waiting on provider — retrying in 5s (attempt 2/3)"
+ },
+ {
+  "type": "run.status",
+  "phase": "Provider temporarily unavailable — retrying automatically in 71s (cycle 3/5); press Esc to stop"
+ },
+ {
+  "type": "run.status",
+  "phase": "waiting on provider — retrying in 3s (attempt 1/3)"
+ },
+ {
+  "type": "run.status",
+  "phase": "waiting on provider — retrying in 5s (attempt 2/3)"
+ },
+ {
+  "type": "run.status",
+  "phase": "Provider temporarily unavailable — retrying automatically in 71s (cycle 4/5); press Esc to stop"
+ },
+ {
+  "type": "run.status",
+  "phase": "waiting on provider — retrying in 2s (attempt 1/3)"
+ },
+ {
+  "type": "run.status",
+  "phase": "waiting on provider — retrying in 5s (attempt 2/3)"
+ },
+ {
+  "type": "run.status",
+  "phase": "Provider temporarily unavailable — retrying automatically in 70s (cycle 5/5); press Esc to stop"
+ },
+ {
+  "type": "run.status",
+  "phase": "waiting on provider — retrying in 3s (attempt 1/3)"
+ },
+ {
+  "type": "run.status",
+  "phase": "waiting on provider — retrying in 4s (attempt 2/3)"
+ },
+ {
+  "type": "run.status",
+  "phase": "Automatic recovery gave up after 5 cycles — the provider is still unavailable."
+ },
+ {
+  "type": "run.status",
+  "phase": "Retrying in 2.6s (attempt 1/3)..."
+ },
+ {
+  "type": "run.status",
+  "phase": "Retrying in 4.6s (attempt 2/3)..."
+ },
+ {
+  "type": "run.status",
+  "phase": "Retrying in 2.3s (attempt 1/3)..."
+ },
+ {
+  "type": "run.status",
+  "phase": "Retrying in 4.6s (attempt 2/3)..."
+ },
+ {
+  "type": "run.status",
+  "phase": "Retrying in 2.5s (attempt 1/3)..."
+ },
+ {
+  "type": "run.status",
+  "phase": "Retrying in 4.8s (attempt 2/3)..."
+ },
+ {
+  "type": "run.status",
+  "phase": "Retrying in 2.9s (attempt 1/3)..."
+ },
+ {
+  "type": "run.status",
+  "phase": "Retrying in 5.1s (attempt 2/3)..."
+ },
+ {
+  "type": "run.status",
+  "phase": "Retrying in 2.0s (attempt 1/3)..."
+ },
+ {
+  "type": "run.status",
+  "phase": "Retrying in 5.5s (attempt 2/3)..."
+ },
+ {
+  "type": "run.status",
+  "phase": "Retrying in 2.9s (attempt 1/3)..."
+ },
+ {
+  "type": "run.status",
+  "phase": "Retrying in 4.5s (attempt 2/3)..."
+ },
+ {
+  "type": "run.status",
+  "phase": "API failed after 3 retries — HTTP 500: stub error 500"
+ },
+ {
+  "type": "run.end",
+  "status": "error",
+  "text": "custom returned a server error on all 3 attempts — it looks temporarily unavailable. Wait a minute and send /retry, or switch models with /model. To avoid this in future, add a backup provider with `hermes fallback add`.\n\nProvider said: HTTP 500: stub error 500",
+  "ms": 0,
+  "model": "custom:stub-1",
+  "tokensIn": 0,
+  "tokensOut": 0,
+  "error": "HTTP 500: stub error 500"
+ }
+]

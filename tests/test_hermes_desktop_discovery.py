@@ -1,96 +1,110 @@
 #!/usr/bin/env python3
-"""Focused Hermes Desktop discovery tests."""
+"""Finding Hermes after D3: a `hermes serve` backend is found by POST /api/agent-providers/detect (its public
+/api/status page), the Hermes Desktop backend client, its discovery and /api/hermes/desktop/discover are gone
+(the route answers 410 and names the replacement). Before D3 this file checked the Desktop readiness-log port
+discovery; that code was removed with the client.
+"""
+
+import http.client
+import json
 import os
 import sys
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from unittest import mock
 
-
-APP_DIR = os.path.join(os.path.dirname(__file__), "..", "app")
-sys.path.insert(0, APP_DIR)
-
-from providers import hermes  # noqa: E402
+APP = Path(__file__).resolve().parents[1] / "app"
+sys.path.insert(0, str(APP))
 
 
 def check(name, condition, detail=""):
-    mark = "PASS" if condition else "FAIL"
-    print(f"  {mark} {name}" + (f" - {detail}" if detail and not condition else ""))
     if not condition:
-        raise AssertionError(name)
+        raise AssertionError(f"{name}: {detail}")
+    print(f"  OK {name}")
+
+
+class StatusPage(BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        pass
+
+    def do_GET(self):
+        body = json.dumps(self.server.status_body if self.path == "/api/status" else {"error": "not found"}).encode()
+        self.send_response(200 if self.path == "/api/status" else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def start(status_body):
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), StatusPage)
+    srv.status_body = status_body
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+def post(port, path, body):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
+    conn.request("POST", path, body=json.dumps(body).encode(), headers={"Content-Type": "application/json"})
+    res = conn.getresponse()
+    out = json.loads(res.read().decode("utf-8") or "{}")
+    conn.close()
+    return res.status, out
 
 
 def main():
-    old_test = hermes.HermesDesktopBackendClient.test
-    old_listener_ports = hermes._loopback_listener_ports
-    old_running_in_docker = hermes.HermesDesktopBackendClient._running_in_docker
+    data = tempfile.TemporaryDirectory(prefix="vo-hermes-detect-")
+    (Path(data.name) / "openclaw").mkdir()
+    os.environ.update({"VO_STATUS_DIR": data.name, "VO_CONFIG": str(Path(data.name) / "vo-config.json"),
+                       "VO_OPENCLAW_PATH": str(Path(data.name) / "openclaw"),
+                       "VO_CODEX_INCLUDE_NATIVE_AGENTS": "0", "VO_CLAUDE_CODE_INCLUDE_NATIVE_AGENTS": "0"})
+    import server
+    import agent_providers as ap
+    from providers import hermes
 
+    check("Desktop backend client and its discovery are gone",
+          not any(hasattr(hermes, n) for n in ("HermesDesktopBackendClient", "discover_desktop_backend",
+                                               "discover_desktop_agents", "_loopback_listener_ports")))
+    check("Desktop handlers are gone from the server",
+          not any(hasattr(server, n) for n in ("_handle_hermes_desktop_chat", "_handle_hermes_desktop_run_start",
+                                               "_handle_hermes_desktop_run_events", "_handle_hermes_desktop_discover",
+                                               "_test_hermes_desktop", "HermesDesktopBackendClient")))
+    check("API-server path kept", callable(getattr(hermes, "HermesApiClient", None))
+          and callable(getattr(hermes, "discover_api_connections", None)))
+
+    serve, serve_url = start({"version": "0.22.1", "auth_required": True})
+    other, other_url = start({"ok": True, "name": "not hermes"})
+    dead_url = "http://127.0.0.1:9"
+    server._hp_configure(data.name)
+    httpd = server.VirtualOfficeThreadingHTTPServer(("127.0.0.1", 0), server.OfficeHandler)
+    httpd.block_on_close = False
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
     try:
-        with tempfile.TemporaryDirectory() as root:
-            logs_dir = os.path.join(root, "logs")
-            os.makedirs(logs_dir, exist_ok=True)
-            log_path = os.path.join(logs_dir, "desktop.log")
-            with open(log_path, "w", encoding="utf-8") as f:
-                f.write("HERMES_DASHBOARD_READY port=62353\n")
-                f.write("dashboard at http://127.0.0.1:62353\n")
-                f.write("HERMES_DASHBOARD_READY port=57485\n")
-
-            ports = hermes._desktop_ports_from_log(log_path)
-            check("Latest Desktop readiness port is preferred", ports[:2] == [57485, 62353], str(ports))
-
-            calls = []
-
-            def fake_test(self, verify_ws=True):
-                calls.append({
-                    "baseUrl": self.base_url,
-                    "tcpHost": self.tcp_host or "",
-                    "tcpPort": self.tcp_port or "",
-                    "hostHeader": self.host_header or "",
-                    "verifyWs": verify_ws,
-                })
-                ok = self.base_url == "http://127.0.0.1:57485" and self.tcp_host == "127.0.0.2" and int(self.tcp_port or 0) == 57485
-                return {
-                    "ok": ok,
-                    "chatReady": ok,
-                    "websocketOk": ok,
-                    "authRequired": False,
-                    "version": "test",
-                    "tcpHost": self.tcp_host or "",
-                    "tcpPort": self.tcp_port or "",
-                    "hostHeader": self.host_header or "",
-                    "logicalUrl": self._logical_url("/"),
-                    "connectUrl": self._connect_url("/"),
-                    "error": "" if ok else "not this route",
-                }
-
-            hermes.HermesDesktopBackendClient.test = fake_test
-            hermes._loopback_listener_ports = lambda: []
-            hermes.HermesDesktopBackendClient._running_in_docker = staticmethod(lambda: False)
-
-            result = hermes.discover_desktop_backend(
-                hermes_home=root,
-                desktop_tcp_host="127.0.0.2",
-                desktop_tcp_port="62354",
-                timeout_sec=1,
-            )
-            check("Discovery finds Desktop from readiness log", result.get("found"), result.get("error", ""))
-            check("Discovery connects through current Desktop port", result.get("ok"), str(result))
-            check("Stale configured TCP port is bypassed", result.get("desktopTcpPort") == 57485, str(result))
-            check("Configured route host is preserved", result.get("desktopTcpHost") == "127.0.0.2", str(result))
-            check("Logical Desktop URL stays loopback", result.get("desktopUrl") == "http://127.0.0.1:57485", str(result))
-            check("Current-port fallback was attempted", any(c["tcpHost"] == "127.0.0.2" and c["tcpPort"] == 57485 for c in calls), str(calls))
-
-            hermes.HermesDesktopBackendClient._running_in_docker = staticmethod(lambda: True)
-            os.environ["VO_HERMES_DESKTOP_DOCKER_HOST"] = "docker-host.test"
-            client = hermes.HermesDesktopBackendClient(base_url="http://127.0.0.1:57485")
-            check("Docker loopback URLs get a physical route host", client.tcp_host == "docker-host.test", client.tcp_host or "")
-            check("Docker route keeps the Desktop URL port", client.tcp_port == 57485, str(client.tcp_port))
-            check("Docker route keeps loopback Host identity", client.host_header == "127.0.0.1:57485", client.host_header or "")
+        # Only the fixtures are probed (the manifest's usual addresses are swapped out).
+        with mock.patch.dict(ap.MANIFESTS["hermes"], {"detect": [serve_url, other_url, dead_url]}):
+            status, out = post(port, "/api/agent-providers/detect", {"kind": "hermes"})
+        check("detect answers", status == 200 and out.get("ok") is True, f"{status} {out}")
+        found = out.get("found") or []
+        check("detect finds the hermes serve status page", [f.get("url") for f in found] == [serve_url], str(found))
+        check("detect reports version and sign-in", (found[0].get("version"), found[0].get("authRequired")) == (
+            "0.22.1", True), str(found))
+        status, out = post(port, "/api/agent-providers/detect", {"kind": "openclaw"})
+        check("detect is for Hermes only", status == 400, f"{status} {out}")
+        status, out = post(port, "/api/hermes/desktop/discover", {})
+        check("old Desktop route answers 410 and names the replacement",
+              status == 410 and out.get("replacement") == "/api/agent-providers/detect", f"{status} {out}")
     finally:
-        hermes.HermesDesktopBackendClient.test = old_test
-        hermes._loopback_listener_ports = old_listener_ports
-        hermes.HermesDesktopBackendClient._running_in_docker = old_running_in_docker
-        os.environ.pop("VO_HERMES_DESKTOP_DOCKER_HOST", None)
+        httpd.shutdown()
+        httpd.server_close()
+        serve.shutdown()
+        other.shutdown()
+        server._hp_configure()
+        data.cleanup()
 
-    print("\n  Hermes Desktop discovery: all checks passed")
+    print("\n  Hermes detect (replaces Desktop discovery): all checks passed")
 
 
 if __name__ == "__main__":

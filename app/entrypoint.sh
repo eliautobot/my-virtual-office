@@ -1,13 +1,10 @@
 #!/bin/sh
 # Virtual Office entrypoint
+set -e
 SHARED="${VO_STATUS_DIR:-/data}"
 mkdir -p "$SHARED"
-chmod 777 "$SHARED"
-find "$SHARED" -type f -exec chmod 666 {} + 2>/dev/null
-
-# Cache-busting: stamp current epoch into ?v= params for .js and .css refs
-CACHE_V=$(date +%s)
-sed -i "s/?v=[0-9]*/?v=${CACHE_V}/g" index.html
-echo "[entrypoint] Cache-busted index.html with v=${CACHE_V}"
-
-exec python3 server.py
+# No blanket chmod: the data folder holds credentials (vo-config.json, access.json).
+# To own the files as your host user, set `user:` in docker-compose.yml (see .env.example).
+# Cache busting happens per request (the server stamps ?v= tokens from file
+# mtimes), so index.html is never edited in place.
+exec python3 -u server.py

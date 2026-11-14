@@ -183,7 +183,45 @@ for (const provider of ['hermes', 'codex', 'claude-code']) {
   check('Terminal cleanup is centralized', /finishRunUi\(runId, status/.test(chat));
   check('Secondary chats retile after the primary open transition', /setTimeout\(\(\) => \{[\s\S]*_tileSecondaryPanelsNow\(\);[\s\S]*_clampOpenChatPanelsToViewport\(\);[\s\S]*_positionExteriorTabs\(\);[\s\S]*\}, 320\)/.test(chat));
   check('Chat event model loads before renderer', index.indexOf('chat-events.js') > -1 && index.indexOf('chat-events.js') < index.indexOf('chat.js'));
-  check('Provider toolbar link survives UI modernization', /providersLink = toolbar\.querySelector\(':scope > a\[href="\/providers\.html"\]'\)/.test(modernUi) && /providersLink.*'🧩 Providers'/.test(modernUi));
+  // Universal chat path (Hermes over `hermes serve`, design 4.x, phase B4).
+  const at = name => index.indexOf(name + '?v=');
+  check('Universal modules load after the reducer and before the renderer', at('chat-events.js') > -1 && at('chat-events.js') < at('chat-caps.js') &&
+    at('chat-caps.js') < at('chat-universal.js') && at('chat-universal.js') < at('chat-cards.js') && at('chat-cards.js') < at('chat.js') && /hp-chat\.css/.test(index));
+  check('Capability manifest gates controls with the registry as fallback', /fetch\('\/api\/agent-chat\/can\?agent='/.test(chat) && /ChatCaps\.fromRegistry\(this\.getSelectedCapabilities\(\)/.test(chat) && /applyCaps\(can, agent/.test(chat));
+  check('Serve Hermes is told apart from API and CLI Hermes', /isServeHermesSelected\(\) \{[\s\S]*this\.can\.transport === 'hermes-serve'[\s\S]*includes\('serve'\)/.test(chat) &&
+    /apiAvailable === 'true' && !this\.isServeHermesSelected\(\)/.test(chat) && /return !this\.isNativeHermesSelected\(\) && !this\.isServeHermesSelected\(\)/.test(chat));
+  check('Serve sends take the universal route before every other path', /if \(this\.isServeHermesSelected\(\)\) \{[\s\S]*?sendServeMessage\([\s\S]*?\}\s*if \(this\.isGenericProviderSelected\(\)\)/.test(chat) && /'\/api\/agent-chat\/runs'/.test(chat));
+  check('Serve stop and history use the universal routes first', /async sendStop\(\) \{\s*(?:\/\/[^\n]*\n\s*)?(?:if \(this\.queue\?\.pause\(\)\) this\.renderQueue\(\);\s*)?try \{\s*if \(this\.isServeHermesSelected\(\)\)/.test(chat) && /'\/api\/agent-chat\/stop'/.test(chat) &&
+    /if \(this\.isServeHermesSelected\(\)\) \{\s*return await this\.loadServeHistory\(/.test(chat) && /'\/api\/agent-chat\/history'/.test(chat));
+  check('Universal stream resumes from the snapshot seq', /'\/api\/agent-chat\/state'/.test(chat) && /this\.openChatStream\(\{ since: state\.seq \}\)/.test(chat) && /'\/api\/agent-chat\/events\?'/.test(chat) && /addEventListener\('resync'/.test(chat));
+  check('Universal frames enter the shared reducer', /handleUniversalFrame\(frame\) \{[\s\S]*?this\.universal\.toReducer\(frame\)[\s\S]*?applyUniversalEvent/.test(chat) && /applyUniversalEvent\(event\) \{[\s\S]*?this\.applyTurnEvent\(event\)/.test(chat));
+  check('Universal approvals use chat-cards; legacy Hermes and Codex keep their cards', /action\.kind === 'approval' && action\.provider === 'universal'/.test(chat) &&
+    /ChatCards\.approvalCard\(/.test(chat) && /appendHermesPendingApproval\(action\.approval/.test(chat) && /appendCodexPendingApproval\(action\.approval/.test(chat));
+  check('Answered cards settle in every window', /function settleEverywhere\(kind, id, outcome, origin\)/.test(chat) && /ChatCards\.settleApproval\(this\.messages, action\.approvalId/.test(chat));
+  // C2: send while working, pickers, OpenClaw cards over the filtered chat stream.
+  check('Enter / Ctrl+Enter go through the send-while-working decision (redirect, steer, local queue)',
+    /submitComposer\(\{ ctrl: !!\(e\.ctrlKey \|\| e\.metaKey\) \}\)/.test(chat) && /ChatQueue\.decide\(\{/.test(chat) &&
+    /queue: 'redirect'/.test(chat) && /params\.queueMode = 'followup'/.test(chat) && /this\.queue\?\.pause\(\)/.test(chat));
+  check('Model and effort pickers read /models and post /prefs for this chat only',
+    /'\/api\/agent-chat\/models', \{ agent: this\.chatAgentId\(\), session: this\.agentChatSession\(\) \}/.test(chat) &&
+    /'\/api\/agent-chat\/prefs', null, \{ agent: this\.chatAgentId\(\), session: this\.agentChatSession\(\), \.\.\.patch \}/.test(chat));
+  check('OpenClaw approvals and questions follow the filtered chat stream into the same cards',
+    /view\.transport === 'openclaw' && this\.isNativeOpenClawSelected\(\)/.test(chat) && /if \(!this\.usesChatStream\(\) \|\|/.test(chat));
+  check('Secondary windows drop the primary window\'s live pickers, meter, queue and lines from their clone',
+    /primaryPanel\.cloneNode\(true\)[\s\S]{0,600}querySelectorAll\('\.hp-pickers, \.hp-picker-pop, \.hp-context-meter, \.hp-queue/.test(chat));
+  check('chat-queue.js, chat-pickers.js, chat-media.js, chat-sidepanel.js and chat-windows.js load before chat.js',
+    /<script src="chat-queue\.js[^"]*"><\/script>\s*<script src="chat-pickers\.js[^"]*"><\/script>\s*<script src="chat-media\.js[^"]*"><\/script>\s*<script src="chat-sidepanel\.js[^"]*"><\/script>\s*<script src="chat-windows\.js[^"]*"><\/script>\s*<script src="chat\.js/.test(index));
+  check('Chat windows: up to four, a side button each, put away, one chat per window, restored after a reload (chat-windows.js)',
+    /windowManager = globalThis\.ChatWindows \? globalThis\.ChatWindows\.createManager\(/.test(chat) &&
+    /function keepChatInOneWindow\(/.test(chat) && /windowManager\.restore\(\)/.test(chat) &&
+    /id="chat-window-rail"/.test(index) && /class="chat-new-window"/.test(index) && /class="chat-put-away"/.test(index));
+  check('A universal run\'s end media (signed hub links) are drawn under its answer',
+    /afterUniversalTerminal\(runId, action\) \{[\s\S]{0,1200}this\.attachRunMedia\(runId, action\.media\)/.test(chat)
+    && /attachRunMedia\(runId, items\) \{[\s\S]{0,1200}renderChatMedia\(fresh\)/.test(chat));
+  check('Media in messages go through chat-media.js (signed hub links kept, size limits, viewer)',
+    /function normalizeOneChatMedia\(item\) \{\s*if \(globalThis\.ChatMedia\) return globalThis\.ChatMedia\.normalize\(item\);/.test(chat)
+    && /function renderChatMedia\(media\) \{[\s\S]{0,160}globalThis\.ChatMedia\.render\(document, media\)/.test(chat));
+  check('Provider settings link stays in the dock More menu', /<div id="vo-more-menu"[\s\S]*<a class="vo-menu-item" role="menuitem" href="\/providers\.html">[\s\S]*Providers<\/a>/.test(index));
 }
 
 const failed = checks.filter(item => !item.ok);

@@ -16,15 +16,15 @@ export function buildBrowserViewerUrl(rawUrl, baseUrl = globalThis.location?.hre
 
   try {
     const viewerUrl = new URL(configuredUrl, baseUrl || 'http://localhost/');
-    if (viewerUrl.protocol === 'http:' || viewerUrl.protocol === 'https:') {
-      for (const [name, value] of Object.entries(DEFAULT_VIEWER_PARAMS)) {
-        if (!viewerUrl.searchParams.has(name)) viewerUrl.searchParams.set(name, value);
-      }
+    // Only web pages may be framed. A javascript:, data: or file: value would
+    // run or expose content inside the office page (CH-07).
+    if (viewerUrl.protocol !== 'http:' && viewerUrl.protocol !== 'https:') return 'about:blank';
+    for (const [name, value] of Object.entries(DEFAULT_VIEWER_PARAMS)) {
+      if (!viewerUrl.searchParams.has(name)) viewerUrl.searchParams.set(name, value);
     }
     return viewerUrl.href;
   } catch {
-    // Preserve compatibility with browser-specific iframe URLs that URL cannot
-    // parse. The caller can still attempt to load the operator's exact value.
-    return configuredUrl;
+    // A value the URL parser cannot read is never loaded as-is.
+    return 'about:blank';
   }
 }

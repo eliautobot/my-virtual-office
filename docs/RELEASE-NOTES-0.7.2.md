@@ -1,4 +1,4 @@
-# My Virtual Office v0.7.2 — Production Hermes Integration
+# My Virtual Office v0.7.2: Production Hermes Integration
 
 ## Highlights
 

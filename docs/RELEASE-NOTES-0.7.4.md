@@ -1,4 +1,4 @@
-# My Virtual Office v0.7.4 — Preview Bubbles & Rich Provider Telemetry
+# My Virtual Office v0.7.4: Preview Bubbles & Rich Provider Telemetry
 
 ## Highlights
 
@@ -24,7 +24,7 @@
 
 ## Verification
 
-- Passed the complete automated suite: 192 tests passed, 3 skipped, and all 14 subtests passed.
+- Passed the complete automated suite of that release: 192 tests passed, 3 skipped, and all 14 subtests passed. (Later versions have a different test set; see their own release notes.)
 - Passed focused Preview Bubble, Markdown, chat-event, provider-session, endpoint-resolution, approval, cancellation, and concurrency coverage.
 - Passed desktop and narrow mobile browser validation, multi-preview collision checks, camera zoom, themes, persistence, reload, and all supported preview types.
 - Passed JavaScript syntax, Python compilation, Compose validation, source/deployment parity, health, browser-console, severe-log, and restart checks.
@@ -35,10 +35,20 @@ Browser previews require the browser integration to be enabled and configured fo
 
 ## Upgrade
 
-Use source tag `v0.7.4`, rebuild the Virtual Office service, and preserve the existing `vo-data` and provider data volumes.
+The automated multi-architecture container image was not published for this tag, and the shipped `docker-compose.yml` has no `build:` section, so `docker compose build` has nothing to build. Build the image yourself and point Compose at it with `VO_IMAGE`:
 
-The automated multi-architecture container image is not currently available for this tag. The `v0.7.3` image remains the latest published registry image until automated package publishing resumes.
+```bash
+git fetch --tags && git checkout v0.7.4
+docker build -t my-virtual-office:0.7.4 ./app
+VO_IMAGE=my-virtual-office:0.7.4 docker compose up -d virtual-office
+```
+
+You can also put `VO_IMAGE=...` in `.env`. `docker compose up -d virtual-office` recreates only the Virtual Office container; the `vo-data` volume and any Hermes sidecar are kept.
 
 ## Rollback
 
-Pin `ghcr.io/eliautobot/my-virtual-office:0.7.3` (or check out tag `v0.7.3`) and recreate only the Virtual Office service. Preserve all persistent data volumes.
+```bash
+VO_IMAGE=ghcr.io/eliautobot/my-virtual-office:0.7.3 docker compose up -d virtual-office
+```
+
+This recreates only the Virtual Office service and keeps all persistent data volumes. Checking out an older tag alone does not change the running image.

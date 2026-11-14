@@ -13,11 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .file_safety import backup_files
+from .file_safety import backup_files, directory_has_content, remove_agent_folder
+from .cli_runner import CliRun, argv_message, safe_session_id
 from .process_env import resolve_executable, sanitized_env
+import data_owner   # (folders and files made as root keep the data folder's owner)
 
 
-_ACTIVE: dict[str, subprocess.Popen[str]] = {}
+_ACTIVE: dict[str, CliRun] = {}
 _ACTIVE_LOCK = threading.Lock()
 
 
@@ -159,16 +161,20 @@ class OpenCodeProvider:
             workspace = os.path.join(parent, safe)
         else:
             workspace = os.path.join(self.workspace_root or "", safe)
+        if directory_has_content(workspace):
+            # Never adopt (and later delete) an existing folder such as a real project (BE-06).
+            return {"ok": False, "error": f"The folder {workspace} already exists and is not empty. Choose another agent ID or parent folder."}
         instructions = str(prompt or role or "OpenCode Agent").strip()
         model_value = str(model or self.model or "")
         native_path = os.path.join(self._native_agents_dir(), f"{safe}.md") if self.register_agents else ""
         project_path = os.path.join(workspace, ".opencode", "agents", f"{safe}.md")
-        os.makedirs(os.path.join(workspace, ".opencode", "skills"), exist_ok=True)
+        data_owner.makedirs(os.path.join(workspace, ".opencode", "skills"), exist_ok=True)
         meta = {
             "profile": safe, "name": name, "role": role, "emoji": emoji, "model": model_value,
             "prompt": instructions, "providerKind": "opencode", "providerType": "harness",
             "creationMode": mode, "nativeAgentPath": native_path, "projectAgentPath": project_path,
             "createdAt": int(time.time()),
+            "writtenFiles": self._written_files(safe),
         }
         self._write_json(os.path.join(workspace, "opencode-agent.json"), meta)
         self._write_text(os.path.join(workspace, "IDENTITY.md"), self._identity(name, role, emoji))
@@ -196,7 +202,9 @@ class OpenCodeProvider:
         meta = self._load_json(os.path.join(workspace, "opencode-agent.json"))
         if meta.get("providerKind") != "opencode" or meta.get("profile") != safe:
             return {"ok": False, "error": "Refusing to delete an unowned OpenCode directory"}
-        shutil.rmtree(workspace)
+        managed = "" if meta.get("creationMode") == "custom" else (self.workspace_root or "")
+        remove_agent_folder(workspace, meta.get("writtenFiles") or self._written_files(safe),
+                            managed_root=managed, marker="opencode-agent.json")
         native = str(meta.get("nativeAgentPath") or os.path.join(self._native_agents_dir(), f"{safe}.md"))
         if os.path.isfile(native) and os.path.abspath(native).startswith(os.path.abspath(self._native_agents_dir()) + os.sep):
             os.remove(native)
@@ -205,6 +213,14 @@ class OpenCodeProvider:
         registry["agents"] = agents
         self._write_json(self._registry_path(), registry)
         return {"ok": True, "deleted": True, "profile": safe, "agentId": f"opencode-{safe}"}
+
+    @staticmethod
+    def _written_files(profile: str) -> list[str]:
+        """Files and folders the office creates inside an OpenCode agent folder."""
+        return [
+            "IDENTITY.md", "AGENTS.md", f".opencode/agents/{profile}.md",
+            ".opencode/agents", ".opencode/skills", ".opencode",
+        ]
 
     def update_profile(self, profile: str, patch: dict[str, Any]) -> dict[str, Any]:
         safe = self._safe_profile(profile)
@@ -248,6 +264,16 @@ class OpenCodeProvider:
         if not self.is_available():
             return {"ok": False, "error": "OpenCode CLI unavailable", "reply": "", "sessionId": session_id or ""}
         safe = self._safe_profile(profile or "main")
+        try:
+            session_id = safe_session_id(session_id)
+            prompt = argv_message(message)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "reply": "", "sessionId": ""}
+        with _ACTIVE_LOCK:
+            running = _ACTIVE.get(safe)
+            if running and running.proc.poll() is None:
+                return {"ok": False, "error": f"OpenCode agent '{safe}' is already working on a message.", "code": "run_active",
+                        "reply": "", "sessionId": session_id or ""}
         cmd = [self.binary or "opencode", "run", "--format", "json"]
         if safe != "main":
             cmd.extend(["--agent", safe])
@@ -260,35 +286,20 @@ class OpenCodeProvider:
         # The OpenCode CLI declares --file as an array option, so every
         # positional token after it is consumed as another filename. Place the
         # message first, then append file options.
-        cmd.append(str(message or ""))
-        for path in files or []:
-            full = os.path.abspath(os.path.expanduser(str(path)))
-            if os.path.isfile(full):
-                cmd.extend(["--file", full])
+        cmd.append(prompt)
+        for path in self._allowed_attachments(files):
+            cmd.extend(["--file", path])
         workspace = self._workspace_for(safe)
-        os.makedirs(workspace, exist_ok=True)
-        deadline = time.time() + int(timeout_sec or self.timeout_sec)
+        data_owner.makedirs(workspace, exist_ok=True)
         replies: list[str] = []
         events: list[dict[str, Any]] = []
         tools: list[dict[str, Any]] = []
-        proc: subprocess.Popen[str] | None = None
+        run: CliRun | None = None
         try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=workspace,
-                env=self._env(),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-            )
+            run = CliRun(cmd, cwd=workspace, env=self._env(), timeout_sec=int(timeout_sec or self.timeout_sec))
             with _ACTIVE_LOCK:
-                _ACTIVE[safe] = proc
-            for raw in proc.stdout or []:
-                if time.time() > deadline:
-                    proc.kill()
-                    return {"ok": False, "error": "OpenCode call timed out", "reply": "\n".join(replies), "sessionId": session_id or ""}
+                _ACTIVE[safe] = run
+            for raw in run.lines():
                 line = raw.strip()
                 if not line:
                     continue
@@ -309,8 +320,14 @@ class OpenCodeProvider:
                     tools.append(tool)
                 if callable(on_progress):
                     on_progress({"reply": "\n".join(replies), "sessionId": session_id or "", "tools": tools, "rawEvent": event})
-            code = proc.wait(timeout=5)
-            stderr = (proc.stderr.read() if proc.stderr else "").strip()
+            code = run.finish()
+            stderr = run.stderr_text.strip()
+            if run.timed_out:
+                return {"ok": False, "error": "OpenCode call timed out", "reply": "\n".join(replies), "sessionId": session_id or "",
+                        "stderr": stderr[-4000:]}
+            if run.stopped:
+                return {"ok": False, "error": "Stopped", "interrupted": True, "reply": "\n".join(replies).strip(),
+                        "sessionId": session_id or "", "tools": tools}
             return {
                 "ok": code == 0,
                 "reply": "\n".join(replies).strip(),
@@ -325,16 +342,31 @@ class OpenCodeProvider:
         except Exception as exc:
             return {"ok": False, "error": str(exc), "reply": "\n".join(replies), "sessionId": session_id or ""}
         finally:
+            if run is not None and run.proc.poll() is None:
+                run.terminate()
+                run.finish(wait_sec=5)
             with _ACTIVE_LOCK:
-                if _ACTIVE.get(safe) is proc:
+                if _ACTIVE.get(safe) is run:
                     _ACTIVE.pop(safe, None)
+
+    def _allowed_attachments(self, files: list[str] | None) -> list[str]:
+        """BE-14: only files the user uploaded to the office are sent to the model."""
+        roots = [os.path.realpath(os.path.join(os.environ.get("VO_STATUS_DIR", "/data"), "uploads"))]
+        extra = os.environ.get("VO_OPENCODE_ATTACHMENT_ROOTS", "")
+        roots.extend(os.path.realpath(os.path.expanduser(item.strip())) for item in extra.split(os.pathsep) if item.strip())
+        allowed = []
+        for path in files or []:
+            full = os.path.realpath(os.path.abspath(os.path.expanduser(str(path))))
+            if os.path.isfile(full) and any(full.startswith(root + os.sep) for root in roots):
+                allowed.append(full)
+        return allowed
 
     def interrupt(self, profile: str) -> dict[str, Any]:
         safe = self._safe_profile(profile or "main")
         with _ACTIVE_LOCK:
-            proc = _ACTIVE.get(safe)
-        if proc and proc.poll() is None:
-            proc.terminate()
+            run = _ACTIVE.get(safe)
+        if run and run.proc.poll() is None:
+            run.stop()
             return {"ok": True, "interrupted": True, "profile": safe}
         return {"ok": False, "error": f"No active OpenCode run for {safe}"}
 
@@ -466,9 +498,10 @@ class OpenCodeProvider:
 
     @staticmethod
     def _write_text(path: str, content: str) -> None:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data_owner.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = f"{path}.tmp-{os.getpid()}"
         Path(tmp).write_text(content, encoding="utf-8")
+        data_owner.adopt(tmp)
         os.replace(tmp, path)
 
     @staticmethod

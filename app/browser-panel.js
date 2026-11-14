@@ -3,6 +3,8 @@
 (() => {
   let BROWSER_VIEW_URL = null; // loaded from config
   let _browserConfigured = false;
+  let _browserEnabled = false; // the Browser feature is on (from /browser-status)
+  const _pollsInFlight = new Set();
   let _agentNames = {}; // loaded dynamically from /api/agents
 
   const browserBtn       = document.getElementById('browser-toggle');
@@ -94,8 +96,33 @@
   }
 
   // ─── Open / Close ─────────────────────────────────────────────────────────
-  browserBtn.addEventListener('click', () => { toggleBrowserPanel(); });
+  browserBtn.addEventListener('click', () => {
+    toggleBrowserPanel();
+    // CH-42: a user-opened panel takes keyboard focus (auto-open does not).
+    if (browserOpen && browserClose) requestAnimationFrame(() => browserClose.focus({ preventScroll: true }));
+  });
+
+  // CH-42: Escape closes the panel when focus is in its frame chrome. Keys
+  // typed inside the remote browser stay inside its iframe.
+  browserPanel.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !browserOpen || e.defaultPrevented) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeBrowserPanel();
+    if (browserBtn && browserBtn.offsetParent !== null) browserBtn.focus({ preventScroll: true });
+  });
+
+  // Only web pages may be framed (CH-07).
+  function safeViewerUrl(value) {
+    try {
+      const parsed = new URL(String(value || ''), window.location.href);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : '';
+    } catch (_) {
+      return '';
+    }
+  }
   browserClose.addEventListener('click', () => { closeBrowserPanel(); });
+  syncBrowserInert();
 
   function toggleBrowserPanel() {
     if (browserOpen) { closeBrowserPanel(); } else { openBrowserPanel(); }
@@ -109,6 +136,7 @@
     browserPanel.classList.add('open');
     if (browserBtn) browserBtn.classList.add('active');
     browserOpen = true;
+    syncBrowserInert();
 
     // Restore from minimized if needed
     if (isMinimized) {
@@ -117,21 +145,32 @@
 
     // Load browser viewer
     if (!browserFrame.src || browserFrame.src === 'about:blank') {
-      if (BROWSER_VIEW_URL) {
-        const sep = BROWSER_VIEW_URL.includes('?') ? '&' : '?';
-        browserFrame.src = `${BROWSER_VIEW_URL}${sep}resize=scale&autoconnect=1`;
+      const viewerUrl = safeViewerUrl(BROWSER_VIEW_URL);
+      if (viewerUrl) {
+        const sep = viewerUrl.includes('?') ? '&' : '?';
+        browserFrame.src = `${viewerUrl}${sep}resize=scale&autoconnect=1`;
       } else {
-        browserFrame.srcdoc = '<html><body style="background:#0a0a0f;color:#888;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center"><div><h2 style="color:#ffd700">🌐 Browser Not Configured</h2><p>Set a Browser Viewer URL in<br>☰ Menu → Settings or /setup</p></div></body></html>';
+        browserFrame.srcdoc = '<html><body style="background:#0a0a0f;color:#888;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;text-align:center"><div><h2 style="color:#ffd700">🌐 Browser Not Configured</h2><p>Set a Browser Viewer URL in Settings.</p></div></body></html>';
       }
     }
     pollCurrentUrl();
   }
 
   function closeBrowserPanel() {
+    if (browserPanel.contains(document.activeElement)) document.activeElement.blur();
     browserPanel.classList.remove('open');
     if (browserBtn) browserBtn.classList.remove('active');
     browserOpen = false;
+    syncBrowserInert();
     userClosedAt = Date.now();
+  }
+
+  // P3-10: the closed panel keeps no Tab stops and stays out of the
+  // accessibility tree.
+  function syncBrowserInert() {
+    browserPanel.inert = !browserOpen;
+    if (browserOpen) browserPanel.removeAttribute('inert');
+    else browserPanel.setAttribute('inert', '');
   }
 
   // ─── Minimize ─────────────────────────────────────────────────────────────
@@ -148,7 +187,7 @@
     isMinimized = true;
     browserPanel.classList.add('minimized');
     browserMinimize.title = 'Restore';
-    browserMinimize.textContent = '▲';
+    browserMinimize.innerHTML = '<svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-chevup"/></svg>';
   }
 
   function restoreFromMinimize(updateButton = true) {
@@ -156,7 +195,7 @@
     browserPanel.classList.remove('minimized');
     if (updateButton) {
       browserMinimize.title = 'Minimize';
-      browserMinimize.textContent = '—';
+      browserMinimize.innerHTML = '<svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-minus"/></svg>';
     }
   }
 
@@ -182,7 +221,7 @@
     if (isMinimized) restoreFromMinimize();
     isMaximized = true;
     browserPanel.classList.add('maximized');
-    browserMaximize.textContent = '❐';
+    browserMaximize.innerHTML = '<svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-restore"/></svg>';
     browserMaximize.classList.add('is-maximized');
     browserMaximize.title = 'Restore';
     // Hide snap buttons while maximized
@@ -193,7 +232,7 @@
   function restoreFromMaximize() {
     isMaximized = false;
     browserPanel.classList.remove('maximized');
-    browserMaximize.textContent = '□';
+    browserMaximize.innerHTML = '<svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-maximize"/></svg>';
     browserMaximize.classList.remove('is-maximized');
     browserMaximize.title = 'Maximize';
     // Show snap buttons again
@@ -349,7 +388,7 @@
     userHasControl = true;
     browserTakeControl.style.display = 'none';
     browserRelease.style.display = 'inline-flex';
-    browserStatus.textContent = '🖱️ You have control';
+    browserStatus.textContent = 'You have control';
     browserStatus.className = 'browser-status user-control';
     browserFrame.style.pointerEvents = 'auto';
     // Focus the iframe so keyboard events reach KasmVNC
@@ -381,7 +420,8 @@
         for (const node of mutation.addedNodes) {
           if (node.nodeType === 1 && node.classList?.contains('chat-activity')) {
             const text = node.textContent || '';
-            if (text.includes('🖥️ browser') || text.includes('browser:')) {
+            // CH-43: only when the Browser feature is on.
+            if (_browserEnabled && (text.includes('🖥️ browser') || text.includes('browser:'))) {
               onAgentBrowserActivity();
             }
           }
@@ -393,7 +433,7 @@
 
   function onAgentBrowserActivity() {
     if (!browserOpen) openBrowserPanel();
-    browserStatus.textContent = '🤖 AI browsing...';
+    browserStatus.textContent = 'Agent is browsing…';
     browserStatus.className = 'browser-status ai-active';
 
     clearTimeout(window._browserIdleTimer);
@@ -434,9 +474,16 @@
     }
   }
 
-  // Always poll (not just when open) so auto-open can trigger
+  // CH-39: one request at a time, nothing while the tab is hidden or the
+  // feature is off. The URL bar only matters while the panel is open;
+  // auto-open is driven by pollBrowserController().
+  async function guardedPoll(name, fn) {
+    if (!_browserEnabled || document.hidden || _pollsInFlight.has(name)) return;
+    _pollsInFlight.add(name);
+    try { await fn(); } finally { _pollsInFlight.delete(name); }
+  }
   setInterval(() => {
-    pollCurrentUrl();
+    if (browserOpen) guardedPoll('url', pollCurrentUrl);
   }, 3000);
 
   // ─── Poll agent controller identity ─────────────────────────────────────
@@ -483,7 +530,7 @@
     } catch (e) { /* silent */ }
   }
 
-  setInterval(pollBrowserController, 3000);
+  setInterval(() => guardedPoll('controller', pollBrowserController), 3000);
 
   // ─── Init: load config + agent names ───────────────────────────────────────
   async function _initBrowserPanel() {
@@ -491,6 +538,7 @@
     try {
       const statusRes = await fetch('/browser-status');
       const status = await statusRes.json();
+      _browserEnabled = !!status.enabled;
       _browserConfigured = status.enabled && (status.cdpAvailable || status.viewerUrl);
       if (status.viewerUrl) {
         BROWSER_VIEW_URL = status.viewerUrl;

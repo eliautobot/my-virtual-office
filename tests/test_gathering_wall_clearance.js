@@ -57,6 +57,12 @@ function createRuntime() {
         agents: [],
         agentMap: {},
         Math: runtimeMath,
+        // v0.10.1 world contract: no furniture in these rooms, so no footprint holds the feet.
+        _feetIn: () => null,
+        // v0.10.1 clearance: the wall bands are covered by test_v10_world_clearance; here no band holds the feet.
+        _clrDepth: () => 0,
+        // v0.10.1 W3: goals snap to free floor; with no furniture here the point is already free.
+        _worldNear: (x, y) => ({ x, y }),
     });
     vm.runInContext(
         `${functionNames.map(extractFunction).join('\n')}\n` +

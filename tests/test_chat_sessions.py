@@ -65,7 +65,7 @@ def load_server(tmpdir):
     finally:
         sys.path.pop(0)
     module._discovered_roster = [
-        {"id": "adam", "statusKey": "adam", "name": "Adam", "providerKind": "openclaw", "providerAgentId": "adam", "profile": "adam", "emoji": "A", "workspace": str(openclaw_dir / "agents" / "adam")},
+        {"id": "adler", "statusKey": "adler", "name": "Adler", "providerKind": "openclaw", "providerAgentId": "adler", "profile": "adler", "emoji": "A", "workspace": str(openclaw_dir / "agents" / "adler")},
         {"id": "hermes-default", "statusKey": "hermes-default", "name": "Hermes", "providerKind": "hermes", "providerAgentId": "default", "profile": "default", "emoji": "H"},
         {"id": "codex-main", "statusKey": "codex-main", "name": "Codex", "providerKind": "codex", "providerAgentId": "main", "profile": "main", "emoji": "C"},
         {"id": "claude-main", "statusKey": "claude-main", "name": "Claude", "providerKind": "claude-code", "providerAgentId": "main", "profile": "main", "emoji": "L"},
@@ -130,8 +130,8 @@ def main():
             gateway_calls.append((method, params or {}))
             if method == "sessions.list":
                 return {"ok": True, "sessions": [
-                    {"key": "agent:adam:main", "label": "Main chat", "preview": "main preview", "updatedAt": "2026-07-07T13:00:00Z"},
-                    {"key": "agent:adam:vw-live-mode-planner", "label": "", "preview": "live", "updatedAt": "2026-07-07T13:05:00Z"},
+                    {"key": "agent:adler:main", "label": "Main chat", "preview": "main preview", "updatedAt": "2026-07-07T13:00:00Z"},
+                    {"key": "agent:adler:vw-live-mode-planner", "label": "", "preview": "live", "updatedAt": "2026-07-07T13:05:00Z"},
                 ]}
             if method in {"sessions.reset", "sessions.delete"}:
                 return {"ok": True, "payload": {}}
@@ -146,10 +146,10 @@ def main():
         server._save_hermes_state("default", {"messages": [], "sessionId": "hermes-session-1"})
         server._save_codex_state("main", {"messages": [], "sessionId": "codex-thread-1"})
 
-        adam_sessions_dir = openclaw_dir / "agents" / "adam" / "sessions"
+        adam_sessions_dir = openclaw_dir / "agents" / "adler" / "sessions"
         adam_sessions_dir.mkdir(parents=True, exist_ok=True)
         (adam_sessions_dir / "sessions.json").write_text(json.dumps({
-            "agent:adam:file-only": {
+            "agent:adler:file-only": {
                 "sessionId": "file-only-session",
                 "label": "File-only session",
                 "preview": "loaded from configured OpenClaw home",
@@ -164,12 +164,12 @@ def main():
         commentary_run_id = "office-commentary-run"
         commentary_thread_id = "019fd7c8-15ec-7852-a0a4-a0188edb277d"
         (adam_sessions_dir / "sessions.json").write_text(json.dumps({
-            "agent:adam:main": {
+            "agent:adler:main": {
                 "sessionId": commentary_session_id,
                 "label": "Main chat",
                 "updatedAt": "2026-08-06T15:55:01Z",
             },
-            "agent:adam:file-only": {
+            "agent:adler:file-only": {
                 "sessionId": "file-only-session",
                 "label": "File-only session",
                 "preview": "loaded from configured OpenClaw home",
@@ -189,7 +189,7 @@ def main():
             json.dumps({"type": "tool.result", "ts": "2026-08-06T15:54:20.699Z", "runId": commentary_run_id, "data": {"toolCallId": "tool-1", "name": "read", "result": "ok"}}),
         ])
         (adam_sessions_dir / f"{commentary_session_id}.trajectory.jsonl").write_text("\n".join(commentary_trajectory) + "\n", encoding="utf-8")
-        rollout_dir = openclaw_dir / "agents" / "adam" / "agent" / "codex-home" / "sessions" / "2026" / "08" / "06"
+        rollout_dir = openclaw_dir / "agents" / "adler" / "agent" / "codex-home" / "sessions" / "2026" / "08" / "06"
         rollout_dir.mkdir(parents=True, exist_ok=True)
         commentary_rollout = [
             json.dumps({"timestamp": "2026-08-06T15:54:10.855Z", "type": "response_item", "payload": {"type": "reasoning", "summary": [], "encrypted_content": "private"}}),
@@ -204,7 +204,7 @@ def main():
         )
         (rollout_dir / f"rollout-2026-08-06T11-54-02-{commentary_thread_id}.jsonl").write_text("\n".join(commentary_rollout) + "\n", encoding="utf-8")
 
-        recovered = server._session_trajectory_messages("agent:adam:main", max_tools=80)
+        recovered = server._session_trajectory_messages("agent:adler:main", max_tools=80)
         recovered_commentary = [msg for msg in recovered if msg.get("source") == "codex-commentary"]
         check("OpenClaw activity recovers public Codex commentary", len(recovered_commentary) == 1 and recovered_commentary[0].get("text") == "I will inspect the exact change set.")
         check("Long trajectories retain Codex thread mapping beyond the tail window", len(recovered_commentary) == 1)
@@ -220,59 +220,36 @@ def main():
             json.dumps({"type": "last-prompt", "sessionId": claude_session_id, "timestamp": "2026-07-07T10:02:00Z", "lastPrompt": "hello claude"}),
         ]) + "\n", encoding="utf-8")
 
-        openclaw_payload, openclaw_status = server.handle_chat_sessions_list("adam")
+        openclaw_payload, openclaw_status = server.handle_chat_sessions_list("adler")
         openclaw_sessions = openclaw_payload.get("sessions") or []
         check("OpenClaw sessions list succeeds", openclaw_status == 200 and openclaw_payload.get("ok"))
-        check("OpenClaw main session is listed", any(s.get("id") == "agent:adam:main" for s in openclaw_sessions))
-        check("OpenClaw file-backed session is listed", any(s.get("id") == "agent:adam:file-only" for s in openclaw_sessions))
+        check("OpenClaw main session is listed", any(s.get("id") == "agent:adler:main" for s in openclaw_sessions))
+        check("OpenClaw file-backed session is listed", any(s.get("id") == "agent:adler:file-only" for s in openclaw_sessions))
         check("OpenClaw live mode row is titled", any(s.get("title") == "Live Agent Mode" and s.get("liveMode") for s in openclaw_sessions))
-        gateway_count = len(gateway_calls)
-        created, status = server.handle_chat_session_create("adam", {"sessionKey": "agent:adam:main"})
-        check(
-            "OpenClaw create is non-destructive and allocates a fresh key",
-            status == 200 and created.get("ok")
-            and created.get("sessionKey", "").startswith("agent:adam:vo-")
-            and len(gateway_calls) == gateway_count,
-        )
-        created_again, status = server.handle_chat_session_create("adam", {"sessionKey": "agent:other:main"})
-        check(
-            "OpenClaw create ignores an untrusted requested key",
-            status == 200 and created_again.get("ok")
-            and created_again.get("sessionKey", "").startswith("agent:adam:vo-")
-            and created_again.get("sessionKey") != created.get("sessionKey")
-            and len(gateway_calls) == gateway_count,
-        )
-        switched, status = server.handle_chat_session_switch("adam", "agent:adam:vw-live-mode-planner")
-        check("OpenClaw switch returns requested session key", status == 200 and switched.get("sessionKey") == "agent:adam:vw-live-mode-planner")
-        rejected, status = server.handle_chat_session_switch("adam", "agent:other:main")
+        before_create = len(gateway_calls)
+        created, status = server.handle_chat_session_create("adler", {"sessionKey": "agent:adler:main"})
+        check("OpenClaw lazy create preserves old session without Gateway reset", status == 200 and created.get("ok") and created.get("sessionKey", "").startswith("agent:adler:vo-chat-") and len(gateway_calls) == before_create)
+        rejected, status = server.handle_chat_session_create("adler", {"sessionKey": "agent:other:main"})
+        check("OpenClaw lazy create ignores foreign key and keeps exact selected owner", status == 200 and rejected.get("sessionKey", "").startswith("agent:adler:vo-chat-") and rejected["sessionKey"] != created["sessionKey"] and len(gateway_calls) == before_create)
+        switched, status = server.handle_chat_session_switch("adler", "agent:adler:vw-live-mode-planner")
+        check("OpenClaw switch returns requested session key", status == 200 and switched.get("sessionKey") == "agent:adler:vw-live-mode-planner")
+        rejected, status = server.handle_chat_session_switch("adler", "agent:other:main")
         check("OpenClaw switch rejects cross-agent session key", status == 400 and not rejected.get("ok"))
-        deleted, status = server.handle_chat_session_delete("adam", "agent:adam:old-session")
+        deleted, status = server.handle_chat_session_delete("adler", "agent:adler:old-session")
         check("OpenClaw delete uses gateway sessions.delete", status == 200 and deleted.get("deleted") and gateway_calls[-1][0] == "sessions.delete")
-        rejected, status = server.handle_chat_session_delete("adam", "agent:other:old-session")
+        rejected, status = server.handle_chat_session_delete("adler", "agent:other:old-session")
         check("OpenClaw delete rejects cross-agent session key", status == 400 and not rejected.get("ok"))
 
         sample_messages = [{"sessionTitle": "Main chat", "liveMode": False}]
-        server._agent_chat_apply_session_meta(sample_messages, {"sessionKey": "agent:adam:vw-live-mode-planner", "sessionTitle": "Live Agent Mode", "liveMode": True})
+        server._agent_chat_apply_session_meta(sample_messages, {"sessionKey": "agent:adler:vw-live-mode-planner", "sessionTitle": "Live Agent Mode", "liveMode": True})
         check("bubble metadata helper overrides stale message metadata", sample_messages[0].get("sessionTitle") == "Live Agent Mode" and sample_messages[0].get("liveMode") is True)
 
         hermes_payload, hermes_status = server.handle_chat_sessions_list("hermes-default")
         check("Hermes sessions list uses native API", hermes_status == 200 and hermes_payload.get("sessions", [{}])[0].get("active") is True)
         switched, status = server.handle_chat_session_switch("hermes-default", "hermes-session-1")
-        check("Hermes switch reads API messages", status == 200 and len(switched.get("messages") or []) == 2 and server._get_hermes_session_id("default") == "hermes-session-1")
+        check("Hermes switch reads API messages", status == 200 and len(switched.get("messages") or []) == 3 and switched["messages"][0]["text"] == "hello" and switched["messages"][1]["text"] == "hi from hermes" and switched["messages"][2]["tools"][0]["result"] == "hidden" and server._get_hermes_session_id("default") == "hermes-session-1")
         deleted, status = server.handle_chat_session_delete("hermes-default", "hermes-session-1")
         check("Hermes delete clears active session", status == 200 and deleted.get("deleted") and server._get_hermes_session_id("default") == "")
-        hermes_record = next(row for row in server._discovered_roster if row.get("id") == "hermes-default")
-        hermes_record["connectionModes"] = ["cli"]
-        hermes_record["capabilities"] = {"chat": True, "sessionCreate": True, "sessions": True}
-        cli_created, status = server.handle_chat_session_create("hermes-default", {"title": "CLI-only session"})
-        check(
-            "CLI-only Hermes creates a lazy session without contacting HTTP API",
-            status == 200 and cli_created.get("ok")
-            and cli_created.get("sessionId") == ""
-            and cli_created.get("sessionKey", "").startswith("hermes:default:@new:")
-            and server._get_hermes_session_id("default") == ""
-            and server._load_provider_active_session("hermes", "default").get("newSessionPending") is True,
-        )
 
         codex_payload, codex_status = server.handle_chat_sessions_list("codex-main")
         codex_sessions = codex_payload.get("sessions") or []

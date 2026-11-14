@@ -1,0 +1,13 @@
+/* Office equivalent: read-only explicit conversation References, above Tasks. */
+.chat-body { position: relative; --chat-tools-rail-top: 12px; --chat-tools-rail-height: 38px; --chat-tools-rail-gap: 6px; --chat-references-drawer-shift: min(320px, calc(100% - 42px)); }
+.chat-references-rail { position:absolute; top:var(--chat-tools-rail-top); right:-1px; width:31px; height:var(--chat-tools-rail-height); z-index:26; background:var(--vo-surface-2); color:var(--vo-text-2); border:1px solid var(--vo-border-strong); border-radius:9px 0 0 9px; cursor:pointer; }
+.chat-references-drawer { position:absolute; top:0; right:0; bottom:0; z-index:32; display:flex; flex-direction:column; width:var(--chat-references-drawer-shift); min-width:0; background:var(--vo-surface-1); color:var(--vo-text-1); border-left:1px solid var(--vo-border-strong); overflow:hidden; }
+.chat-references-drawer[hidden] { display:none !important; }
+.chat-references-drawer .office-reference-body { flex:1; min-height:0; max-height:none; overflow:auto; padding:10px; }
+.chat-references-drawer button { min-width:40px; min-height:40px; }
+.chat-references-drawer a { color:var(--vo-info); overflow-wrap:anywhere; }
+.chat-references-open .chat-references-rail, .chat-tasks-open .chat-references-rail { visibility:hidden; pointer-events:none; }
+.chat-references-rail:focus-visible, .chat-references-drawer :focus-visible { outline:2px solid var(--vo-accent); outline-offset:-2px; }
+
+/* Existing session-history control remains in the header. */
+.chat-history-open .chat-tasks-rail, .chat-history-open .chat-references-rail { visibility:hidden; pointer-events:none; }

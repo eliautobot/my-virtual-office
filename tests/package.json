@@ -1,0 +1,8 @@
+{
+  "name": "virtual-office-tests",
+  "private": true,
+  "description": "Node test dependencies. Run `npm install` in tests/ once, then tests/run_all.sh.",
+  "devDependencies": {
+    "linkedom": "^0.18.13"
+  }
+}

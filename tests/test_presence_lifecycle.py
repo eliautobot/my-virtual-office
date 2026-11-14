@@ -39,20 +39,20 @@ class PresenceCoordinatorTests(unittest.TestCase):
 
     def test_quiet_run_stays_working_past_ninety_seconds_then_finishes(self):
         with mock.patch.object(presence.time, "time", return_value=1_000.0):
-            presence.lifecycle_run_started("aster", "run-quiet", "hermes", "Hermes native run")
+            presence.lifecycle_run_started("astra", "run-quiet", "hermes", "Hermes native run")
         with mock.patch.object(presence.time, "time", return_value=1_090.0):
             presence._maintenance_tick()
-            active = presence.get_agent_state("aster")
+            active = presence.get_agent_state("astra")
         self.assertEqual("working", active["state"])
         self.assertEqual(1, active["activeRunCount"])
 
         with mock.patch.object(presence.time, "time", return_value=1_091.0):
-            presence.lifecycle_run_finished("aster", "run-quiet", "hermes", "completed")
-            finishing = presence.get_agent_state("aster")
+            presence.lifecycle_run_finished("astra", "run-quiet", "hermes", "completed")
+            finishing = presence.get_agent_state("astra")
         self.assertEqual("finishing", finishing["state"])
         with mock.patch.object(presence.time, "time", return_value=1_091.0 + presence.FINISHING_GRACE_SEC + 1):
             presence._maintenance_tick()
-            idle = presence.get_agent_state("aster")
+            idle = presence.get_agent_state("astra")
         self.assertEqual("idle", idle["state"])
 
     def test_failure_records_error_without_marking_provider_offline(self):
@@ -131,6 +131,111 @@ class PresenceCoordinatorTests(unittest.TestCase):
         })
         self.assertEqual("finishing", presence.get_agent_state("main")["state"])
 
+    def test_tool_activity_observer_receives_openclaw_and_native_provider_events(self):
+        observed = []
+        with mock.patch.object(presence, "_activity_observer", lambda agent_id, event: observed.append((agent_id, event))):
+            presence.set_provider_event("codex-main", "codex", {
+                "event": "tool.started", "runId": "run-native", "tool": "read",
+                "arguments": {"path": "notes.md"},
+            })
+            presence._process_event("session.tool", {
+                "runId": "run-openclaw", "sessionKey": "agent:main:main",
+                "phase": "start", "name": "write", "args": {"path": "report.md"},
+            })
+        self.assertEqual(["codex-main", "main"], [row[0] for row in observed])
+        self.assertEqual(["read", "write"], [row[1]["toolName"] for row in observed])
+        self.assertEqual(["notes.md", "report.md"], [row[1]["arguments"]["path"] for row in observed])
+
+    def test_deferred_tool_wrappers_are_their_inner_tool(self):
+        """OpenClaw offers sessions_* as deferred tools: 2026.9 calls them through tool_call, 2026.11 through
+        dispatch_action ({id, args}; the id bare or a tool-search result "openclaw:core:sessions_send"). The
+        status text and the activity observers see the inner tool, not the wrapper."""
+        unwrap = presence.unwrap_tool_call
+        for wrapper in ("tool_call", "dispatch_action"):
+            for tool_id in ("sessions_send", "openclaw:core:sessions_send"):
+                self.assertEqual(unwrap(wrapper, {"id": tool_id, "args": {"label": "Coder", "message": "hi"}}),
+                                 ("sessions_send", {"label": "Coder", "message": "hi"}))
+            self.assertEqual(unwrap(wrapper, '{"id": "sessions_spawn", "args": "{\\"agentId\\": \\"ops\\"}"}'),
+                             ("sessions_spawn", {"agentId": "ops"}))
+            self.assertEqual(unwrap(wrapper, {"query": "x"}), (wrapper, {"query": "x"}))   # no inner id: as it is
+        self.assertEqual(unwrap("openclaw:core:sessions_spawn", {"agentId": "ops"}), ("sessions_spawn", {"agentId": "ops"}))
+        self.assertEqual(unwrap("web_search", {"query": "q"}), ("web_search", {"query": "q"}))
+        added = []
+        remove = presence.add_activity_observer(lambda agent_id, event: added.append((agent_id, event)))
+        try:
+            presence._process_event("session.tool", {
+                "runId": "w-run", "stream": "tool", "sessionKey": "agent:main:main", "agentId": "main",
+                "data": {"phase": "start", "name": "tool_call", "toolCallId": "w1",
+                         "args": {"id": "sessions_send", "args": {"label": "Coder", "message": "hi"}}},
+            })
+            first = presence.get_agent_state("main")["task"]
+            presence._process_event("session.tool", {
+                "runId": "w-run", "stream": "tool", "sessionKey": "agent:main:main", "agentId": "main",
+                "data": {"phase": "start", "name": "dispatch_action", "toolCallId": "w2",
+                         "args": {"id": "openclaw:core:sessions_spawn", "args": {"agentId": "ops", "task": "x"}}},
+            })
+        finally:
+            remove()
+        self.assertEqual("Messaging Coder", first)
+        self.assertEqual("Messaging ops", presence.get_agent_state("main")["task"])
+        self.assertEqual([("sessions_send", "Coder"), ("sessions_spawn", "ops")],
+                         [(e["toolName"], e["arguments"].get("label") or e["arguments"].get("agentId")) for _a, e in added])
+
+    def test_agent_messages_show_a_deferred_sessions_send_as_the_message_it_sends(self):
+        """(layer off) The bubble/chat feed of an OpenClaw transcript: a sessions_send called through tool_call
+        (2026.9) or dispatch_action (2026.11, tool-search id) reads as the message, not as the wrapper."""
+        import json as _json
+        path = os.path.join(self.temp.name, "s.jsonl")
+        calls = [("tool_call", "sessions_send", "first note"), ("dispatch_action", "openclaw:core:sessions_send", "second note")]
+        with open(path, "w", encoding="utf-8") as handle:
+            for index, (wrapper, tool_id, text) in enumerate(calls):
+                handle.write(_json.dumps({"type": "message", "timestamp": f"2026-11-09T22:0{index}:00Z", "message": {
+                    "role": "assistant", "content": [{"type": "toolCall", "name": wrapper, "arguments": {
+                        "id": tool_id, "args": {"label": "Coder", "message": text}}}]}}) + "\n")
+        with mock.patch.dict(server.AGENT_SESSION_IDS, {"main": "main"}), \
+                mock.patch.object(server, "_openclaw_session_paths", lambda agent_id: (path, None, {})), \
+                mock.patch.object(server, "_openclaw_session_meta_for_bubble", lambda *a, **k: {}):
+            texts = [m["text"] for m in server.get_agent_messages("main")]
+        self.assertEqual(["\ud83d\udce8 \u2192 Coder: first note", "\ud83d\udce8 \u2192 Coder: second note"], texts)  # (a surrogate pair, as server.py writes it)
+
+    def test_session_tool_reads_the_live_nested_data_shape_and_the_flat_shape(self):
+        """Live OpenClaw session.tool frames nest phase/name/toolCallId/args under ``data``: the Agent PC
+        observer, added observers and the working task (activity chip) see the tool for both shapes."""
+        observed, added = [], []
+        remove = presence.add_activity_observer(lambda agent_id, event: added.append((agent_id, event)))
+        try:
+            with mock.patch.object(presence, "_activity_observer",
+                                   lambda agent_id, event: observed.append((agent_id, event))):
+                presence._process_event("session.tool", {
+                    "runId": "live-run", "stream": "tool", "sessionKey": "agent:main:main", "agentId": "main",
+                    "seq": 4, "ts": 1, "isHeartbeat": False, "session": {"key": "agent:main:main", "kind": "direct"},
+                    "data": {"phase": "start", "name": "web_search", "toolCallId": "call-1",
+                             "args": {"query": "pixel office"}},
+                })
+                live_working = presence.get_agent_state("main")
+                self.assertEqual(1, live_working["activeToolCount"])
+                presence._process_event("session.tool", {
+                    "runId": "live-run", "stream": "tool", "sessionKey": "agent:main:main", "agentId": "main",
+                    "data": {"phase": "result", "name": "web_search", "toolCallId": "call-1", "isError": False,
+                             "result": {"ok": True}},
+                })
+                presence._process_event("session.tool", {
+                    "runId": "flat-run", "sessionKey": "agent:coder:main",
+                    "phase": "start", "name": "write", "args": {"path": "report.md"}, "toolCallId": "call-2",
+                })
+        finally:
+            remove()
+        self.assertEqual(("working", "Searching: pixel office"), (live_working["state"], live_working["task"]))
+        self.assertEqual(0, presence.get_agent_state("main")["activeToolCount"])
+        self.assertEqual("Writing file", presence.get_agent_state("coder")["task"])
+        for seen in (observed, added):
+            self.assertEqual([("main", "web_search", "start", "pixel office"), ("main", "web_search", "result", None),
+                              ("coder", "write", "start", None)],
+                             [(agent, ev["toolName"], ev["phase"], ev["arguments"].get("query"))
+                              for agent, ev in seen])
+            self.assertEqual({"openclaw-session-tool"}, {ev["source"] for _agent, ev in seen})
+            self.assertEqual("live-run", seen[0][1]["runId"])
+
     def test_discovered_profile_is_offline_when_provider_health_fails(self):
         class Registry:
             @staticmethod
@@ -157,6 +262,41 @@ class PresenceCoordinatorTests(unittest.TestCase):
         self.assertEqual(1, len(roster))
         self.assertFalse(roster[0]["available"])
         self.assertEqual("offline", roster[0]["connectionState"])
+
+    def test_hermes_api_server_row_stays_online_without_a_local_hermes_cli(self):
+        # v0.11 relux (playtest #2): an office without a Hermes CLI (the Docker image) has a failing CLI probe as the
+        # Hermes manifest health; an API-server row (listed only because its API server answered) stays connected,
+        # while a CLI-only Hermes profile still follows that probe.
+        class Registry:
+            @staticmethod
+            def manifests(include_health=False):
+                return [{
+                    "id": "hermes",
+                    "capabilities": {"health": True},
+                    "health": {"ok": False, "installed": False, "error": "Hermes CLI not found at hermes"},
+                }]
+
+            @staticmethod
+            def discover_agents():
+                return [
+                    {"id": "hermes-astra", "statusKey": "hermes-astra", "providerKind": "hermes",
+                     "providerAgentId": "astra", "gateway": "api", "connectionModes": ["api"],
+                     "apiAvailable": True, "cliAvailable": False},
+                    {"id": "hermes-cli", "statusKey": "hermes-cli", "providerKind": "hermes",
+                     "providerAgentId": "cli", "connectionModes": ["cli"], "apiAvailable": False},
+                ]
+
+        with mock.patch.object(server, "_get_provider_registry", return_value=Registry()), \
+             mock.patch.object(server, "_pl_owns", return_value=False), \
+             mock.patch.object(server, "_hermes_platform_roster_agent", return_value=None), \
+             mock.patch.object(server.agent_providers, "discovery_rows", return_value=[]), \
+             mock.patch.object(server, "_load_discovery_cache", return_value=[]), \
+             mock.patch.object(server, "_save_discovery_cache"):
+            roster = {row["id"]: row for row in server._discover_roster()}
+        self.assertTrue(roster["hermes-astra"]["available"])
+        self.assertEqual("connected", roster["hermes-astra"]["connectionState"])
+        self.assertFalse(roster["hermes-cli"]["available"])
+        self.assertEqual("offline", roster["hermes-cli"]["connectionState"])
 
     def test_generic_lifecycle_covers_every_process_provider_and_extensions(self):
         provider_kinds = ["hermes", "codex", "claude-code", "opencode", "antigravity", "sample-extension"]
@@ -297,6 +437,17 @@ class PresenceCoordinatorTests(unittest.TestCase):
                 time.sleep(0.005)
             self.assertTrue(runtime.get("done"))
             self.assertEqual("finishing", presence.get_agent_state("hermes-default")["state"])
+
+    def test_codex_exec_mode_run_start_is_a_200_fallback_not_a_409(self):
+        # v0.11 relux (playtest #10): codex.preferAppServer off -> "use /api/codex/chat", answered 200 (no console 409)
+        class Provider:
+            prefer_app_server = False
+
+        agent = {"id": "codex-main", "statusKey": "codex-main", "providerKind": "codex", "profile": "main"}
+        with mock.patch.object(server, "_get_codex_agent", return_value=agent), \
+             mock.patch.object(server, "_codex_provider", return_value=Provider()):
+            out = server._handle_codex_run_start({"agentId": "codex-main", "message": "hi"})
+        self.assertEqual((out["ok"], out["fallback"], out["mode"], out["_status"]), (False, True, "exec", 200))
 
     def test_native_codex_finishes_without_browser_event_attachment(self):
         entered = threading.Event()

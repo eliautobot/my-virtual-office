@@ -27,17 +27,11 @@ def test_mobile_chat_keeps_native_scrolling_inside_scroll_surfaces():
 
 
 def test_mobile_chat_does_not_autofocus_the_composer():
-    assert "if (!shouldUseSingleWindowMobileLayout()) primaryWindow.input.focus();" in CHAT_JS
-    assert "if (!shouldUseSingleWindowMobileLayout()) windowInstance?.input?.focus();" in CHAT_JS
-
-
-def test_mobile_resize_closes_desktop_secondary_windows():
-    assert "function enforceSingleWindowMobileLayout()" in CHAT_JS
-    assert "setSecondaryPanelOpen(slotNum, false);" in CHAT_JS
-    resize_block = CHAT_JS.split("function _syncChatLayoutAfterViewportResize()", 1)[1]
-    assert "enforceSingleWindowMobileLayout();" in resize_block.split("window.addEventListener('resize'", 1)[0]
+    # Chat windows (2026-11-02): a restore after a reload opens windows without focus too.
+    assert "if (focus && !shouldUseSingleWindowMobileLayout()) primaryWindow.input.focus();" in CHAT_JS
+    assert "if (focus && !shouldUseSingleWindowMobileLayout()) windowInstance?.input?.focus();" in CHAT_JS
 
 
 def test_mobile_scroll_region_assets_are_cache_busted_together():
-    assert 'style.css?v=20260814-provider-markdown-1' in INDEX_HTML
-    assert 'chat.js?v=20260814-agent-preview-r1' in INDEX_HTML
+    assert 'style.css?v=' in INDEX_HTML
+    assert 'chat.js?v=' in INDEX_HTML

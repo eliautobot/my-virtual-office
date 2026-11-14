@@ -7,11 +7,27 @@ Scope: My Virtual Office Product
 
 This document is the organized index for tools that agents can use through My Virtual Office. It avoids duplicate scattered instructions and points every platform toward the same office-owned surfaces.
 
-The companion architecture document is `docs/UNIVERSAL-AGENT-HARNESS-SPEC.md`.
+The provider contract is documented in [Provider SDK](PROVIDER-SDK.md).
+
+## Calling the office API
+
+Agents on the office machine can call the API directly. When the office has a passcode
+(Settings > Security), calls from other machines or from a Docker network must send the agent
+API token as `Authorization: Bearer <token>` or `X-Virtual-Office-Token: <token>`. Read the
+token from Settings > Security (shown once a passcode is set, or `GET /api/access/agent-token` from the office machine), or
+set a fixed one with `VO_AGENT_API_TOKEN`. Browser pages from other sites can never change
+office state (cross-site protection is always on).
+
+With a passcode set, the token cannot change the office's settings: provider and setup settings,
+the gateway, model providers and keys (`/api/native-models/*`, `/set-model`), the licence, the SMS
+takeover switches, and adding or deleting agents answer `403` with "Agents cannot do this through
+the office API token" (even from the office machine when the token is sent). A person signed in to
+the office makes those changes. Everything below that is an agent's own work (presence, chat,
+meetings, projects and tasks, files, skills, previews) works with the token.
 
 ## Built-in skills
 
-Virtual Office seeds these skills into the Skills Library so agents can learn how to use office tools without custom platform code:
+Virtual Office writes these skills into the Skills Library at every start so agents can learn how to use office tools without custom platform code:
 
 - `AgentPlatform-to-AgentPlatform_Communications`
 - `VirtualOffice-Presence-and-Status`
@@ -33,13 +49,14 @@ The raw cross-platform communication skill is also exposed at:
 
 ### Agent platforms
 
-Use when the office needs to create or remove agents on a connected platform.
+Use when the office needs to create or remove agents on a connected platform. With a passcode
+set these are for a signed-in person or the office machine without the token (see above).
 
 - `GET /api/agent-platforms`
 - `POST /api/agent/create`
 - `DELETE /api/agent/delete`
 
-`POST /api/agent/create` accepts `platform: "openclaw"`, `platform: "hermes"`, `platform: "codex"`, or `platform: "claude-code"`. OpenClaw creation goes through Gateway `agents.create` / `agents.files.set` so the agent is runnable immediately and files are owned by the OpenClaw user. Hermes creation maps one office agent to one Hermes profile and uses `hermes profile create/delete`. Codex creation maps one office agent to a Codex workspace, writes `AGENTS.md` plus `.codex/agents/<profile>.toml`, and chats through Codex's native app-server JSON-RPC protocol. Claude Code creation maps one office agent to a Claude Code workspace, writes `AGENTS.md`, `CLAUDE.md`, and `.claude/agents/<profile>.md`, and chats through Claude Code's native `stream-json` CLI protocol.
+`POST /api/agent/create` accepts any enabled provider whose manifest declares `agentCreate`: `openclaw`, `codex`, `claude-code`, `opencode`, `antigravity` and provider extensions. Aliases such as `claude` and `agy` also work. Hermes creation is available only with `VO_HERMES_LOCAL_PROFILES_ENABLED=true` and a Hermes CLI inside the container; it then maps one office agent to one Hermes profile and runs `hermes profile create/delete`. API-only Hermes connections cannot create profiles. OpenClaw creation goes through Gateway `agents.create` / `agents.files.set` so the agent is runnable immediately and files are owned by the OpenClaw user. Codex creation maps one office agent to a Codex workspace, writes `AGENTS.md` plus `.codex/agents/<profile>.toml`, and chats through Codex's native app-server JSON-RPC protocol. Claude Code creation maps one office agent to a Claude Code workspace, writes `AGENTS.md`, `CLAUDE.md`, and `.claude/agents/<profile>.md`, and chats through Claude Code's native `stream-json` CLI protocol. Deleting an agent never deletes your own files: a standard agent folder inside the office-managed root is removed, but for an agent created in a custom folder only the files Virtual Office wrote are removed (then any folders left empty).
 
 Codex creation supports two location modes:
 
@@ -84,7 +101,24 @@ Claude Code configuration is product-neutral:
 - `VO_CLAUDE_CODE_INCLUDE_NATIVE_AGENTS`: read `$CLAUDE_CONFIG_DIR/agents/*.md`, enabled by default
 - `VO_CLAUDE_CODE_REGISTER_NATIVE_AGENTS`: write `$CLAUDE_CONFIG_DIR/agents/<profile>.md` when creating standard VO Claude Code agents, enabled by default
 
-Never hardcode host usernames, personal auth paths, or a developer's local container layout into Codex or Claude Code product support.
+OpenCode configuration (off by default, enable with `VO_OPENCODE_ENABLED=true`; the CLI must be inside the container):
+
+- `VO_OPENCODE_BIN`: OpenCode CLI executable, default `opencode`
+- `VO_OPENCODE_CONFIG_DIR`: OpenCode config directory, default `/data/opencode-config` in Docker
+- `VO_OPENCODE_WORKSPACE_ROOT`: Office-created OpenCode agent workspaces
+- `VO_OPENCODE_MAIN_WORKSPACE`: workspace of the OpenCode Main agent
+- `VO_OPENCODE_INCLUDE_MAIN`, `VO_OPENCODE_INCLUDE_AGENTS`, `VO_OPENCODE_REGISTER_AGENTS`: discovery and registration switches, enabled by default
+- `VO_OPENCODE_MODEL`, `VO_OPENCODE_TIMEOUT_SEC` (default 900): optional, not forwarded by the shipped compose file
+
+Antigravity configuration (off by default, enable with `VO_ANTIGRAVITY_ENABLED=true`; authentication stays with its native CLI):
+
+- `VO_ANTIGRAVITY_BIN`: Antigravity CLI executable, default `agy`
+- `VO_ANTIGRAVITY_HOME`: Antigravity config directory, default `/data/antigravity-config` in Docker
+- `VO_ANTIGRAVITY_WORKSPACE_ROOT`: Office-created Antigravity agent workspaces
+- `VO_ANTIGRAVITY_PRINT_TIMEOUT`: per-run print timeout, default `5m`
+- `VO_ANTIGRAVITY_MODEL`, `VO_ANTIGRAVITY_SANDBOX`, `VO_ANTIGRAVITY_TIMEOUT_SEC` (default 600): optional, not forwarded by the shipped compose file
+
+Never hardcode host usernames, personal auth paths, or a developer's local container layout into provider support.
 
 ### AgentPlatform-to-AgentPlatform Communications
 

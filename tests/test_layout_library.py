@@ -13,6 +13,7 @@ from layout_library import (  # noqa: E402
     LAYOUT_FORMAT,
     LayoutLibrary,
     LayoutValidationError,
+    ROOM_TEMPLATES,
     build_default_layout,
     normalize_layout,
 )
@@ -109,6 +110,22 @@ class LayoutLibraryTests(unittest.TestCase):
     def test_cannot_address_default_as_a_file(self):
         with self.assertRaises(LayoutValidationError):
             self.library.delete(DEFAULT_LAYOUT_ID)
+
+    def test_room_templates_are_listed_last_and_read_only(self):
+        saved = self.library.save(sample_layout())
+        layouts = self.library.list()
+        templates = [item for item in layouts if item.get("source") == "template"]
+        self.assertEqual(len(templates), len(ROOM_TEMPLATES))
+        self.assertEqual(layouts[1]["id"], saved["id"])
+        self.assertEqual([item["id"] for item in layouts[-len(templates):]], [t["id"] for t in ROOM_TEMPLATES])
+        pod = self.library.get("room-desk-pod")
+        self.assertTrue(pod["readOnly"])
+        self.assertEqual(pod["kind"], "selection")
+        self.assertGreaterEqual(len(pod["objects"]["furniture"]), 4)
+        meeting = self.library.get("room-meeting")
+        self.assertEqual(len(meeting["objects"]["walls"]), 5)
+        with self.assertRaises(LayoutValidationError):
+            self.library.delete("room-desk-pod")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,783 @@
+/* Chat and side-panel styles added in v0.8 (owner: chat builder).
+   Loaded after style.css and ui-modern.css; uses the --vo-* tokens with
+   fallbacks so it also works before the token file is in place. */
+
+/* ── Composer: Stop only while a reply runs, Send shows when busy ───────── */
+.chat-panel .chat-stop-btn[hidden],
+.chat-panel .chat-send-btn[hidden] {
+  display: none !important;
+}
+.chat-panel .chat-send-btn:disabled,
+.chat-panel .chat-send-btn.is-busy {
+  opacity: 0.55;
+  cursor: progress;
+}
+.chat-panel .chat-new-session.chat-new-session-plus {
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: 20px;
+  font-weight: var(--vo-weight-bold, 700);
+  line-height: 1;
+}
+
+/* ── One run state line under the last message the user sent ──────────── */
+.chat-panel .chat-run-state {
+  align-self: flex-end;
+  margin: -2px 6px 6px auto;
+  padding: 0 2px;
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: var(--vo-text-xs, 11px);
+  line-height: 1.4;
+  color: var(--vo-text-3, #8b95a7);
+  text-align: right;
+}
+.chat-panel .chat-run-state[data-state="sending"]::before,
+.chat-panel .chat-run-state[data-state="running"]::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--vo-accent-fill);
+  animation: vo-chat-run-pulse 1.2s ease-in-out infinite;
+}
+.chat-panel .chat-run-state[data-state="error"] { color: var(--vo-danger, #e5534b); }
+.chat-panel .chat-run-state[data-state="cancelled"] { color: var(--vo-text-2, #b7c0cf); }
+@keyframes vo-chat-run-pulse {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-panel .chat-run-state::before { animation: none !important; }
+}
+.chat-panel .chat-msg.user.chat-msg-unsent .chat-bubble { opacity: 0.6; }
+
+/* ── Error bubble with a plain reason and Retry ────────────────────────── */
+.chat-panel .chat-msg.chat-run-error { justify-content: center; }
+.chat-panel .chat-msg.chat-run-error .chat-error-bubble {
+  max-width: min(92%, 520px);
+  padding: 10px 12px;
+  text-align: left;
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: var(--vo-text-sm, 12.5px);
+  line-height: 1.45;
+  color: var(--vo-text-1, #e8edf5);
+  background: var(--vo-danger-soft, rgba(229, 83, 75, 0.14));
+  border: 1px solid var(--vo-danger, #e5534b);
+  border-radius: var(--vo-radius-md, 10px);
+  white-space: normal;
+}
+.chat-panel .chat-error-title { font-weight: var(--vo-weight-bold, 700); }
+.chat-panel .chat-error-title::before { content: "⚠ "; color: var(--vo-danger, #e5534b); }
+.chat-panel .chat-error-detail {
+  margin-top: 4px;
+  font-size: var(--vo-text-xs, 11px);
+  color: var(--vo-text-2, #b7c0cf);
+  overflow-wrap: anywhere;
+}
+.chat-panel .chat-error-actions { margin-top: 8px; display: flex; gap: 8px; }
+.chat-panel .chat-error-retry,
+.chat-panel .chat-history-retry,
+.chat-panel .chat-load-older,
+.chat-panel .chat-suggestion {
+  min-height: 32px;
+  padding: 4px 12px;
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: var(--vo-text-sm, 12.5px);
+  color: var(--vo-text-1, #e8edf5);
+  background: var(--vo-surface-3, #22304a);
+  border: 1px solid var(--vo-border-strong, #4a5a78);
+  border-radius: var(--vo-radius-sm, 8px);
+  cursor: pointer;
+}
+.chat-panel .chat-error-retry:hover,
+.chat-panel .chat-history-retry:hover,
+.chat-panel .chat-load-older:hover,
+.chat-panel .chat-suggestion:hover { border-color: var(--vo-accent, #ffd23f); }
+.chat-panel .chat-error-retry:focus-visible,
+.chat-panel .chat-history-retry:focus-visible,
+.chat-panel .chat-load-older:focus-visible,
+.chat-panel .chat-suggestion:focus-visible,
+.chat-panel .chat-msg-copy:focus-visible,
+.chat-panel .chat-code-copy:focus-visible {
+  outline: 2px solid var(--vo-accent);
+  outline-offset: 2px;
+}
+.chat-panel .chat-error-retry:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Loading, error and empty states for the conversation ──────────────── */
+.chat-panel .chat-history-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px auto;
+  padding: 8px 12px;
+  max-width: 92%;
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: var(--vo-text-sm, 12.5px);
+  color: var(--vo-text-2, #b7c0cf);
+  text-align: center;
+}
+.chat-panel .chat-history-status.error {
+  color: var(--vo-text-1, #e8edf5);
+  background: var(--vo-danger-soft, rgba(229, 83, 75, 0.14));
+  border: 1px solid var(--vo-danger, #e5534b);
+  border-radius: var(--vo-radius-md, 10px);
+}
+.chat-panel .chat-empty-state {
+  margin: auto 12px;
+  padding: 18px 12px;
+  text-align: center;
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  color: var(--vo-text-2, #b7c0cf);
+}
+.chat-panel .chat-empty-title {
+  margin-bottom: 6px;
+  font-size: var(--vo-text-md, 14px);
+  font-weight: var(--vo-weight-bold, 700);
+  color: var(--vo-text-1, #e8edf5);
+}
+.chat-panel .chat-empty-hint { font-size: var(--vo-text-sm, 12.5px); margin-bottom: 12px; }
+.chat-panel .chat-empty-suggestions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.chat-panel .chat-suggestion { max-width: 100%; text-align: left; white-space: normal; }
+.chat-panel .chat-load-older { display: block; margin: 8px auto 12px; }
+
+/* ── Copy buttons: per message and per code block ──────────────────────── */
+.chat-panel .chat-bubble { position: relative; }
+.chat-panel .chat-msg-copy,
+.chat-panel .chat-code-copy {
+  min-height: 24px;
+  padding: 2px 8px;
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: var(--vo-text-xs, 11px);
+  line-height: 1.2;
+  color: var(--vo-text-2, #b7c0cf);
+  background: var(--vo-surface-2, #1a2438);
+  border: 1px solid var(--vo-border-subtle, #2f3b52);
+  border-radius: var(--vo-radius-xs, 6px);
+  cursor: pointer;
+}
+/* P3-6: the button floats left on the time's line, so it never covers the time. */
+.chat-panel .chat-bubble { display: flow-root; }
+.chat-panel .chat-msg-copy {
+  float: left;
+  margin: 4px 10px 0 0;
+  opacity: 0;
+  transition: opacity var(--vo-dur-fast, 120ms) ease;
+}
+.chat-panel .chat-msg:hover .chat-msg-copy,
+.chat-panel .chat-msg-copy:focus-visible,
+.chat-panel .chat-msg-copy.copied { opacity: 1; }
+@media (hover: none) {
+  /* Touch: keep the button reachable without hover, but quiet. */
+  .chat-panel .chat-msg-copy { opacity: 0.75; }
+}
+.chat-panel .chat-code-block { position: relative; }
+.chat-panel .chat-code-copy { position: absolute; top: 6px; right: 6px; opacity: 0.85; }
+.chat-panel .chat-code-copy:hover,
+.chat-panel .chat-msg-copy:hover { color: var(--vo-text-1, #e8edf5); border-color: var(--vo-accent, #ffd23f); }
+.chat-panel .chat-code-copy.copied,
+.chat-panel .chat-msg-copy.copied { color: var(--vo-success, #3fb950); border-color: var(--vo-success, #3fb950); }
+.chat-panel .chat-code-block pre { padding-top: 28px; }
+/* Copy (and other common actions) are icon buttons: the sprite's two sheets,
+   a check mark for a moment after copying. Square 26 px, 36 px on touch. */
+.chat-panel .chat-icon-btn,
+.chat-panel .hp-queue-btn.chat-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  line-height: 0;
+}
+.chat-panel .chat-icon-btn .chat-ic { width: 12px; height: 12px; }
+.chat-panel .chat-msg-copy.chat-icon-btn { margin-top: 2px; }
+.chat-panel .chat-bubble .chat-time { white-space: nowrap; }
+.chat-panel .chat-icon-btn.copy-failed { color: var(--vo-danger, #f87171); border-color: var(--vo-danger, #f87171); }
+@media (pointer: coarse) {
+  .chat-panel .chat-icon-btn { width: 36px; min-width: 36px; height: 36px; min-height: 36px; }
+  .chat-panel .hp-queue-btn.chat-icon-btn { width: 44px; min-width: 44px; height: 44px; min-height: 44px; }
+  .chat-panel .chat-icon-btn .chat-ic { width: 14px; height: 14px; }
+}
+
+/* ── Markdown details ──────────────────────────────────────────────────── */
+/* A link the sanitizer disarmed (no href) reads as plain text (CH-31). */
+.chat-panel .chat-markdown a:not([href]) {
+  color: inherit;
+  text-decoration: none;
+  cursor: text;
+}
+/* Task list: checkbox stays on the same line as its label (CH-31). */
+.chat-panel .chat-markdown li > input[type="checkbox"] {
+  display: inline-block;
+  width: auto;
+  height: auto;
+  margin: 0 6px 0 0;
+  vertical-align: -1px;
+}
+.chat-panel .chat-markdown li.task-list-item,
+.chat-panel .chat-markdown ul.contains-task-list > li { list-style: none; }
+.chat-panel .chat-envelope-details {
+  margin-top: 4px;
+  font-size: var(--vo-text-xs, 11px);
+  color: var(--vo-text-3, #8b95a7);
+}
+.chat-panel .chat-envelope-details summary { cursor: pointer; }
+.chat-panel .chat-envelope-details pre {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ── Drag and drop files onto the chat ─────────────────────────────────── */
+.chat-panel.chat-drop-active::after {
+  content: "Drop files to attach";
+  position: absolute;
+  inset: 8px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: var(--vo-text-md, 14px);
+  color: var(--vo-text-1, #e8edf5);
+  background: var(--vo-scrim, rgba(6, 10, 18, 0.72));
+  border: 2px dashed var(--vo-accent, #ffd23f);
+  border-radius: var(--vo-radius-lg, 14px);
+  pointer-events: none;
+}
+
+/* ── Unread badges on the chat button and window tabs (C4) ─────────────── */
+#chat-toggle[data-unread],
+[data-chat-slot-toggle][data-unread] { position: relative; }
+#chat-toggle[data-unread]::after,
+[data-chat-slot-toggle][data-unread]::after {
+  content: attr(data-unread);
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: 11px;
+  font-weight: var(--vo-weight-bold, 700);
+  line-height: 1;
+  color: #fff;
+  background: var(--vo-danger, #e5534b);
+  border-radius: var(--vo-radius-pill, 999px);
+  box-shadow: 0 0 0 2px var(--vo-surface-1, #121a2a);
+  pointer-events: none;
+}
+
+/* ── Phone: status as a dot, words in the tooltip (CH-30) ──────────────── */
+@media (max-width: 900px) {
+  .chat-panel .chat-status {
+    position: relative;
+    width: 12px;
+    min-width: 12px;
+    height: 12px;
+    padding: 0;
+    overflow: hidden;
+    font-size: 0;
+    text-indent: -999px;
+    border-radius: 50%;
+    flex: 0 0 12px;
+  }
+  .chat-panel .chat-status::before {
+    content: "";
+    position: absolute;
+    inset: 2px;
+    border-radius: 50%;
+    background: var(--vo-text-3, #8b95a7);
+  }
+  .chat-panel .chat-status.connected::before { background: var(--vo-success, #3fb950); }
+  .chat-panel .chat-status.connecting::before { background: var(--vo-warning, #d29922); }
+  .chat-panel .chat-status.disconnected::before { background: var(--vo-danger, #e5534b); }
+  .chat-panel .chat-run-state { margin-right: 4px; }
+}
+
+/* CH-31: a link whose unsafe href was removed reads as plain text, and a
+   task-list checkbox stays on the same line as its label. */
+.chat-panel .chat-markdown a:not([href]) {
+  color: inherit;
+  text-decoration: none;
+  cursor: text;
+}
+.chat-panel .chat-markdown input[type="checkbox"] {
+  display: inline-block;
+  width: auto;
+  height: auto;
+  vertical-align: -0.12em;
+}
+.chat-panel .chat-markdown .task-list-item > p:first-child { display: inline; }
+
+/* ── P3-6: readable time on the user's bubble (accent background) ─────── */
+.chat-panel .chat-msg.user .chat-bubble .chat-time { color: inherit; opacity: 0.85; }
+html[data-ui-preset] .chat-panel .chat-msg.user .chat-bubble .chat-time {
+  color: var(--vo-accent-fill-ink) !important;
+  opacity: 0.85;
+}
+.chat-panel .chat-msg.user .chat-bubble .chat-msg-copy {
+  color: inherit;
+  background: transparent;
+  border-color: currentColor;
+}
+html[data-ui-preset] .chat-panel .chat-msg.user .chat-bubble .chat-msg-copy {
+  color: var(--vo-accent-fill-ink) !important;
+}
+
+/* ── P2-5: OpenClaw system events split off the user's message ──────── */
+.chat-panel .chat-msg.has-system-events { flex-wrap: wrap; row-gap: 4px; }
+.chat-panel .chat-system-events {
+  flex: 0 0 100%;
+  max-width: 100%;
+  min-width: 0;
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: var(--vo-text-xs, 11px);
+  color: var(--vo-text-3, #8b96a8);
+  text-align: right;
+}
+.chat-panel .chat-system-events > summary {
+  display: inline-block;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px dashed var(--vo-border-subtle, #2f3b52);
+  border-radius: var(--vo-radius-xs, 6px);
+  cursor: pointer;
+  list-style: none;
+}
+.chat-panel .chat-system-events > summary::-webkit-details-marker { display: none; }
+.chat-panel .chat-system-events > summary::before { content: '\25B8  '; }
+.chat-panel .chat-system-events[open] > summary::before { content: '\25BE  '; }
+.chat-panel .chat-system-events > summary:hover,
+.chat-panel .chat-system-events > summary:focus-visible { color: var(--vo-text-1, #e8edf5); }
+.chat-panel .chat-system-events-list {
+  margin-top: 6px;
+  max-height: 240px;
+  overflow: auto;
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid var(--vo-border-subtle, #2f3b52);
+  border-radius: var(--vo-radius-xs, 6px);
+  background: var(--vo-surface-2, #1a2438);
+}
+.chat-panel .chat-system-event + .chat-system-event { margin-top: 6px; }
+.chat-panel .chat-system-event-title { color: var(--vo-text-2, #b7c0cf); overflow-wrap: anywhere; }
+.chat-panel .chat-system-event pre {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--vo-text-xs, 11px);
+  color: var(--vo-text-3, #8b96a8);
+}
+
+/* ── P3-7: chat window strip only with 2+ windows; tabs carry agent names ─ */
+.chat-exterior-tabs.is-single { display: none !important; }
+.chat-exterior-tabs .chat-slot-tab[hidden] { display: none !important; }
+.chat-exterior-tabs .chat-slot-tab { min-width: 0; }
+.chat-exterior-tabs .chat-slot-tab.is-add { flex: 0 0 44px !important; max-width: 44px; }
+.chat-exterior-tabs .chat-slot-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Chat header: agent picker face, one control height ────────────────────
+   The name is in the readable UI font with the agent's emoji in a matching
+   avatar chip and a pixel chevron. The native select sits on top, invisible,
+   so the OS picker, keyboard and screen readers keep working. Every header
+   control is --vo-control-h tall (36 px, 44 px on touch). */
+.chat-panel .chat-header { align-items: center; }
+.chat-panel .chat-agent-pick {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  min-width: 64px;
+  max-width: min(220px, 48%);
+  height: var(--vo-control-h, 36px);
+  padding: 0 8px 0 4px;
+  box-sizing: border-box;
+  border: 1px solid var(--vo-border-subtle, rgba(255,255,255,0.14));
+  border-radius: var(--vo-radius-sm, 8px);
+  background: var(--vo-surface-2, #131c2c);
+  color: var(--vo-text-1, #f3f6fb);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background-color 0.12s ease;
+}
+.chat-panel .chat-header .chat-status {
+  flex-shrink: 1000;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-panel .chat-agent-pick:hover {
+  border-color: var(--vo-border-strong, rgba(255,255,255,0.32));
+  background: var(--vo-surface-3, #1b2638);
+}
+.chat-panel .chat-agent-pick:focus-within { box-shadow: var(--vo-focus, 0 0 0 2px #f5c84c); }
+.chat-panel .chat-agent-pick-face {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  pointer-events: none;
+}
+.chat-panel .chat-agent-pick-av {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: calc(var(--vo-control-h, 36px) - 10px);
+  height: calc(var(--vo-control-h, 36px) - 10px);
+  border-radius: max(2px, calc(var(--vo-radius-sm, 8px) - 2px));
+  background: var(--vo-surface-1, #0d1422);
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--vo-font-ui, sans-serif);
+  font-size: 16px;
+  line-height: 1;
+}
+.chat-panel .chat-agent-pick-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: 14px;
+  font-weight: var(--vo-weight-bold, 700);
+  line-height: 1.2;
+  letter-spacing: 0;
+  color: var(--vo-text-1, #f3f6fb);
+}
+.chat-panel .chat-agent-pick-chev {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  color: var(--vo-text-2, #c3cddc);
+}
+.chat-panel .chat-agent-pick > .chat-agent-select,
+#chat-panel .chat-agent-pick > .chat-agent-select {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  min-height: 0 !important;
+  flex: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  opacity: 0 !important;
+  cursor: pointer;
+  font-size: 16px !important;
+  box-shadow: none !important;
+}
+.chat-panel .chat-header :is(.chat-sessions-toggle, .chat-new-session, .chat-close, .hp-side-btn, .chat-new-window, .chat-put-away) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  box-sizing: border-box;
+  width: 32px;
+  min-width: 32px !important;
+  height: var(--vo-control-h, 36px) !important;
+  min-height: var(--vo-control-h, 36px) !important;
+  padding: 0 !important;
+  border-radius: var(--vo-radius-sm, 8px);
+  color: var(--vo-text-2, #c3cddc);
+  line-height: 1;
+}
+@media (pointer: coarse) {
+  .chat-panel .chat-header :is(.chat-sessions-toggle, .chat-new-session, .chat-close, .hp-side-btn, .chat-new-window, .chat-put-away) {
+    width: var(--vo-control-h, 44px);
+    min-width: var(--vo-control-h, 44px) !important;
+  }
+}
+.chat-panel .chat-header :is(.chat-sessions-toggle, .chat-new-session, .chat-new-window, .chat-put-away):hover {
+  color: var(--vo-text-1, #f3f6fb);
+  background: var(--vo-surface-3, rgba(255,255,255,0.08));
+}
+
+/* ── Chat windows: one button per window above the chat launcher ──────────
+   (chat.js paintWindowRail). Desktop: a column at the right edge of the
+   office, standing on the map controls (ui-modern.css --vo-mapctl-*); the
+   docked windows leave it a gutter. Phones: a column above the action bar
+   while no chat is on screen, and a strip under the shown chat's header when
+   there is another chat to switch to. */
+.chat-window-rail {
+  position: fixed;
+  right: var(--chat-rail-right, 8px);
+  bottom: calc(var(--vo-dock-h, 60px) + var(--vo-mapctl-b, 16px) + var(--vo-mapctl-h, 203px) + 8px);
+  z-index: calc(var(--vo-z-window, 300) + 6);
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+  gap: 6px;
+  pointer-events: none;
+}
+.chat-window-rail[hidden] { display: none !important; }
+.chat-window-rail > .chat-win-btn { pointer-events: auto; }
+.chat-win-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  box-sizing: border-box;
+  border: 2px solid var(--vo-border-strong, #5b6f8c);
+  border-radius: var(--vo-radius-md, 12px);
+  background: var(--vo-surface-2, #131c2c);
+  color: var(--vo-text-1, #f3f6fb);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, opacity 0.12s ease;
+}
+.chat-win-btn:hover { transform: translateY(-1px); border-color: var(--vo-accent, #f5c84c); }
+.chat-win-btn:focus-visible { outline: none; box-shadow: var(--vo-focus, 0 0 0 2px #f5c84c); }
+.chat-win-btn.is-shown { border-color: var(--vo-accent, #f5c84c); }
+.chat-win-btn.is-front { background: color-mix(in srgb, var(--vo-accent, #f5c84c) 22%, var(--vo-surface-2, #131c2c)); }
+.chat-win-btn.is-away { opacity: 0.78; border-style: dashed; }
+.chat-win-btn.is-working::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border: 2px solid var(--vo-accent-2, #60a5fa);
+  border-radius: calc(var(--vo-radius-md, 12px) + 4px);
+  animation: chat-win-working 1.4s ease-in-out infinite;
+  pointer-events: none;
+}
+@keyframes chat-win-working { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .chat-win-btn.is-working::after { animation: none; opacity: 0.8; } }
+.chat-win-av {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", var(--vo-font-ui, sans-serif);
+  font-size: 20px;
+  line-height: 1;
+}
+.chat-win-n {
+  position: absolute;
+  top: -7px;
+  right: -7px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 9px;
+  background: var(--vo-danger, #ef4444);
+  color: #fff;
+  font: 700 11px/18px var(--vo-font-ui, system-ui, sans-serif);
+  text-align: center;
+}
+/* The window in front of the others (several shown). */
+.chat-panel.chat-window-front { box-shadow: 0 0 0 2px var(--vo-accent, #f5c84c), 0 -4px 24px rgba(0, 0, 0, 0.5); }
+/* Phones: the strip under the shown chat's header. */
+.chat-panel > .chat-window-rail.is-strip {
+  position: static;
+  flex: none;
+  flex-direction: row;
+  justify-content: flex-start;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--vo-border-subtle, rgba(255,255,255,0.12));
+  background: var(--vo-surface-1, #0d1422);
+  overflow-x: auto;
+  pointer-events: auto;
+}
+.chat-panel > .chat-window-rail.is-strip .chat-win-btn { box-shadow: none; }
+/* Phones: the column stands left of the map controls on the same baseline, just above the
+   dashboard peek (or whatever sheet covers the map), and steps aside with them. */
+@media (max-width: 900px) {
+  .chat-window-rail:not(.is-strip) {
+    right: calc(var(--vo-space-2, 8px) * 2 + var(--vo-mapctl-w, 46px));
+    bottom: calc(var(--vo-actionbar-h, 52px) + env(safe-area-inset-bottom, 0px) + max(var(--vo-sheet-h, 0px), var(--vo-chat-sheet-h, 0px)) + var(--vo-space-2, 8px));
+  }
+  body.vo-sheet-full .chat-window-rail:not(.is-strip) { visibility: hidden; }
+}
+@media (max-width: 900px) and (max-height: 740px) {
+  body.vo-sheet-half .chat-window-rail:not(.is-strip) { visibility: hidden; }
+}
+/* Short phone screens lay the map controls in a row: the column stands above that row. */
+@media (max-width: 900px) and (max-height: 500px) {
+  .chat-window-rail:not(.is-strip) {
+    right: var(--vo-space-2, 8px);
+    bottom: calc(var(--vo-actionbar-h, 52px) + env(safe-area-inset-bottom, 0px) + var(--vo-sheet-h, 0px) + var(--vo-space-2, 8px) * 2 + var(--vo-mapctl-w, 46px));
+  }
+}
+@media (pointer: coarse) {
+  .chat-win-btn { width: 44px; height: 44px; }
+}
+/* Short landscape: the old window strip's row is gone, the docked chat uses the full height.
+   The column stands left of the map controls on the same baseline (no room above them). */
+@media (max-height: 500px) and (min-width: 901px) {
+  #chat-panel.open:not(.floating):not(.snap-left):not(.snap-right) { top: 0; }
+  .chat-window-rail:not(.is-strip) {
+    right: calc(var(--chat-sidebar-w, 0px) + var(--vo-space-4, 16px) + var(--vo-mapctl-w, 46px) + 8px);
+    bottom: calc(var(--vo-dock-h, 60px) + var(--vo-mapctl-b, 16px));
+  }
+}
+/* Desktop browsers with anchor positioning tie the column to the map controls themselves, so it
+   follows them frame by frame (the dashboard sliding open or shut, edit mode) with no script. */
+@supports (anchor-name: --a) {
+  @media (min-width: 901px) {
+    .chat-window-rail:not(.is-strip) {
+      position-anchor: --vo-mapctl;
+      right: anchor(right);
+      bottom: calc(anchor(top) + 8px);
+      width: anchor-size(width);
+    }
+  }
+  @media (min-width: 901px) and (max-height: 500px) {
+    .chat-window-rail:not(.is-strip) {
+      right: calc(anchor(left) + 8px);
+      bottom: anchor(bottom);
+      width: auto;
+    }
+  }
+}
+/* Header: "+" beside the agent's name opens another window, "—" puts this one away. */
+.chat-panel .chat-header .chat-new-window,
+.chat-panel .chat-header .chat-put-away {
+  background: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+.chat-panel .chat-header .chat-new-window .vo-icon,
+.chat-panel .chat-header .chat-put-away .vo-icon,
+.chat-panel .chat-header .chat-new-session .vo-icon { width: 12px; height: 12px; }
+.chat-panel .chat-header .chat-new-window { margin-left: -2px; }
+.chat-panel .chat-header .chat-new-session.chat-icon-btn { background: none; border: 1px solid transparent; }
+/* Narrow chat windows (the default 380 px one too): the status is a dot with
+   its words in the tooltip, like on phones, so the agent's name keeps room. */
+.chat-panel .chat-header { container: chathead / inline-size; }
+@container chathead (max-width: 460px) {
+  .chat-panel .chat-header .chat-status {
+    position: relative;
+    width: 12px;
+    min-width: 12px;
+    height: 12px;
+    padding: 0 !important;
+    overflow: hidden;
+    font-size: 0;
+    text-indent: -999px;
+    border-radius: 50%;
+    flex: 0 0 12px;
+  }
+  .chat-status::before {
+    content: "";
+    position: absolute;
+    inset: 2px;
+    border-radius: 50%;
+    background: var(--vo-text-3, #8b95a7);
+  }
+  .chat-status.connected::before { background: var(--vo-success, #3fb950); }
+  .chat-status.connecting::before { background: var(--vo-warning, #d29922); }
+  .chat-status.disconnected::before { background: var(--vo-danger, #e5534b); }
+}
+
+/* ── Phones: chat is a bottom sheet (review 2026-11-02, like the 8090 one) ─────
+   The shown chat (one at a time) sits above the action bar and opens about
+   half way up the screen; the office stays visible and usable above it. The
+   grip on top drags it from a small height up to just under the top bar
+   (chat.js applyChatSheet sets --vo-chat-sheet-h and remembers the height on
+   this device); the on-screen keyboard lifts it (--vo-chat-sheet-bottom) so
+   the composer stays in view. */
+.chat-panel .chat-sheet-grip { display: none; }
+@media (max-width: 900px) {
+  .chat-panel.open {
+    top: auto !important;
+    bottom: var(--vo-chat-sheet-bottom, calc(var(--vo-actionbar-h, 52px) + env(safe-area-inset-bottom, 0px))) !important;
+    height: var(--vo-chat-sheet-h, calc(50dvh - var(--vo-actionbar-h, 52px))) !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    padding-bottom: 0;
+    border-bottom: 0;
+    border-radius: var(--vo-radius-lg, 16px) var(--vo-radius-lg, 16px) 0 0 !important;
+    box-shadow: 0 -10px 28px rgba(0, 0, 0, 0.35);
+  }
+  .chat-panel .chat-resize-handle { display: none !important; }
+  .chat-panel .chat-sheet-grip {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: none;
+    width: 100%;
+    height: 24px;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    cursor: ns-resize;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .chat-panel .chat-sheet-grip span {
+    display: block;
+    width: 44px;
+    height: 5px;
+    flex: none;
+    border-radius: 5px;
+    background: var(--vo-border-strong, #5b6f8c);
+  }
+  .chat-panel .chat-sheet-grip:hover span,
+  .chat-panel .chat-sheet-grip.is-dragging span { background: var(--vo-accent-fill); }
+  .chat-panel .chat-sheet-grip:focus-visible { outline: none; }
+  .chat-panel .chat-sheet-grip:focus-visible span { box-shadow: var(--vo-focus, 0 0 0 2px #f5c84c); }
+  /* A compact sheet: one header row of 40 px controls (the agent's name shrinks
+     first), a slimmer model bar and composer, so half a screen shows messages. */
+  .chat-panel .chat-header { flex-wrap: nowrap !important; gap: 2px !important; min-height: 0 !important; padding: 0 4px 4px 6px !important; }
+  .chat-panel .chat-header .chat-agent-pick { flex: 0 1 auto; min-width: 0; height: 40px; }
+  .chat-panel .chat-header .chat-status { order: 0; flex: none; margin: 0 4px; }
+  .chat-panel .chat-header .chat-header-btns { flex: none; gap: 0; margin-left: 0; }
+  .chat-panel .chat-header :is(#chat-sessions-toggle, #chat-new-session, #chat-close, .chat-sessions-toggle, .chat-new-session, .chat-close, .hp-side-btn, .chat-new-window, .chat-put-away) {
+    width: 40px !important;
+    min-width: 40px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+  }
+  .chat-panel .chat-header :is(#chat-agent-select, .chat-agent-select) { height: 40px !important; min-height: 40px !important; }
+  .chat-panel .chat-model-bar { flex-wrap: nowrap !important; min-height: 0; padding: 2px 8px 3px !important; }
+  .chat-panel .chat-model-bar .hp-pickers { flex: 1 1 auto; overflow: hidden; }
+  .chat-panel .chat-model-bar .hp-picker-btn { flex: 0 1 auto; }
+  .chat-panel .chat-model-bar .chat-context-info { flex: none; }
+  .chat-panel .chat-input-row { gap: 4px !important; padding: 6px 8px !important; }
+  .chat-panel .chat-input-row :is(#chat-attach, #chat-mic, #chat-send, .chat-attach-btn, .chat-mic-btn, .chat-send-btn, .chat-stop-btn) {
+    width: 40px !important;
+    min-width: 40px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+  }
+  .chat-panel .chat-input-row :is(#chat-input, .chat-input) { min-height: 40px !important; }
+  .chat-panel > .chat-window-rail.is-strip { gap: 6px; padding: 3px 8px; }
+  .chat-window-rail .chat-win-btn { width: 40px; height: 40px; }
+}
+/* Narrow phones (360 px): slimmer header buttons so the agent's name keeps room. */
+@media (max-width: 380px) {
+  .chat-panel .chat-header :is(#chat-sessions-toggle, #chat-new-session, #chat-close, .chat-sessions-toggle, .chat-new-session, .chat-close, .hp-side-btn, .chat-new-window, .chat-put-away) {
+    width: 34px !important;
+    min-width: 34px !important;
+  }
+  .chat-panel .chat-header .chat-status { margin: 0 2px; }
+}

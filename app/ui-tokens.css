@@ -1,0 +1,270 @@
+/* Virtual Office design tokens (v0.8). Loaded FIRST on every page.
+   One source of truth for type, color, space, radius, elevation, z-index and motion.
+   A theme preset is only a palette (plus a few shape tokens); components reference --vo-* only.
+   Every palette passes WCAG AA: text-1/2/3 >= 4.5:1 on surface-0/1/2/3, accent-ink on accent
+   >= 4.5:1, accent as text on surface-1/2 >= 4.5:1, border-strong >= 3:1 (control edges).
+   ui-themes.js keeps a copy of these palettes only to seed the Custom theme; a test keeps the
+   two in sync. The Custom theme writes the same --vo-* names inline on <html>. */
+
+/* Self-hosted fonts (SIL Open Font License 1.1, see fonts/OFL-*.txt). No third-party requests. */
+@font-face {
+  font-family: "Press Start 2P";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/PressStart2P-latin.woff2?v=1") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Press Start 2P";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/PressStart2P-latin-ext.woff2?v=1") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("fonts/Inter-latin.woff2?v=1") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("fonts/Inter-latin-ext.woff2?v=1") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+:root {
+  /* Type: rem so the browser font-size setting scales the whole chrome. */
+  --vo-font-ui: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --vo-font-pixel: "Press Start 2P", ui-monospace, monospace;
+  /* The office's own fonts (the bubbles over agents), the same in every theme preset: never set by a preset below. */
+  --vo-font-office: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --vo-font-office-pixel: "Press Start 2P", ui-monospace, monospace;
+  --vo-font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --vo-text-xs: .75rem;    /* 12px  meta, badges. Smallest size allowed in the chrome. */
+  --vo-text-sm: .8125rem;  /* 13px  secondary text, table cells */
+  --vo-text-md: .875rem;   /* 14px  body, buttons, inputs */
+  --vo-text-lg: 1rem;      /* 16px  card and section titles (sans) */
+  --vo-text-xl: 1.25rem;   /* 20px  window titles on phone (sans fallback) */
+  --vo-pixel-sm: .6875rem; /* 11px  pixel labels: widget titles, tabs (UPPERCASE). The floor: no chrome text below 11px. */
+  --vo-pixel-md: .75rem;   /* 12px  window titles */
+  --vo-pixel-lg: 1rem;     /* 16px  brand */
+  --vo-weight-regular: 450; --vo-weight-medium: 550; --vo-weight-bold: 700;
+  --vo-leading-tight: 1.25; --vo-leading: 1.5;
+
+  /* Space: 4px grid. */
+  --vo-space-1: 4px; --vo-space-2: 8px; --vo-space-3: 12px; --vo-space-4: 16px;
+  --vo-space-5: 20px; --vo-space-6: 24px; --vo-space-8: 32px;
+
+  /* Shape. Retro and Gameboy override to hard pixel corners below. */
+  --vo-radius-xs: 4px; --vo-radius-sm: 8px; --vo-radius-md: 12px; --vo-radius-lg: 16px; --vo-radius-pill: 999px;
+  --vo-border-w: 1px;
+
+  /* Elevation. */
+  --vo-shadow-1: 0 1px 0 rgba(0,0,0,.25);
+  --vo-shadow-2: 0 8px 24px rgba(0,0,0,.35);
+  --vo-shadow-3: 0 24px 64px rgba(0,0,0,.5);
+  /* The window frame's 2 px offset pixel shadow (v0.10): echoes the office art, no blur. */
+  --vo-shadow-pixel: 2px 2px 0 rgba(0,0,0,.35);
+
+  /* Controls and chrome sizes. */
+  --vo-control-h: 36px;
+  --vo-control-h-lg: 44px;
+  --vo-icon: 18px;
+  --vo-dock-h: 60px;
+  --vo-topbar-h: 44px;
+  --vo-actionbar-h: 52px;
+  --vo-sidebar-w: 320px;
+  --vo-focus: 0 0 0 2px var(--vo-surface-1), 0 0 0 4px var(--vo-accent);
+
+  /* One z-index ladder for every layer of the chrome. The office canvas is z 0. */
+  --vo-z-canvas-ui: 10;   /* map controls, canvas overlays, preview bubbles */
+  --vo-z-chrome: 100;     /* dock, sidebar, top bar, action bar */
+  --vo-z-fab: 200;        /* floating launchers */
+  --vo-z-window: 300;     /* chat, SMS, browser, Agent PC floating windows */
+  --vo-z-sheet: 400;      /* phone bottom sheets, edit catalog, edit toolbar */
+  --vo-z-scrim: 500;
+  --vo-z-modal: 600;      /* settings, projects, meetings, skills, agents */
+  --vo-z-popover: 700;    /* menus, tooltips, pickers */
+  --vo-z-toast: 800;
+  --vo-z-lightbox: 900;
+
+  /* Motion. Windows and sheets open in 140 ms ease-out (v0.10). */
+  --vo-dur-fast: 120ms; --vo-dur: 180ms; --vo-ease: cubic-bezier(.2,.7,.2,1);
+  --vo-dur-open: 140ms; --vo-ease-out: cubic-bezier(0,0,.2,1);
+
+  /* One backdrop behind every modal window and phone sheet (v0.10): 6 px blur over a dim. */
+  --vo-scrim-blur: 6px;
+
+  /* Breakpoints (for reference; media queries cannot read custom properties):
+     phone <= 640px, tablet <= 1024px, desktop above; (pointer: coarse) for touch sizing. */
+}
+
+@media (pointer: coarse) {
+  :root { --vo-control-h: 44px; --vo-dock-h: 64px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root { --vo-dur-fast: 0ms; --vo-dur: 0ms; --vo-dur-open: 0ms; }
+  *, *::before, *::after { scroll-behavior: auto !important; }
+}
+
+/* Pixel presets: hard corners and hard offset shadows keep the 8-bit feel. */
+html[data-ui-preset="retro"], html[data-ui-preset="gameboy"] {
+  --vo-radius-xs: 0; --vo-radius-sm: 2px; --vo-radius-md: 4px; --vo-radius-lg: 6px;
+  --vo-border-w: 2px;
+  --vo-shadow-1: 3px 3px 0 var(--vo-border-subtle);
+  --vo-shadow-2: 4px 4px 0 var(--vo-border-strong);
+  --vo-shadow-3: 6px 6px 0 var(--vo-border-strong);
+}
+html[data-ui-preset="cyberpunk"] {
+  --vo-radius-xs: 2px; --vo-radius-sm: 3px; --vo-radius-md: 5px; --vo-radius-lg: 8px;
+  --vo-shadow-2: 0 0 18px color-mix(in srgb, var(--vo-accent) 25%, transparent);
+  --vo-shadow-3: 0 18px 60px color-mix(in srgb, var(--vo-accent) 18%, transparent);
+}
+html[data-ui-theme="light"] {
+  --vo-shadow-1: 0 1px 2px rgba(15,23,42,.08);
+  --vo-shadow-pixel: 2px 2px 0 rgba(15,23,42,.14);
+  --vo-shadow-2: 0 8px 24px rgba(15,23,42,.12);
+  --vo-shadow-3: 0 24px 64px rgba(15,23,42,.18);
+}
+html[data-ui-theme="light"][data-ui-preset="retro"], html[data-ui-theme="light"][data-ui-preset="gameboy"] {
+  --vo-shadow-1: 3px 3px 0 var(--vo-border-subtle);
+  --vo-shadow-2: 4px 4px 0 var(--vo-border-strong);
+  --vo-shadow-3: 6px 6px 0 var(--vo-border-strong);
+}
+
+/* Palettes. :root = classic dark, the fallback before ui-themes.js runs. */
+:root,
+html[data-ui-preset="classic"][data-ui-theme="dark"],
+html[data-ui-preset="custom"] {
+  --vo-surface-0:#070b13; --vo-surface-1:#0d1422; --vo-surface-2:#131c2c; --vo-surface-3:#1b2638;
+  --vo-border-subtle:#243247; --vo-border-strong:#5b6f8c;
+  --vo-text-1:#f3f6fb; --vo-text-2:#c3cddc; --vo-text-3:#8d9ab0;
+  --vo-accent:#f5c84c; --vo-accent-ink:#1a1405; --vo-accent-2:#60a5fa;
+  --vo-info:#60a5fa; --vo-success:#4ade80; --vo-warning:#fbbf24; --vo-danger:#fb7185;
+  color-scheme:dark;
+}
+
+html[data-ui-preset="classic"][data-ui-theme="light"],
+html[data-ui-preset="custom"][data-ui-theme="light"] {
+  --vo-surface-0:#e9eef5; --vo-surface-1:#f8fafc; --vo-surface-2:#ffffff; --vo-surface-3:#eef2f7;
+  --vo-border-subtle:#d5dde8; --vo-border-strong:#7b8aa0;
+  --vo-text-1:#0f172a; --vo-text-2:#334155; --vo-text-3:#556378;
+  --vo-accent:#8a5800; --vo-accent-ink:#ffffff; --vo-accent-2:#1d4ed8;
+  --vo-info:#1d4ed8; --vo-success:#15803d; --vo-warning:#a15c00; --vo-danger:#be123c;
+  color-scheme:light;
+}
+
+html[data-ui-preset="retro"][data-ui-theme="dark"] {
+  --vo-surface-0:#160d20; --vo-surface-1:#21122f; --vo-surface-2:#2c1840; --vo-surface-3:#3a2152;
+  --vo-border-subtle:#4a2d63; --vo-border-strong:#a173b8;
+  --vo-text-1:#fff4d6; --vo-text-2:#f0cdfa; --vo-text-3:#c9a3dc;
+  --vo-accent:#ffb000; --vo-accent-ink:#211128; --vo-accent-2:#2de2e6;
+  --vo-info:#2de2e6; --vo-success:#63f58a; --vo-warning:#ffd166; --vo-danger:#ff6b85;
+  color-scheme:dark;
+}
+
+html[data-ui-preset="retro"][data-ui-theme="light"] {
+  --vo-surface-0:#ead8b5; --vo-surface-1:#fff4d8; --vo-surface-2:#fffaf0; --vo-surface-3:#f3e3c4;
+  --vo-border-subtle:#dcc39c; --vo-border-strong:#7d5a48;
+  --vo-text-1:#2b1734; --vo-text-2:#45244c; --vo-text-3:#6a4470;
+  --vo-accent:#8f3f00; --vo-accent-ink:#fff8e8; --vo-accent-2:#006e78;
+  --vo-info:#006e78; --vo-success:#2c6a32; --vo-warning:#8a5200; --vo-danger:#a9203e;
+  color-scheme:light;
+}
+
+html[data-ui-preset="cyberpunk"][data-ui-theme="dark"] {
+  --vo-surface-0:#05020d; --vo-surface-1:#0c0920; --vo-surface-2:#15102c; --vo-surface-3:#21133a;
+  --vo-border-subtle:#33204f; --vo-border-strong:#00bfc8;
+  --vo-text-1:#f9f7ff; --vo-text-2:#d9ccff; --vo-text-3:#ab98ca;
+  --vo-accent:#00f5ff; --vo-accent-ink:#031116; --vo-accent-2:#ff2bd6;
+  --vo-info:#00f5ff; --vo-success:#64ff72; --vo-warning:#ffe14d; --vo-danger:#ff4f8b;
+  color-scheme:dark;
+}
+
+html[data-ui-preset="cyberpunk"][data-ui-theme="light"] {
+  --vo-surface-0:#eae5f5; --vo-surface-1:#faf8ff; --vo-surface-2:#ffffff; --vo-surface-3:#f1ecfb;
+  --vo-border-subtle:#ddd3ee; --vo-border-strong:#6f4f93;
+  --vo-text-1:#180d2d; --vo-text-2:#2f1748; --vo-text-3:#5a4472;
+  --vo-accent:#006f78; --vo-accent-ink:#ffffff; --vo-accent-2:#b00091;
+  --vo-info:#006f78; --vo-success:#16703b; --vo-warning:#8a5a00; --vo-danger:#b40c4c;
+  color-scheme:light;
+}
+
+html[data-ui-preset="gameboy"][data-ui-theme="dark"] {
+  --vo-surface-0:#0f1a0f; --vo-surface-1:#152315; --vo-surface-2:#1d2e1d; --vo-surface-3:#283d28;
+  --vo-border-subtle:#2f472d; --vo-border-strong:#6f8f45;
+  --vo-text-1:#d6e8a8; --vo-text-2:#bfd48f; --vo-text-3:#9fb874;
+  --vo-accent:#9bbc0f; --vo-accent-ink:#0f380f; --vo-accent-2:#6f9a22;
+  --vo-info:#b0cf45; --vo-success:#b7d84b; --vo-warning:#e8c547; --vo-danger:#ec8a6f;
+  color-scheme:dark;
+}
+
+html[data-ui-preset="gameboy"][data-ui-theme="light"] {
+  --vo-surface-0:#8bac0f; --vo-surface-1:#b4cf52; --vo-surface-2:#cadc9f; --vo-surface-3:#bdd286;
+  --vo-border-subtle:#7f9a3a; --vo-border-strong:#274f27;
+  --vo-text-1:#0f380f; --vo-text-2:#183f17; --vo-text-3:#1a3f19;
+  --vo-accent:#0f380f; --vo-accent-ink:#d8e9ae; --vo-accent-2:#306230;
+  --vo-info:#163f1a; --vo-success:#174f22; --vo-warning:#5a3b00; --vo-danger:#6b1f16;
+  color-scheme:light;
+}
+
+/* Derived roles (computed from the palette, so Custom themes get them for free). */
+:root, html[data-ui-preset] {
+  --vo-accent-soft: color-mix(in srgb, var(--vo-accent) 14%, var(--vo-surface-2));
+  --vo-danger-soft: color-mix(in srgb, var(--vo-danger) 14%, var(--vo-surface-2));
+  --vo-success-soft: color-mix(in srgb, var(--vo-success) 14%, var(--vo-surface-2));
+  --vo-warning-soft: color-mix(in srgb, var(--vo-warning) 14%, var(--vo-surface-2));
+  --vo-info-soft: color-mix(in srgb, var(--vo-info) 14%, var(--vo-surface-2));
+  --vo-scrim: color-mix(in srgb, var(--vo-surface-0) 55%, transparent);
+  --vo-glass: color-mix(in srgb, var(--vo-surface-1) 90%, transparent);
+  /* Solid accent surfaces (primary buttons, active switches) and the text on them. --vo-accent stays
+     the text/link/border role; a palette may give its fill a brighter colour than its text accent. */
+  --vo-accent-fill: var(--vo-accent); --vo-accent-fill-ink: var(--vo-accent-ink);
+}
+/* Classic light: the warm yellow fill with dark ink; brown only for text and links (UI-25). */
+html[data-ui-preset="classic"][data-ui-theme="light"] {
+  --vo-accent-fill: #f5c84c; --vo-accent-fill-ink: #1a1405;
+}
+
+/* Legacy aliases: older rules keep working while files migrate to --vo-*.
+   Remove each alias once grep shows no consumer left. */
+:root, html[data-ui-preset] {
+  --ui-font: var(--vo-font-ui); --ui-pixel: var(--vo-font-pixel); --ui-mono: var(--vo-font-mono);
+  --ui-bg-0: var(--vo-surface-0); --ui-bg-1: var(--vo-surface-1); --ui-bg-2: var(--vo-surface-2); --ui-bg-3: var(--vo-surface-3);
+  --ui-border-soft: var(--vo-border-subtle); --ui-border-strong: var(--vo-border-strong);
+  --ui-text-1: var(--vo-text-1); --ui-text-2: var(--vo-text-2); --ui-text-3: var(--vo-text-3);
+  --ui-accent: var(--vo-accent); --ui-accent-strong: var(--vo-accent);
+  --ui-info: var(--vo-info); --ui-success: var(--vo-success); --ui-danger: var(--vo-danger);
+  --ui-radius-sm: var(--vo-radius-sm); --ui-radius-md: var(--vo-radius-md); --ui-radius-lg: var(--vo-radius-lg);
+  --ui-radius-control: var(--vo-radius-sm); --ui-radius-card: var(--vo-radius-md); --ui-radius-window: var(--vo-radius-lg);
+  --ui-shadow-lg: var(--vo-shadow-3); --ui-dock-height: var(--vo-dock-h);
+  --ui-bg: var(--vo-surface-0); --ui-surface: var(--vo-surface-1); --ui-border: var(--vo-border-subtle); --ui-text: var(--vo-text-1);
+  --gold: var(--vo-accent); --gba-cream: var(--vo-text-1); --text-primary: var(--vo-text-1);
+  --theme-font-ui: var(--vo-font-ui); --theme-font-display: var(--vo-font-pixel);
+  --theme-bg-0: var(--vo-surface-0); --theme-bg-1: var(--vo-surface-1); --theme-bg-2: var(--vo-surface-2); --theme-bg-3: var(--vo-surface-3);
+  --theme-text-1: var(--vo-text-1); --theme-text-2: var(--vo-text-2); --theme-text-3: var(--vo-text-3);
+  --theme-accent: var(--vo-accent); --theme-accent-2: var(--vo-accent-2); --theme-accent-contrast: var(--vo-accent-ink);
+  --theme-border-soft: var(--vo-border-subtle); --theme-border-strong: var(--vo-border-strong);
+  --theme-info: var(--vo-info); --theme-success: var(--vo-success); --theme-danger: var(--vo-danger);
+  --theme-radius-sm: var(--vo-radius-sm); --theme-radius-md: var(--vo-radius-md); --theme-radius-lg: var(--vo-radius-lg);
+  --theme-shadow: var(--vo-shadow-3); --theme-shadow-hard: var(--vo-shadow-2);
+  --theme-control-height: var(--vo-control-h); --theme-space-scale: 1;
+  --page-bg: var(--vo-surface-0); --page-surface: var(--vo-surface-1); --page-surface-2: var(--vo-surface-2); --page-surface-3: var(--vo-surface-3);
+  --page-border: var(--vo-border-subtle); --page-border-strong: var(--vo-border-strong);
+  --page-text: var(--vo-text-1); --page-text-2: var(--vo-text-2); --page-text-3: var(--vo-text-3);
+  --page-accent: var(--vo-accent); --page-accent-contrast: var(--vo-accent-ink);
+  --page-green: var(--vo-success); --page-red: var(--vo-danger); --page-blue: var(--vo-info); --page-orange: var(--vo-warning);
+  --page-shadow: var(--vo-shadow-3);
+}
+/* phones (<= 640 px wide): the top and action bars a little lower, so the chat sheet between them shows more of the
+   conversation (the top bar's 40 px buttons and the action bar's 44 px items still fit) */
+@media (max-width: 640px) { :root { --vo-topbar-h: 40px; --vo-actionbar-h: 48px; } }

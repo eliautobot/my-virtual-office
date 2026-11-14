@@ -4,19 +4,33 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#070b13">
-  <title>Provider SDK Settings - Virtual Office</title>
+  <title>Agent Providers - My Virtual Office</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='.9em' font-size='56'%3E%F0%9F%A7%A9%3C/text%3E%3C/svg%3E">
-  <script>try{document.documentElement.dataset.uiTheme=localStorage.getItem('vo-ui-theme')==='light'?'light':'dark'}catch(e){document.documentElement.dataset.uiTheme='dark'}</script>
+  <script>try{document.documentElement.dataset.uiTheme=localStorage.getItem('vo-ui-theme')==='light'?'light':'dark';let p=localStorage.getItem('vo-ui-preset')||'classic';document.documentElement.dataset.uiPreset=/^(classic|retro|cyberpunk|gameboy|custom)$/.test(p)?p:'classic'}catch(e){document.documentElement.dataset.uiTheme='dark';document.documentElement.dataset.uiPreset='classic'}</script>
+  <script src="vo-auth.js"></script>
+  <link rel="stylesheet" href="ui-tokens.css?v=20261101-v08">
   <link rel="stylesheet" href="ui-standalone.css?v=20260722-3">
   <link rel="stylesheet" href="ui-themes.css?v=20260722-12">
-  <link rel="stylesheet" href="provider-settings.css?v=20260806-4">
+  <link rel="stylesheet" href="provider-settings.css?v=20261103-r08">
+  <link rel="stylesheet" href="v08-panels.css?v=20261101-v08">
+  <link rel="stylesheet" href="agent-providers.css?v=20261101-hp3">
 </head>
 <body class="provider-settings-page">
+<!-- Pixel icons per built-in provider kind (R-08); custom providers keep their own emoji. -->
+<svg aria-hidden="true" focusable="false" style="position:absolute;width:0;height:0;overflow:hidden">
+  <symbol id="i-pv-claw" viewBox="0 0 10 10"><path d="M2 0h1v1h-1zM5 0h1v1h-1zM8 0h1v1h-1zM2 1h1v1h-1zM5 1h1v1h-1zM8 1h1v1h-1zM1 2h1v1h-1zM4 2h1v1h-1zM7 2h1v1h-1zM1 3h1v1h-1zM4 3h1v1h-1zM7 3h1v1h-1zM1 4h1v1h-1zM4 4h1v1h-1zM7 4h1v1h-1zM0 5h1v1h-1zM3 5h1v1h-1zM6 5h1v1h-1zM0 6h1v1h-1zM3 6h1v1h-1zM6 6h1v1h-1z"/></symbol>
+  <symbol id="i-pv-wing" viewBox="0 0 10 10"><path d="M0 0h1v1h-1zM0 1h2v1h-2zM0 2h3v1h-3zM0 3h4v1h-4zM1 4h5v1h-5zM2 5h6v1h-6zM3 6h7v1h-7zM4 7h6v1h-6zM6 8h3v1h-3z"/></symbol>
+  <symbol id="i-pv-term" viewBox="0 0 10 10"><path d="M0 0h10v1h-10zM0 1h1v1h-1zM9 1h1v1h-1zM0 2h1v1h-1zM2 2h1v1h-1zM9 2h1v1h-1zM0 3h1v1h-1zM3 3h1v1h-1zM9 3h1v1h-1zM0 4h1v1h-1zM4 4h1v1h-1zM9 4h1v1h-1zM0 5h1v1h-1zM3 5h1v1h-1zM9 5h1v1h-1zM0 6h1v1h-1zM2 6h1v1h-1zM5 6h3v1h-3zM9 6h1v1h-1zM0 7h1v1h-1zM9 7h1v1h-1zM0 8h10v1h-10z"/></symbol>
+  <symbol id="i-pv-burst" viewBox="0 0 10 10"><path d="M4 0h1v1h-1zM1 1h1v1h-1zM4 1h1v1h-1zM7 1h1v1h-1zM2 2h1v1h-1zM4 2h1v1h-1zM6 2h1v1h-1zM3 3h3v1h-3zM0 4h9v1h-9zM3 5h3v1h-3zM2 6h1v1h-1zM4 6h1v1h-1zM6 6h1v1h-1zM1 7h1v1h-1zM4 7h1v1h-1zM7 7h1v1h-1zM4 8h1v1h-1z"/></symbol>
+  <symbol id="i-pv-braces" viewBox="0 0 10 10"><path d="M2 0h2v1h-2zM6 0h2v1h-2zM1 1h1v1h-1zM8 1h1v1h-1zM1 2h1v1h-1zM8 2h1v1h-1zM1 3h1v1h-1zM8 3h1v1h-1zM0 4h1v1h-1zM9 4h1v1h-1zM1 5h1v1h-1zM8 5h1v1h-1zM1 6h1v1h-1zM8 6h1v1h-1zM1 7h1v1h-1zM8 7h1v1h-1zM2 8h2v1h-2zM6 8h2v1h-2z"/></symbol>
+  <symbol id="i-pv-lift" viewBox="0 0 10 10"><path d="M4 0h2v1h-2zM3 1h4v1h-4zM2 2h6v1h-6zM1 3h2v1h-2zM4 3h2v1h-2zM7 3h2v1h-2zM4 4h2v1h-2zM4 5h2v1h-2zM1 7h8v1h-8zM1 9h8v1h-8z"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 10 10"><path d="M2 0h1v1h-1zM5 0h1v1h-1zM2 1h1v1h-1zM5 1h1v1h-1zM1 2h6v1h-6zM1 3h6v1h-6zM1 4h6v1h-6zM2 5h4v1h-4zM3 6h2v1h-2zM3 7h2v1h-2zM3 8h2v1h-2z"/></symbol>
+</svg>
   <header class="ps-header">
     <a class="ps-back" href="/">← Office</a>
     <div>
-      <h1>Provider SDK</h1>
-      <p>Connections, models, permissions, discovery, active sessions, native files, and skills.</p>
+      <h1>Agent Providers</h1>
+      <p>Connect agent platforms, choose what the office may change, and tune each provider.</p>
     </div>
     <div class="ps-header-actions">
       <a class="ps-button secondary" href="/models.html">Native model editor</a>
@@ -26,7 +40,7 @@
   <main class="ps-shell">
     <nav id="ps-provider-list" class="ps-provider-list" aria-label="Providers"></nav>
     <section class="ps-content">
-      <div id="ps-loading" class="ps-empty">Loading Provider SDK manifests…</div>
+      <div id="ps-loading" class="ps-empty vo-skeleton" role="status"><span class="vo-visually-hidden">Loading Agent Providers…</span><span class="vo-skeleton-row"></span><span class="vo-skeleton-row"></span><span class="vo-skeleton-row"></span><span class="vo-skeleton-row"></span></div>
       <div id="ps-provider" hidden>
         <div class="ps-provider-heading">
           <div>
@@ -40,10 +54,17 @@
         </div>
         <div id="ps-capabilities" class="ps-capabilities"></div>
         <div id="ps-status" class="ps-status" role="status" aria-live="polite"></div>
+        <div id="ps-agent-providers" class="ap-host" hidden></div>
         <form id="ps-form" novalidate></form>
       </div>
     </section>
   </main>
-  <script src="provider-settings.js?v=20260806-4"></script>
+  <script src="vo-openclaw-leftovers.js?v=20261108-upgrade"></script>
+  <script src="agent-providers.js?v=20261113-relfix3"></script>
+  <script src="provider-menu-hermes.js?v=20261101-hp2"></script>
+  <script src="provider-menu-openclaw.js?v=20261101-hp"></script>
+  <script src="vo-provider-layer.js?v=20261109-plui" data-page="providers"></script>
+  <script src="provider-settings.js?v=20261109-plhapi"></script>
+  <script src="ui-themes.js?v=20260722-5"></script>
 </body>
 </html>

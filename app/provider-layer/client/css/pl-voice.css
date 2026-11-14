@@ -1,0 +1,61 @@
+/* My Virtual Office. Copyright (c) 2026 My Virtual Office. Licensed under the GNU AGPL-3.0 (see LICENSE).
+   My Virtual World's voice choices (ui/voice-settings.js, copied) in the office's page: Settings → Voice and the Agent
+   Studio's Voice tab (ui/office-voice-settings.js draws them into .pl-voice). Their class names are My Virtual World's
+   (aform, tier-head, row, input, btn, conn, tag, kv); here they take the office's look (ui-modern.css .mm-input /
+   .mm-btn / .mm-check, the --vo-* tokens) and fit a 412 px phone. */
+.pl-voice { color: var(--vo-text-1); font-size: var(--vo-text-md, 14px); min-width: 0; }
+.pl-voice .hidden { display: none !important; }
+.pl-voice .err { margin: 0 0 var(--vo-space-2, 8px); padding: 8px 10px; border-radius: var(--vo-radius-sm, 6px); color: var(--vo-danger);
+  background: var(--vo-danger-soft, transparent); border: 1px solid var(--vo-danger); }
+.pl-voice .aform { display: flex; flex-direction: column; gap: var(--vo-space-2, 8px); min-width: 0; }
+.pl-voice .aform > label, .pl-voice .vs-form label, .pl-voice .sv-grid label { display: flex; flex-direction: column; gap: 4px; color: var(--vo-text-2, var(--vo-text-1)); font-size: .92em; min-width: 0; }
+.pl-voice .tier-head { margin-top: var(--vo-space-3, 12px); padding-bottom: 4px; font-weight: 700; color: var(--vo-text-1); border-bottom: 1px solid var(--vo-border-subtle); }
+.pl-voice .aform > .tier-head:first-child { margin-top: 0; }
+.pl-voice .hint { margin: 0; color: var(--vo-text-3, var(--vo-text-2)); font-size: .9em; line-height: 1.45; overflow-wrap: anywhere; }
+.pl-voice .hint.warn { color: var(--vo-warning); }
+.pl-voice .hint a { color: var(--vo-accent); }
+.pl-voice .row { display: flex; align-items: center; gap: var(--vo-space-2, 8px); min-width: 0; }
+.pl-voice .row.wrap { flex-wrap: wrap; }
+.pl-voice .row.end { justify-content: flex-end; }
+.pl-voice .row > select, .pl-voice .row > input[type="range"] { flex: 1 1 auto; min-width: 0; }
+.pl-voice .input { width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; min-height: 40px; padding: 8px 10px; border: 1px solid var(--vo-border-strong);
+  border-radius: var(--vo-radius-md, 8px); background: var(--vo-surface-0, var(--vo-surface-1)); color: var(--vo-text-1); font: inherit; }
+.pl-voice .input:focus-visible { outline: 2px solid var(--vo-accent); outline-offset: 1px; }
+.pl-voice .input.mono { font-family: var(--vo-font-mono, monospace); }
+.pl-voice .btn { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 12px; border: 1px solid var(--vo-border-strong); border-radius: var(--vo-radius-md, 8px);
+  background: var(--vo-surface-2); color: var(--vo-text-1); font: inherit; cursor: pointer; }
+.pl-voice .btn:hover { border-color: var(--vo-accent); }
+.pl-voice .btn.primary { background: var(--vo-accent-fill, var(--vo-accent)); color: var(--vo-accent-fill-ink, #fff); border-color: transparent; }
+.pl-voice .btn.danger { color: var(--vo-danger); }
+.pl-voice .btn.small { min-height: 32px; padding: 4px 10px; font-size: .92em; }
+.pl-voice .check { display: flex !important; flex-direction: row !important; align-items: flex-start; gap: 8px; color: var(--vo-text-1) !important; cursor: pointer; line-height: 1.4; }
+.pl-voice .check input { width: 18px; height: 18px; margin: 1px 0 0; flex: none; accent-color: var(--vo-accent); }
+.pl-voice input[type="range"] { accent-color: var(--vo-accent); }
+.pl-voice .conn-list { display: flex; flex-direction: column; gap: 6px; }
+.pl-voice .conn { padding: 8px 10px; border: 1px solid var(--vo-border-subtle); border-radius: var(--vo-radius-md, 8px); background: var(--vo-surface-1); display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.pl-voice .conn-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.pl-voice .conn-head b { overflow-wrap: anywhere; }
+.pl-voice .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--vo-text-3, #888); flex: none; }
+.pl-voice .dot.ok { background: var(--vo-success, #4caf50); }
+.pl-voice .dot.bad { background: var(--vo-danger); }
+.pl-voice .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--vo-border-subtle); color: var(--vo-text-2, var(--vo-text-1)); font-size: .82em; }
+.pl-voice .tag.set { border-color: var(--vo-accent); color: var(--vo-accent); }
+.pl-voice details > summary { cursor: pointer; color: var(--vo-text-1); padding: 4px 0; }
+.pl-voice .vs-add { border: 1px dashed var(--vo-border-strong); border-radius: var(--vo-radius-md, 8px); padding: 6px 10px; }
+.pl-voice .vs-form { margin-top: 6px; }
+.pl-voice .kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; font-size: .92em; }
+.pl-voice .kv .k { color: var(--vo-text-3, var(--vo-text-2)); }
+.pl-voice .vs-speed-v, .pl-voice .sv-speed-v { min-width: 3.2em; text-align: right; }
+/* the Agent Studio's Voice tab */
+/* (the Studio's own field title says "Its voice" and what it is for: the copied section's heading is not repeated) */
+.pl-voice-agent .st-sec-h { display: none; }
+.pl-voice .st-sec-h { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.pl-voice .st-sec-h h4 { margin: 0; font-size: 1em; }
+.pl-voice .dim { color: var(--vo-text-3, var(--vo-text-2)); }
+.pl-voice .sv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 8px 0; }
+.pl-voice-sec { display: flex; flex-direction: column; gap: 6px; }
+@media (max-width: 600px) {
+  .pl-voice .input { min-height: 44px; }
+  .pl-voice .btn { min-height: 40px; }
+  .pl-voice .sv-grid { grid-template-columns: minmax(0, 1fr); }
+}

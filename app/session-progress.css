@@ -1,0 +1,36 @@
+.task-progress { flex: 0 0 auto; min-width: 0; margin: 0 10px 6px; border: 1px solid var(--vo-border-subtle); border-radius: 8px; color: var(--vo-text-1); background: var(--vo-surface-2); font: var(--vo-text-xs)/1.5 var(--vo-font-ui); overflow: hidden; }
+.task-progress > summary { cursor: pointer; min-height: 36px; padding: 8px 10px; box-sizing: border-box; font-weight: 600; overflow-wrap: anywhere; }
+.task-progress > summary:focus-visible, .task-progress button:focus-visible, .task-progress a:focus-visible { outline: 2px solid var(--vo-accent); outline-offset: -2px; }
+.task-progress-body { max-height: min(28vh, 250px); overflow: auto; overscroll-behavior: contain; padding: 0 10px 10px; overflow-wrap: anywhere; }
+.task-progress-body p { margin: 4px 0 8px; }
+.task-progress-body ol { padding-left: 24px; margin: 8px 0; }
+.task-progress-body li { margin: 5px 0; white-space: pre-wrap; }
+.task-progress-body li[data-state="completed"] { color: var(--vo-success); }
+.task-progress-body li[data-state="in_progress"] { color: var(--vo-info); }
+.task-progress-body li[data-state="cancelled"] { color: var(--vo-text-3); }
+.task-progress-note { border-top: 1px solid var(--vo-border-subtle); padding-top: 8px; overflow: auto; }
+.task-progress-note pre { white-space: pre-wrap; }
+.task-progress-note table { border-collapse: collapse; max-width: 100%; }
+.task-progress-note th, .task-progress-note td { padding: 4px 6px; border: 1px solid var(--vo-border-subtle); }
+.task-progress-note a { color: var(--vo-info); }
+.task-progress-note progress { display: block; width: 100%; max-width: 100%; height: 12px; accent-color: var(--vo-info); margin: 4px 0 8px; }
+.task-progress button { color: inherit; background: var(--vo-surface-3); border: 1px solid var(--vo-border-strong); border-radius: 5px; padding: 8px; min-height: 36px; cursor: pointer; }
+.task-progress button[hidden] { display: none; }
+@media (max-width: 600px) { .task-progress { margin: 0 6px 4px; } .task-progress > summary { min-height: 40px; } .task-progress-body { max-height: 22vh; } }
+
+/* Composer is content-driven. The explicit rail remains available for diagnostics. */
+.task-progress[hidden], .chat-tasks-drawer[hidden], .chat-tasks-count[hidden] { display: none !important; }
+.chat-tasks-rail { position: absolute; top: calc(var(--chat-tools-rail-top, 12px) + var(--chat-tools-rail-height, 38px) + var(--chat-tools-rail-gap, 6px)); right: -1px; z-index: 26; display: inline-flex; align-items: center; justify-content: center; width: 31px; min-width: 31px; height: var(--chat-tools-rail-height, 38px); padding: 0; border: 1px solid var(--vo-border-strong); border-right: 0; border-radius: 9px 0 0 9px; background: var(--vo-surface-2); color: var(--vo-text-2); cursor: pointer; font: 24px/1 var(--vo-font-ui); }
+.chat-tasks-rail:hover { background: var(--vo-surface-3); }
+.chat-tasks-rail:focus-visible, .chat-tasks-drawer button:focus-visible, .chat-tasks-drawer a:focus-visible { outline: 2px solid var(--vo-accent); outline-offset: -2px; }
+.chat-tasks-count { position: absolute; right: 2px; bottom: 2px; min-width: 13px; border-radius: 7px; background: var(--vo-info); color: var(--vo-surface-1); font: 700 11px/13px var(--vo-font-ui); padding: 0 2px; }
+.chat-tasks-drawer { box-sizing: border-box; position: absolute; top: 0; right: 0; bottom: 0; z-index: 32; display: flex; flex-direction: column; width: var(--chat-references-drawer-shift, min(310px, calc(100% - 42px))); min-width: 0; overflow: hidden; background: var(--vo-surface-1); border-left: 1px solid var(--vo-border-strong); box-shadow: -14px 0 34px rgba(0,0,0,.35); color: var(--vo-text-1); font: var(--vo-text-xs)/1.5 var(--vo-font-ui); animation: chat-tasks-enter .18s ease-out; }
+.chat-tasks-head { display: flex; flex: 0 0 auto; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--vo-border-subtle); }
+.chat-tasks-head strong { overflow-wrap: anywhere; }
+.chat-tasks-drawer button { color: inherit; background: var(--vo-surface-3); border: 1px solid var(--vo-border-strong); border-radius: 5px; min-height: 36px; padding: 8px; cursor: pointer; }
+.chat-tasks-drawer button[hidden] { display: none; }
+.chat-tasks-drawer .chat-tasks-close { min-width: 40px; min-height: 40px; font-size: 22px; padding: 0; }
+.chat-tasks-drawer > .task-progress-body { flex: 1 1 auto; min-height: 0; max-height: none; padding-top: 10px; }
+.chat-panel.chat-tasks-open .chat-tasks-rail, .chat-panel.chat-references-open .chat-tasks-rail { visibility: hidden; pointer-events: none; }
+@keyframes chat-tasks-enter { from { opacity: 0; transform: translateX(100%); } to { opacity: 1; transform: translateX(0); } }
+@media (prefers-reduced-motion: reduce) { .chat-tasks-drawer { animation: none; } }

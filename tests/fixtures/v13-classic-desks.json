@@ -1,0 +1,2208 @@
+{
+ "desk/0/on": {
+  "hash": "3ecdc4e5",
+  "opaque": 19076,
+  "artHash": "2fa9c0a5",
+  "artOpaque": 18524,
+  "geo": {
+   "art": {
+    "x": 568,
+    "y": 410,
+    "w": 64,
+    "h": 86
+   },
+   "foot": [
+    {
+     "x": 568,
+     "y": 440,
+     "w": 64,
+     "h": 44
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 568,
+      "y": 410,
+      "w": 64,
+      "h": 75
+     },
+     "y": 484,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 582,
+      "y": 460,
+      "w": 36,
+      "h": 39
+     },
+     "y": 496,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": -17,
+     "y": -55,
+     "w": 34,
+     "h": 20,
+     "bx": -20,
+     "by": -58,
+     "bw": 40,
+     "bh": 26
+    }
+   ],
+   "seat": {
+    "hx": 0,
+    "hy": 13,
+    "legs": "rear",
+    "view": "up",
+    "floor": [
+     0,
+     26
+    ],
+    "item": [
+     -29,
+     -28
+    ],
+    "food": [
+     19,
+     -29
+    ],
+    "papers": [
+     -24,
+     -11
+    ],
+    "tagY": -78,
+    "wide": false
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "desk",
+     "x": 600,
+     "y": 496,
+     "hx": 600,
+     "hy": 483,
+     "facing": "up",
+     "tuck": false
+    }
+   ],
+   "top": {
+    "x": 568,
+    "y": 431,
+    "w": 64,
+    "h": 32
+   },
+   "bands": [
+    [
+     549,
+     429,
+     102,
+     66
+    ],
+    [
+     566,
+     473,
+     68,
+     34
+    ]
+   ]
+  }
+ },
+ "desk/0/off": {
+  "hash": "bc30c745",
+  "opaque": 18420,
+  "artHash": "eda9ad85",
+  "artOpaque": 17868,
+  "geo": {
+   "art": {
+    "x": 568,
+    "y": 410,
+    "w": 64,
+    "h": 86
+   },
+   "foot": [
+    {
+     "x": 568,
+     "y": 440,
+     "w": 64,
+     "h": 44
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 568,
+      "y": 410,
+      "w": 64,
+      "h": 75
+     },
+     "y": 484,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 582,
+      "y": 460,
+      "w": 36,
+      "h": 39
+     },
+     "y": 496,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": -17,
+     "y": -55,
+     "w": 34,
+     "h": 20,
+     "bx": -20,
+     "by": -58,
+     "bw": 40,
+     "bh": 26
+    }
+   ],
+   "seat": {
+    "hx": 0,
+    "hy": 13,
+    "legs": "rear",
+    "view": "up",
+    "floor": [
+     0,
+     26
+    ],
+    "item": [
+     -29,
+     -28
+    ],
+    "food": [
+     19,
+     -29
+    ],
+    "papers": [
+     -24,
+     -11
+    ],
+    "tagY": -78,
+    "wide": false
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "desk",
+     "x": 600,
+     "y": 496,
+     "hx": 600,
+     "hy": 483,
+     "facing": "up",
+     "tuck": false
+    }
+   ],
+   "top": {
+    "x": 568,
+    "y": 431,
+    "w": 64,
+    "h": 32
+   },
+   "bands": [
+    [
+     549,
+     429,
+     102,
+     66
+    ],
+    [
+     566,
+     473,
+     68,
+     34
+    ]
+   ]
+  }
+ },
+ "desk/90/on": {
+  "hash": "fe4ade0d",
+  "opaque": 13064,
+  "artHash": "1fb06afd",
+  "artOpaque": 12160,
+  "geo": {
+   "art": {
+    "x": 574,
+    "y": 416,
+    "w": 44,
+    "h": 86
+   },
+   "foot": [
+    {
+     "x": 586,
+     "y": 426,
+     "w": 32,
+     "h": 76
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 586,
+      "y": 416,
+      "w": 32,
+      "h": 29
+     },
+     "y": 441,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 586,
+      "y": 445,
+      "w": 32,
+      "h": 29
+     },
+     "y": 470,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 586,
+      "y": 474,
+      "w": 32,
+      "h": 29
+     },
+     "y": 502,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 567,
+      "y": 449,
+      "w": 36,
+      "h": 39
+     },
+     "y": 485,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": 7,
+     "y": -53,
+     "w": 2,
+     "h": 34,
+     "bx": 7,
+     "by": -54,
+     "bw": 5,
+     "bh": 36,
+     "view": "side",
+     "fx": -2,
+     "fy": 1
+    }
+   ],
+   "seat": {
+    "hx": -15,
+    "hy": 2,
+    "legs": "side",
+    "view": "right",
+    "cut": [
+     -9,
+     2,
+     70,
+     60
+    ],
+    "floor": [
+     -28,
+     15
+    ],
+    "item": [
+     -9,
+     -49
+    ],
+    "food": [
+     3,
+     0
+    ],
+    "papers": [
+     -4,
+     2
+    ],
+    "wide": false
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "desk",
+     "x": 572,
+     "y": 485,
+     "hx": 585,
+     "hy": 472,
+     "facing": "right",
+     "tuck": false
+    }
+   ],
+   "top": {
+    "x": 586,
+    "y": 417,
+    "w": 32,
+    "h": 64
+   },
+   "bands": [
+    [
+     567,
+     415,
+     70,
+     98
+    ],
+    [
+     555,
+     444,
+     50,
+     52
+    ]
+   ]
+  }
+ },
+ "desk/90/off": {
+  "hash": "44cbc20d",
+  "opaque": 13064,
+  "artHash": "66314efd",
+  "artOpaque": 12160,
+  "geo": {
+   "art": {
+    "x": 574,
+    "y": 416,
+    "w": 44,
+    "h": 86
+   },
+   "foot": [
+    {
+     "x": 586,
+     "y": 426,
+     "w": 32,
+     "h": 76
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 586,
+      "y": 416,
+      "w": 32,
+      "h": 29
+     },
+     "y": 441,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 586,
+      "y": 445,
+      "w": 32,
+      "h": 29
+     },
+     "y": 470,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 586,
+      "y": 474,
+      "w": 32,
+      "h": 29
+     },
+     "y": 502,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 567,
+      "y": 449,
+      "w": 36,
+      "h": 39
+     },
+     "y": 485,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": 7,
+     "y": -53,
+     "w": 2,
+     "h": 34,
+     "bx": 7,
+     "by": -54,
+     "bw": 5,
+     "bh": 36,
+     "view": "side",
+     "fx": -2,
+     "fy": 1
+    }
+   ],
+   "seat": {
+    "hx": -15,
+    "hy": 2,
+    "legs": "side",
+    "view": "right",
+    "cut": [
+     -9,
+     2,
+     70,
+     60
+    ],
+    "floor": [
+     -28,
+     15
+    ],
+    "item": [
+     -9,
+     -49
+    ],
+    "food": [
+     3,
+     0
+    ],
+    "papers": [
+     -4,
+     2
+    ],
+    "wide": false
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "desk",
+     "x": 572,
+     "y": 485,
+     "hx": 585,
+     "hy": 472,
+     "facing": "right",
+     "tuck": false
+    }
+   ],
+   "top": {
+    "x": 586,
+    "y": 417,
+    "w": 32,
+    "h": 64
+   },
+   "bands": [
+    [
+     567,
+     415,
+     70,
+     98
+    ],
+    [
+     555,
+     444,
+     50,
+     52
+    ]
+   ]
+  }
+ },
+ "desk/180/on": {
+  "hash": "c46885dd",
+  "opaque": 15716,
+  "artHash": "2a71759d",
+  "artOpaque": 15308,
+  "geo": {
+   "art": {
+    "x": 568,
+    "y": 428,
+    "w": 64,
+    "h": 60
+   },
+   "foot": [
+    {
+     "x": 568,
+     "y": 444,
+     "w": 64,
+     "h": 44
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 568,
+      "y": 432,
+      "w": 64,
+      "h": 57
+     },
+     "y": 488,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 582,
+      "y": 420,
+      "w": 36,
+      "h": 39
+     },
+     "y": 456,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": -20,
+     "y": -38,
+     "w": 40,
+     "h": 26,
+     "bx": -20,
+     "by": -38,
+     "bw": 40,
+     "bh": 26,
+     "view": "back",
+     "fx": 0,
+     "fy": -8
+    }
+   ],
+   "seat": {
+    "hx": 0,
+    "hy": -27,
+    "legs": "hidden",
+    "over": "monitor",
+    "floor": [
+     0,
+     -31
+    ],
+    "item": [
+     15,
+     -16
+    ],
+    "food": [
+     -30,
+     -14
+    ],
+    "papers": [
+     -26,
+     -24
+    ],
+    "wide": false
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "desk",
+     "x": 600,
+     "y": 439,
+     "hx": 600,
+     "hy": 443,
+     "facing": "down",
+     "tuck": true
+    }
+   ],
+   "top": {
+    "x": 568,
+    "y": 435,
+    "w": 64,
+    "h": 32
+   },
+   "bands": [
+    [
+     549,
+     433,
+     102,
+     66
+    ]
+   ]
+  }
+ },
+ "desk/180/off": {
+  "hash": "c46885dd",
+  "opaque": 15716,
+  "artHash": "2a71759d",
+  "artOpaque": 15308,
+  "geo": {
+   "art": {
+    "x": 568,
+    "y": 428,
+    "w": 64,
+    "h": 60
+   },
+   "foot": [
+    {
+     "x": 568,
+     "y": 444,
+     "w": 64,
+     "h": 44
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 568,
+      "y": 432,
+      "w": 64,
+      "h": 57
+     },
+     "y": 488,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 582,
+      "y": 420,
+      "w": 36,
+      "h": 39
+     },
+     "y": 456,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": -20,
+     "y": -38,
+     "w": 40,
+     "h": 26,
+     "bx": -20,
+     "by": -38,
+     "bw": 40,
+     "bh": 26,
+     "view": "back",
+     "fx": 0,
+     "fy": -8
+    }
+   ],
+   "seat": {
+    "hx": 0,
+    "hy": -27,
+    "legs": "hidden",
+    "over": "monitor",
+    "floor": [
+     0,
+     -31
+    ],
+    "item": [
+     15,
+     -16
+    ],
+    "food": [
+     -30,
+     -14
+    ],
+    "papers": [
+     -26,
+     -24
+    ],
+    "wide": false
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "desk",
+     "x": 600,
+     "y": 439,
+     "hx": 600,
+     "hy": 443,
+     "facing": "down",
+     "tuck": true
+    }
+   ],
+   "top": {
+    "x": 568,
+    "y": 435,
+    "w": 64,
+    "h": 32
+   },
+   "bands": [
+    [
+     549,
+     433,
+     102,
+     66
+    ]
+   ]
+  }
+ },
+ "desk/270/on": {
+  "hash": "ec7fd8bd",
+  "opaque": 12912,
+  "artHash": "7172346d",
+  "artOpaque": 12160,
+  "geo": {
+   "art": {
+    "x": 582,
+    "y": 416,
+    "w": 44,
+    "h": 86
+   },
+   "foot": [
+    {
+     "x": 582,
+     "y": 426,
+     "w": 32,
+     "h": 76
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 582,
+      "y": 416,
+      "w": 32,
+      "h": 29
+     },
+     "y": 441,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 582,
+      "y": 445,
+      "w": 32,
+      "h": 29
+     },
+     "y": 470,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 582,
+      "y": 474,
+      "w": 32,
+      "h": 29
+     },
+     "y": 502,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 597,
+      "y": 449,
+      "w": 36,
+      "h": 39
+     },
+     "y": 485,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": -9,
+     "y": -53,
+     "w": 2,
+     "h": 34,
+     "bx": -12,
+     "by": -54,
+     "bw": 5,
+     "bh": 36,
+     "view": "side",
+     "fx": 3,
+     "fy": 1
+    }
+   ],
+   "seat": {
+    "hx": 15,
+    "hy": 2,
+    "legs": "side",
+    "view": "left",
+    "cut": [
+     -61,
+     2,
+     70,
+     60
+    ],
+    "floor": [
+     28,
+     15
+    ],
+    "item": [
+     -3,
+     -49
+    ],
+    "food": [
+     -9,
+     -1
+    ],
+    "papers": [
+     7,
+     2
+    ],
+    "wide": false
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "desk",
+     "x": 628,
+     "y": 485,
+     "hx": 615,
+     "hy": 472,
+     "facing": "left",
+     "tuck": false
+    }
+   ],
+   "top": {
+    "x": 582,
+    "y": 417,
+    "w": 32,
+    "h": 64
+   },
+   "bands": [
+    [
+     563,
+     415,
+     70,
+     98
+    ],
+    [
+     595,
+     444,
+     50,
+     52
+    ]
+   ]
+  }
+ },
+ "desk/270/off": {
+  "hash": "f8b5a3bd",
+  "opaque": 12912,
+  "artHash": "7da7ff6d",
+  "artOpaque": 12160,
+  "geo": {
+   "art": {
+    "x": 582,
+    "y": 416,
+    "w": 44,
+    "h": 86
+   },
+   "foot": [
+    {
+     "x": 582,
+     "y": 426,
+     "w": 32,
+     "h": 76
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 582,
+      "y": 416,
+      "w": 32,
+      "h": 29
+     },
+     "y": 441,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 582,
+      "y": 445,
+      "w": 32,
+      "h": 29
+     },
+     "y": 470,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 582,
+      "y": 474,
+      "w": 32,
+      "h": 29
+     },
+     "y": 502,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 597,
+      "y": 449,
+      "w": 36,
+      "h": 39
+     },
+     "y": 485,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": -9,
+     "y": -53,
+     "w": 2,
+     "h": 34,
+     "bx": -12,
+     "by": -54,
+     "bw": 5,
+     "bh": 36,
+     "view": "side",
+     "fx": 3,
+     "fy": 1
+    }
+   ],
+   "seat": {
+    "hx": 15,
+    "hy": 2,
+    "legs": "side",
+    "view": "left",
+    "cut": [
+     -61,
+     2,
+     70,
+     60
+    ],
+    "floor": [
+     28,
+     15
+    ],
+    "item": [
+     -3,
+     -49
+    ],
+    "food": [
+     -9,
+     -1
+    ],
+    "papers": [
+     7,
+     2
+    ],
+    "wide": false
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "desk",
+     "x": 628,
+     "y": 485,
+     "hx": 615,
+     "hy": 472,
+     "facing": "left",
+     "tuck": false
+    }
+   ],
+   "top": {
+    "x": 582,
+    "y": 417,
+    "w": 32,
+    "h": 64
+   },
+   "bands": [
+    [
+     563,
+     415,
+     70,
+     98
+    ],
+    [
+     595,
+     444,
+     50,
+     52
+    ]
+   ]
+  }
+ },
+ "bossDesk/0/on": {
+  "hash": "be2d96bd",
+  "opaque": 34300,
+  "artHash": "4f1b7005",
+  "artOpaque": 33892,
+  "geo": {
+   "art": {
+    "x": 552,
+    "y": 415,
+    "w": 96,
+    "h": 96
+   },
+   "foot": [
+    {
+     "x": 552,
+     "y": 434,
+     "w": 96,
+     "h": 70
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 552,
+      "y": 415,
+      "w": 96,
+      "h": 90
+     },
+     "y": 504,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 579,
+      "y": 471,
+      "w": 42,
+      "h": 43
+     },
+     "y": 511,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": -36,
+     "y": -51,
+     "w": 26,
+     "h": 16,
+     "bx": -38,
+     "by": -53,
+     "bw": 30,
+     "bh": 20
+    },
+    {
+     "x": 10,
+     "y": -51,
+     "w": 26,
+     "h": 16,
+     "bx": 8,
+     "by": -53,
+     "bw": 30,
+     "bh": 20
+    }
+   ],
+   "seat": {
+    "hx": 0,
+    "hy": 28,
+    "legs": "rear",
+    "view": "up",
+    "floor": [
+     0,
+     41
+    ],
+    "item": [
+     -43,
+     -23
+    ],
+    "food": [
+     21,
+     -16
+    ],
+    "papers": [
+     -22,
+     6
+    ],
+    "tagY": -68,
+    "wide": true
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "bossDesk",
+     "x": 600,
+     "y": 511,
+     "hx": 600,
+     "hy": 498,
+     "facing": "up",
+     "tuck": false
+    }
+   ],
+   "top": {
+    "x": 552,
+    "y": 435,
+    "w": 96,
+    "h": 48
+   },
+   "bands": [
+    [
+     533,
+     423,
+     134,
+     99
+    ]
+   ]
+  }
+ },
+ "bossDesk/0/off": {
+  "hash": "51cd482d",
+  "opaque": 34300,
+  "artHash": "94c91175",
+  "artOpaque": 33892,
+  "geo": {
+   "art": {
+    "x": 552,
+    "y": 415,
+    "w": 96,
+    "h": 96
+   },
+   "foot": [
+    {
+     "x": 552,
+     "y": 434,
+     "w": 96,
+     "h": 70
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 552,
+      "y": 415,
+      "w": 96,
+      "h": 90
+     },
+     "y": 504,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 579,
+      "y": 471,
+      "w": 42,
+      "h": 43
+     },
+     "y": 511,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": -36,
+     "y": -51,
+     "w": 26,
+     "h": 16,
+     "bx": -38,
+     "by": -53,
+     "bw": 30,
+     "bh": 20
+    },
+    {
+     "x": 10,
+     "y": -51,
+     "w": 26,
+     "h": 16,
+     "bx": 8,
+     "by": -53,
+     "bw": 30,
+     "bh": 20
+    }
+   ],
+   "seat": {
+    "hx": 0,
+    "hy": 28,
+    "legs": "rear",
+    "view": "up",
+    "floor": [
+     0,
+     41
+    ],
+    "item": [
+     -43,
+     -23
+    ],
+    "food": [
+     21,
+     -16
+    ],
+    "papers": [
+     -22,
+     6
+    ],
+    "tagY": -68,
+    "wide": true
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "bossDesk",
+     "x": 600,
+     "y": 511,
+     "hx": 600,
+     "hy": 498,
+     "facing": "up",
+     "tuck": false
+    }
+   ],
+   "top": {
+    "x": 552,
+    "y": 435,
+    "w": 96,
+    "h": 48
+   },
+   "bands": [
+    [
+     533,
+     423,
+     134,
+     99
+    ]
+   ]
+  }
+ },
+ "bossDesk/90/on": {
+  "hash": "f2f304cd",
+  "opaque": 25224,
+  "artHash": "d5c520e5",
+  "artOpaque": 24560,
+  "geo": {
+   "art": {
+    "x": 559,
+    "y": 394,
+    "w": 55,
+    "h": 124
+   },
+   "foot": [
+    {
+     "x": 566,
+     "y": 400,
+     "w": 48,
+     "h": 118
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 566,
+      "y": 394,
+      "w": 48,
+      "h": 31
+     },
+     "y": 421,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 566,
+      "y": 425,
+      "w": 48,
+      "h": 32
+     },
+     "y": 453,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 566,
+      "y": 457,
+      "w": 48,
+      "h": 31
+     },
+     "y": 484,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 566,
+      "y": 488,
+      "w": 48,
+      "h": 31
+     },
+     "y": 518,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 548,
+      "y": 447,
+      "w": 42,
+      "h": 43
+     },
+     "y": 487,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": 5,
+     "y": -75,
+     "w": 2,
+     "h": 32,
+     "bx": 5,
+     "by": -76,
+     "bw": 5,
+     "bh": 34,
+     "view": "side",
+     "fx": -11,
+     "fy": -9
+    },
+    {
+     "x": 5,
+     "y": -29,
+     "w": 2,
+     "h": 32,
+     "bx": 5,
+     "by": -30,
+     "bw": 5,
+     "bh": 34,
+     "view": "side",
+     "fx": -11,
+     "fy": 14
+    }
+   ],
+   "seat": {
+    "hx": -31,
+    "hy": 4,
+    "legs": "side",
+    "view": "right",
+    "cut": [
+     -24,
+     4,
+     90,
+     70
+    ],
+    "floor": [
+     -48,
+     18
+    ],
+    "item": [
+     -12,
+     -48
+    ],
+    "food": [
+     -14,
+     -22
+    ],
+    "papers": [
+     -20,
+     -2
+    ],
+    "wide": true
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "bossDesk",
+     "x": 552,
+     "y": 488,
+     "hx": 569,
+     "hy": 474,
+     "facing": "right",
+     "tuck": false
+    }
+   ],
+   "top": {
+    "x": 566,
+    "y": 401,
+    "w": 48,
+    "h": 96
+   },
+   "bands": [
+    [
+     540,
+     389,
+     93,
+     140
+    ]
+   ]
+  }
+ },
+ "bossDesk/90/off": {
+  "hash": "f1f7e40d",
+  "opaque": 25224,
+  "artHash": "996c3f45",
+  "artOpaque": 24560,
+  "geo": {
+   "art": {
+    "x": 559,
+    "y": 394,
+    "w": 55,
+    "h": 124
+   },
+   "foot": [
+    {
+     "x": 566,
+     "y": 400,
+     "w": 48,
+     "h": 118
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 566,
+      "y": 394,
+      "w": 48,
+      "h": 31
+     },
+     "y": 421,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 566,
+      "y": 425,
+      "w": 48,
+      "h": 32
+     },
+     "y": 453,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 566,
+      "y": 457,
+      "w": 48,
+      "h": 31
+     },
+     "y": 484,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 566,
+      "y": 488,
+      "w": 48,
+      "h": 31
+     },
+     "y": 518,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 548,
+      "y": 447,
+      "w": 42,
+      "h": 43
+     },
+     "y": 487,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": 5,
+     "y": -75,
+     "w": 2,
+     "h": 32,
+     "bx": 5,
+     "by": -76,
+     "bw": 5,
+     "bh": 34,
+     "view": "side",
+     "fx": -11,
+     "fy": -9
+    },
+    {
+     "x": 5,
+     "y": -29,
+     "w": 2,
+     "h": 32,
+     "bx": 5,
+     "by": -30,
+     "bw": 5,
+     "bh": 34,
+     "view": "side",
+     "fx": -11,
+     "fy": 14
+    }
+   ],
+   "seat": {
+    "hx": -31,
+    "hy": 4,
+    "legs": "side",
+    "view": "right",
+    "cut": [
+     -24,
+     4,
+     90,
+     70
+    ],
+    "floor": [
+     -48,
+     18
+    ],
+    "item": [
+     -12,
+     -48
+    ],
+    "food": [
+     -14,
+     -22
+    ],
+    "papers": [
+     -20,
+     -2
+    ],
+    "wide": true
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "bossDesk",
+     "x": 552,
+     "y": 488,
+     "hx": 569,
+     "hy": 474,
+     "facing": "right",
+     "tuck": false
+    }
+   ],
+   "top": {
+    "x": 566,
+    "y": 401,
+    "w": 48,
+    "h": 96
+   },
+   "bands": [
+    [
+     540,
+     389,
+     93,
+     140
+    ]
+   ]
+  }
+ },
+ "bossDesk/180/on": {
+  "hash": "ec22ce9d",
+  "opaque": 29052,
+  "artHash": "9a1a005d",
+  "artOpaque": 28452,
+  "geo": {
+   "art": {
+    "x": 552,
+    "y": 407,
+    "w": 96,
+    "h": 77
+   },
+   "foot": [
+    {
+     "x": 552,
+     "y": 414,
+     "w": 96,
+     "h": 70
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 552,
+      "y": 415,
+      "w": 96,
+      "h": 70
+     },
+     "y": 484,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 579,
+      "y": 400,
+      "w": 42,
+      "h": 43
+     },
+     "y": 440,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": 6,
+     "y": -39,
+     "w": 34,
+     "h": 24,
+     "bx": 6,
+     "by": -39,
+     "bw": 34,
+     "bh": 24,
+     "view": "back",
+     "fx": 12,
+     "fy": -17
+    },
+    {
+     "x": -40,
+     "y": -39,
+     "w": 34,
+     "h": 24,
+     "bx": -40,
+     "by": -39,
+     "bw": 34,
+     "bh": 24,
+     "view": "back",
+     "fx": -11,
+     "fy": -17
+    }
+   ],
+   "seat": {
+    "hx": 0,
+    "hy": -43,
+    "legs": "hidden",
+    "over": "monitor",
+    "floor": [
+     0,
+     -47
+    ],
+    "item": [
+     27,
+     -51
+    ],
+    "food": [
+     -39,
+     -49
+    ],
+    "papers": [
+     0,
+     -30
+    ],
+    "wide": true
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "bossDesk",
+     "x": 600,
+     "y": 423,
+     "hx": 600,
+     "hy": 427,
+     "facing": "down",
+     "tuck": true
+    }
+   ],
+   "top": {
+    "x": 552,
+    "y": 415,
+    "w": 96,
+    "h": 48
+   },
+   "bands": [
+    [
+     533,
+     403,
+     134,
+     92
+    ]
+   ]
+  }
+ },
+ "bossDesk/180/off": {
+  "hash": "ec22ce9d",
+  "opaque": 29052,
+  "artHash": "9a1a005d",
+  "artOpaque": 28452,
+  "geo": {
+   "art": {
+    "x": 552,
+    "y": 407,
+    "w": 96,
+    "h": 77
+   },
+   "foot": [
+    {
+     "x": 552,
+     "y": 414,
+     "w": 96,
+     "h": 70
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 552,
+      "y": 415,
+      "w": 96,
+      "h": 70
+     },
+     "y": 484,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 579,
+      "y": 400,
+      "w": 42,
+      "h": 43
+     },
+     "y": 440,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": 6,
+     "y": -39,
+     "w": 34,
+     "h": 24,
+     "bx": 6,
+     "by": -39,
+     "bw": 34,
+     "bh": 24,
+     "view": "back",
+     "fx": 12,
+     "fy": -17
+    },
+    {
+     "x": -40,
+     "y": -39,
+     "w": 34,
+     "h": 24,
+     "bx": -40,
+     "by": -39,
+     "bw": 34,
+     "bh": 24,
+     "view": "back",
+     "fx": -11,
+     "fy": -17
+    }
+   ],
+   "seat": {
+    "hx": 0,
+    "hy": -43,
+    "legs": "hidden",
+    "over": "monitor",
+    "floor": [
+     0,
+     -47
+    ],
+    "item": [
+     27,
+     -51
+    ],
+    "food": [
+     -39,
+     -49
+    ],
+    "papers": [
+     0,
+     -30
+    ],
+    "wide": true
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "bossDesk",
+     "x": 600,
+     "y": 423,
+     "hx": 600,
+     "hy": 427,
+     "facing": "down",
+     "tuck": true
+    }
+   ],
+   "top": {
+    "x": 552,
+    "y": 415,
+    "w": 96,
+    "h": 48
+   },
+   "bands": [
+    [
+     533,
+     403,
+     134,
+     92
+    ]
+   ]
+  }
+ },
+ "bossDesk/270/on": {
+  "hash": "eee30355",
+  "opaque": 25648,
+  "artHash": "6459ed2d",
+  "artOpaque": 25104,
+  "geo": {
+   "art": {
+    "x": 586,
+    "y": 387,
+    "w": 55,
+    "h": 131
+   },
+   "foot": [
+    {
+     "x": 586,
+     "y": 400,
+     "w": 48,
+     "h": 118
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 586,
+      "y": 387,
+      "w": 48,
+      "h": 33
+     },
+     "y": 416,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 586,
+      "y": 420,
+      "w": 48,
+      "h": 33
+     },
+     "y": 449,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 586,
+      "y": 453,
+      "w": 48,
+      "h": 33
+     },
+     "y": 482,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 586,
+      "y": 486,
+      "w": 48,
+      "h": 33
+     },
+     "y": 518,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 610,
+      "y": 447,
+      "w": 42,
+      "h": 43
+     },
+     "y": 487,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": -7,
+     "y": -29,
+     "w": 2,
+     "h": 32,
+     "bx": -10,
+     "by": -30,
+     "bw": 5,
+     "bh": 34,
+     "view": "side",
+     "fx": 12,
+     "fy": 14
+    },
+    {
+     "x": -7,
+     "y": -75,
+     "w": 2,
+     "h": 32,
+     "bx": -10,
+     "by": -76,
+     "bw": 5,
+     "bh": 34,
+     "view": "side",
+     "fx": 12,
+     "fy": -9
+    }
+   ],
+   "seat": {
+    "hx": 31,
+    "hy": 4,
+    "legs": "side",
+    "view": "left",
+    "cut": [
+     -66,
+     4,
+     90,
+     70
+    ],
+    "floor": [
+     48,
+     18
+    ],
+    "item": [
+     0,
+     -24
+    ],
+    "food": [
+     2,
+     -2
+    ],
+    "papers": [
+     20,
+     -2
+    ],
+    "wide": true
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "bossDesk",
+     "x": 648,
+     "y": 488,
+     "hx": 631,
+     "hy": 474,
+     "facing": "left",
+     "tuck": false
+    }
+   ],
+   "top": {
+    "x": 586,
+    "y": 401,
+    "w": 48,
+    "h": 96
+   },
+   "bands": [
+    [
+     567,
+     389,
+     93,
+     140
+    ]
+   ]
+  }
+ },
+ "bossDesk/270/off": {
+  "hash": "8f176095",
+  "opaque": 25648,
+  "artHash": "e0f4720d",
+  "artOpaque": 25104,
+  "geo": {
+   "art": {
+    "x": 586,
+    "y": 387,
+    "w": 55,
+    "h": 131
+   },
+   "foot": [
+    {
+     "x": 586,
+     "y": 400,
+     "w": 48,
+     "h": 118
+    }
+   ],
+   "depth": [
+    {
+     "rect": {
+      "x": 586,
+      "y": 387,
+      "w": 48,
+      "h": 33
+     },
+     "y": 416,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 586,
+      "y": 420,
+      "w": 48,
+      "h": 33
+     },
+     "y": 449,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 586,
+      "y": 453,
+      "w": 48,
+      "h": 33
+     },
+     "y": 482,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 586,
+      "y": 486,
+      "w": 48,
+      "h": 33
+     },
+     "y": 518,
+     "part": "body",
+     "chair": false,
+     "clip": true
+    },
+    {
+     "rect": {
+      "x": 610,
+      "y": 447,
+      "w": 42,
+      "h": 43
+     },
+     "y": 487,
+     "part": "chair",
+     "chair": true,
+     "clip": true
+    }
+   ],
+   "mon": [
+    {
+     "x": -7,
+     "y": -29,
+     "w": 2,
+     "h": 32,
+     "bx": -10,
+     "by": -30,
+     "bw": 5,
+     "bh": 34,
+     "view": "side",
+     "fx": 12,
+     "fy": 14
+    },
+    {
+     "x": -7,
+     "y": -75,
+     "w": 2,
+     "h": 32,
+     "bx": -10,
+     "by": -76,
+     "bw": 5,
+     "bh": 34,
+     "view": "side",
+     "fx": 12,
+     "fy": -9
+    }
+   ],
+   "seat": {
+    "hx": 31,
+    "hy": 4,
+    "legs": "side",
+    "view": "left",
+    "cut": [
+     -66,
+     4,
+     90,
+     70
+    ],
+    "floor": [
+     48,
+     18
+    ],
+    "item": [
+     0,
+     -24
+    ],
+    "food": [
+     2,
+     -2
+    ],
+    "papers": [
+     20,
+     -2
+    ],
+    "wide": true
+   },
+   "seatsWorld": [
+    {
+     "id": "chair",
+     "kind": "bossDesk",
+     "x": 648,
+     "y": 488,
+     "hx": 631,
+     "hy": 474,
+     "facing": "left",
+     "tuck": false
+    }
+   ],
+   "top": {
+    "x": 586,
+    "y": 401,
+    "w": 48,
+    "h": 96
+   },
+   "bands": [
+    [
+     567,
+     389,
+     93,
+     140
+    ]
+   ]
+  }
+ }
+}

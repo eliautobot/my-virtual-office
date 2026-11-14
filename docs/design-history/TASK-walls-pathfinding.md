@@ -24,7 +24,7 @@ Add a `drawInteriorWalls()` function called from drawEnvironment(). For each wal
 - Draw a solid colored rectangle (matching the top wall style, ~6px thick)
 - Vertical walls: x*TILE, y1*TILE to x*TILE, y2*TILE, width 6px
 - Horizontal walls: x1*TILE, y*TILE to x2*TILE, y*TILE, height 6px
-- Wall color should be configurable (default: #546e7a — matching existing wall trim)
+- Wall color should be configurable (default: #546e7a, matching existing wall trim)
 - Draw a subtle shadow on one side for depth
 
 ## Part 3: Wall Placement in Edit Mode
@@ -40,7 +40,7 @@ Add "Wall" to the CATALOG_CATEGORIES under a new "Walls" category:
 Wall placement flow:
 1. User selects "Wall Segment" from catalog
 2. Click start point on grid → click end point → wall drawn between them
-3. Wall must be horizontal or vertical (snap to axis — if dx > dy, make horizontal; else vertical)
+3. Wall must be horizontal or vertical (snap to axis, if dx > dy, make horizontal; else vertical)
 4. Walls snap to tile edges (between tiles), not tile centers
 5. "Door/Opening" removes a 1-tile gap in an existing wall (click on wall to add door)
 
@@ -93,7 +93,7 @@ function findPath(startX, startY, endX, endY) {
     // Returns array of {x, y} waypoints in world coords (tile centers)
     // Uses collisionGrid to check which directions are passable
     // Heuristic: Manhattan distance
-    // Neighbors: 4-directional (up, down, left, right) — only if not blocked by wall
+    // Neighbors: 4-directional (up, down, left, right): only if not blocked by wall
 }
 ```
 
@@ -147,9 +147,9 @@ if (this._path && this._path.length > 0) {
 ## CRITICAL CONSTRAINTS
 - Do NOT break existing agent behavior (wandering, sitting, meetings, social interactions, mini-games)
 - Do NOT modify drawing code for agents (body, hair, accessories)
-- Pathfinding should be FAST — A* on a 25x18 grid is trivial, but avoid recomputing every frame
+- Pathfinding should be FAST, A* on a 25x18 grid is trivial, but avoid recomputing every frame
 - If no path exists (completely walled off), fall back to direct movement
-- The collision grid must also account for furniture bounds (agents shouldn't walk through desks) — but this is optional for v1, just walls for now
+- The collision grid must also account for furniture bounds (agents shouldn't walk through desks): but this is optional for v1, just walls for now
 - Interior walls are BETWEEN tiles (on tile edges), not filling tiles
 
 ## Testing

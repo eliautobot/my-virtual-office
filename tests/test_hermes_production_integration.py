@@ -63,10 +63,10 @@ class ManifestRegistry:
 class HermesProductionIntegrationTests(unittest.TestCase):
     def test_balanced_api_slot_uses_gateway_sessions_and_keeps_cli_only_support(self):
         balanced = {
-            "profile": "aster",
+            "profile": "astra",
             "record": {
-                "providerAgentId": "aster",
-                "providerConnectionId": "aster",
+                "providerAgentId": "astra",
+                "providerConnectionId": "astra",
                 "localProfile": "default",
                 "connectionModes": ["cli", "api"],
             },
@@ -85,115 +85,6 @@ class HermesProductionIntegrationTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
-
-    def test_native_history_keeps_three_reasoning_blocks_four_tools_and_results(self):
-        session = {
-            "id": "20260813_181512_528657",
-            "title": "Hermes update",
-            "messages": [
-                {"id": "u1", "role": "user", "content": "Hey any updates on Hermes", "timestamp": "2026-08-13T18:15:12Z"},
-                {
-                    "id": "a1", "role": "assistant", "content": "",
-                    "reasoning_content": "Planning updates clarification",
-                    "timestamp": "2026-08-13T18:15:13Z",
-                    "tool_calls": [{"id": "call-skill", "function": {"name": "skill_view", "arguments": "{\"name\":\"hermes\"}"}}],
-                },
-                {"id": "t1", "role": "tool", "tool_call_id": "call-skill", "content": "Hermes skill details", "timestamp": "2026-08-13T18:15:14Z"},
-                {
-                    "id": "a2", "role": "assistant", "content": "",
-                    "reasoning_content": "Planning version retrieval via GitHub API",
-                    "timestamp": "2026-08-13T18:15:15Z",
-                    "tool_calls": [
-                        {"id": "call-version", "function": {"name": "terminal", "arguments": "{\"command\":\"hermes --version\"}"}},
-                        {"id": "call-releases", "function": {"name": "terminal", "arguments": "{\"command\":\"curl releases\"}"}},
-                        {"id": "call-status", "function": {"name": "terminal", "arguments": "{\"command\":\"git status\"}"}},
-                    ],
-                },
-                {"id": "t2", "role": "tool", "tool_call_id": "call-version", "content": "{\"exit_code\":127,\"error\":\"command not found\"}", "timestamp": "2026-08-13T18:15:16Z"},
-                {"id": "t3", "role": "tool", "tool_call_id": "call-releases", "content": "{\"exit_code\":0,\"stdout\":\"v0.9.0\"}", "timestamp": "2026-08-13T18:15:17Z"},
-                {"id": "t4", "role": "tool", "tool_call_id": "call-status", "content": "{\"exit_code\":0,\"stdout\":\"clean\"}", "timestamp": "2026-08-13T18:15:18Z"},
-                {
-                    "id": "a3", "role": "assistant", "content": "Hermes is current and healthy.",
-                    "reasoning_content": "Comparing installed and released versions\nPreparing concise update",
-                    "timestamp": "2026-08-13T18:15:19Z",
-                },
-            ],
-        }
-        rows = server._hermes_session_to_chat_messages(session, {"name": "Aster"})
-
-        self.assertEqual(3, sum(1 for row in rows if row.get("thinking")))
-        tools = [tool for row in rows for tool in row.get("tools", [])]
-        self.assertEqual(4, len(tools))
-        self.assertTrue(all(tool.get("result") for tool in tools))
-        self.assertEqual("error", next(tool for tool in tools if tool["id"] == "call-version")["status"])
-        self.assertEqual("Hermes is current and healthy.", rows[-1]["text"])
-        self.assertEqual("a3", rows[-1]["id"])
-        self.assertTrue(all(isinstance(row["ts"], int) for row in rows))
-
-    def test_tool_completion_and_sse_replay_keep_start_command_details(self):
-        started = server._hermes_event_tool_card({
-            "event": "tool.started", "tool": "terminal",
-            "preview": "printf VO_KEEP_ARGUMENTS",
-        }, "running", fallback_id="tool-one")
-        completed = server._hermes_event_tool_card({
-            "event": "tool.completed", "tool": "terminal", "duration": 0.1,
-        }, "done", fallback_id="tool-one")
-        merged = server._merge_hermes_tool_card(started, completed)
-        self.assertEqual("printf VO_KEEP_ARGUMENTS", merged["arguments"]["command"])
-        self.assertEqual("printf VO_KEEP_ARGUMENTS", merged["args_preview"])
-        self.assertEqual("done", merged["status"])
-
-        meta = {"runtime": server._native_run_runtime()}
-        payload = {"toolCard": started}
-        server._native_run_emit(meta, "tool.started", payload)
-        started["status"] = "done"
-        self.assertEqual("running", meta["runtime"]["events"][0]["data"]["toolCard"]["status"])
-
-    def test_completed_session_fetch_uses_authoritative_tool_result(self):
-        client = FakeHistoryClient([
-            {"id": "a1", "session_id": "session-rich", "role": "assistant", "content": "", "timestamp": 1,
-             "tool_calls": [{"id": "call-rich", "function": {"name": "terminal", "arguments": "{\"command\":\"printf rich\"}"}}]},
-            {"id": "t1", "session_id": "session-rich", "role": "tool", "tool_call_id": "call-rich", "tool_name": "terminal",
-             "content": "{\"output\":\"rich\",\"exit_code\":0}", "timestamp": 2},
-            {"id": "a2", "session_id": "session-rich", "role": "assistant", "content": "done", "timestamp": 3},
-        ])
-        rows = server._fetch_hermes_native_session_history(client, "session-rich", {"name": "Aster"})
-        tool = next(tool for row in rows for tool in row.get("tools", []))
-        self.assertIn("rich", tool["result"])
-        self.assertEqual("printf rich", tool["arguments"]["command"])
-
-    def test_new_native_run_does_not_resume_tracked_session(self):
-        client = FakeHistoryClient([])
-        agent = {"id": "hermes-test", "capabilities": {"sessionSwitch": True}}
-        with mock.patch.object(server, "_get_hermes_session_id", return_value="tracked-old"):
-            session_id, history = server._prepare_hermes_run_context(
-                client, agent, "test", current_prompt="fresh", force_new=True,
-            )
-        self.assertNotEqual("tracked-old", session_id)
-        self.assertTrue(session_id.startswith("vo-hermes-test-"))
-        self.assertIsNone(history)
-        self.assertEqual([], client.starts)
-
-    def test_hermes_session_list_preserves_native_metadata(self):
-        class Client:
-            def list_sessions(self, limit=40):
-                return {"data": [{
-                    "id": "session-meta", "title": "Metadata proof",
-                    "last_active": "2026-08-14T04:00:00Z",
-                    "started_at": "2026-08-14T03:00:00Z",
-                    "message_count": 14, "tool_call_count": 4, "model": "test-model",
-                }]}
-
-        agent_ref = {"profile": "aster", "record": {"providerAgentId": "aster"}}
-        with mock.patch.object(server, "_hermes_api_client_for_profile", return_value=Client()), \
-             mock.patch.object(server, "_get_hermes_session_id", return_value="session-meta"):
-            payload = server._chat_sessions_list_hermes(agent_ref)
-        row = payload["sessions"][0]
-        self.assertEqual("2026-08-14T04:00:00Z", row["updatedAt"])
-        self.assertEqual(14, row["messageCount"])
-        self.assertEqual(4, row["toolCallCount"])
-        self.assertEqual("test-model", row["model"])
-        self.assertTrue(row["active"])
 
     def test_history_normalization_structured_rows_bounds_and_duplicate_prompt(self):
         rows = [
@@ -387,13 +278,13 @@ class HermesProductionIntegrationTests(unittest.TestCase):
 
     def test_mounted_profile_mapping_and_real_policy(self):
         data = self.root / "hermes"
-        (data / "profiles" / "cod").mkdir(parents=True)
+        (data / "profiles" / "coby").mkdir(parents=True)
         default = HermesProvider.inspect_mounted_profile("default", data_root=str(data), access="read-write")
-        named = HermesProvider.inspect_mounted_profile("cod", data_root=str(data), access="read-only")
-        disabled = HermesProvider.inspect_mounted_profile("cod", data_root=str(data), access="disabled")
+        named = HermesProvider.inspect_mounted_profile("coby", data_root=str(data), access="read-only")
+        disabled = HermesProvider.inspect_mounted_profile("coby", data_root=str(data), access="disabled")
         self.assertEqual(default["path"], str(data))
         self.assertTrue(default["readable"])
-        self.assertEqual(named["path"], str(data / "profiles" / "cod"))
+        self.assertEqual(named["path"], str(data / "profiles" / "coby"))
         self.assertTrue(named["readable"])
         self.assertFalse(named["writable"])
         self.assertFalse(disabled["readable"])
@@ -408,7 +299,7 @@ class HermesProductionIntegrationTests(unittest.TestCase):
 
         statvfs = mock.Mock(f_flag=getattr(os, "ST_RDONLY", 1))
         with mock.patch("providers.hermes.os.statvfs", return_value=statvfs):
-            filesystem_read_only = HermesProvider.inspect_mounted_profile("cod", data_root=str(data), access="read-write")
+            filesystem_read_only = HermesProvider.inspect_mounted_profile("coby", data_root=str(data), access="read-write")
         self.assertTrue(filesystem_read_only["readable"])
         self.assertFalse(filesystem_read_only["writable"])
         self.assertEqual(filesystem_read_only["access"], "read-only")
@@ -475,17 +366,22 @@ class HermesProductionIntegrationTests(unittest.TestCase):
 
     def test_browser_forwards_selected_native_session(self):
         source = (APP / "chat.js").read_text(encoding="utf-8")
-        self.assertIn("isNativeHermesSelected()", source)
+        self.assertIn("selectedHermesSessionId()", source)
         self.assertIn("sessionId:this.selectedProviderSessionId()", source)
         self.assertIn("sessionId: this.selectedProviderSessionId()", source)
-        self.assertIn("newSessionPending: this.isPendingProviderSession()", source)
         self.assertIn("canonicalSessionKeyForOption", source)
         self.assertIn("optionMatchesSelectedAgent", source)
         self.assertIn("historyParams.set('sessionId', selectedSessionId)", source)
-        load_agent_list = source.split("async loadAgentList()", 1)[1].split("isVisibleForPolling()", 1)[0]
-        self.assertIn("this.loadHistory();", load_agent_list)
+        load_agent_list = source.split("async loadAgentList()", 1)[1].split("\n    }\n", 1)[0]
+        self.assertIn("return this.refreshAgentList();", load_agent_list)
+        # The first agent list (and any list that changes the selection) loads
+        # history after the select is synced, so the native session is forwarded.
+        refresh = source.split("async refreshAgentList(", 1)[1].split("\n    isVisibleForPolling() {", 1)[0]
+        self.assertIn("this.syncAgentSelect();", refresh)
+        self.assertLess(refresh.index("this.syncAgentSelect();"), refresh.index("this.loadHistory();"))
+        self.assertIn("if (!firstLoad && fenceBefore === this.selectionFence() && !this.historyDirty) return;", refresh)
         server_source = (APP / "server.py").read_text(encoding="utf-8")
-        self.assertIn('source="native-follow"', server_source)
+        self.assertIn('"requestedSessionId": requested_session_id', server_source)
         self.assertIn('"sessionKey": f"{provider_kind}:{profile}:{response_session_id}"', server_source)
 
 

@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Sign in - My Virtual Office</title>
+<link rel="icon" href="favicon.png">
+<script>try{document.documentElement.dataset.uiTheme=localStorage.getItem('vo-ui-theme')==='light'?'light':'dark';var p=localStorage.getItem('vo-ui-preset')||'classic';document.documentElement.dataset.uiPreset=/^(classic|retro|cyberpunk|gameboy|custom)$/.test(p)?p:'classic'}catch(e){document.documentElement.dataset.uiTheme='dark';document.documentElement.dataset.uiPreset='classic'}</script>
+<link rel="stylesheet" href="ui-tokens.css?v=1">
+<style>
+  html, body { height: 100%; margin: 0; }
+  body {
+    position: relative; isolation: isolate;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--vo-space-4, 16px);
+    min-height: 100dvh; padding: var(--vo-space-4, 16px); box-sizing: border-box;
+    background: var(--vo-surface-0, #070b13); color: var(--vo-text-1, #f3f6fb);
+    font-family: var(--vo-font-ui, system-ui, sans-serif); font-size: var(--vo-text-md, 14px);
+    line-height: var(--vo-leading, 1.5);
+  }
+  /* The office itself, dimmed, behind a frosted card (v0.10 UI-15). The picture is rendered by the
+     office (tests/tools/capture-login-backdrop.mjs) and holds no office data. */
+  body::before, body::after { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; }
+  body::before { background: #05070c url("login-backdrop.jpg") center 30% / cover no-repeat; }
+  body::after { background: radial-gradient(ellipse at 50% 45%, color-mix(in srgb, var(--vo-surface-0, #070b13) 35%, transparent), color-mix(in srgb, var(--vo-surface-0, #070b13) 82%, transparent) 75%); }
+  html[data-ui-theme="light"] body::after { background: radial-gradient(ellipse at 50% 45%, color-mix(in srgb, var(--vo-surface-0) 55%, transparent), color-mix(in srgb, var(--vo-surface-0) 90%, transparent) 75%); }
+  .card {
+    width: 100%; max-width: 400px; box-sizing: border-box;
+    padding: var(--vo-space-8, 32px) var(--vo-space-6, 24px);
+    background: color-mix(in srgb, var(--vo-surface-1, #0d1422) 84%, transparent);
+    -webkit-backdrop-filter: blur(14px) saturate(1.1); backdrop-filter: blur(14px) saturate(1.1);
+    border: var(--vo-border-w, 1px) solid var(--vo-border-subtle, #243247);
+    border-radius: var(--vo-radius-lg, 16px);
+    box-shadow: inset 0 1px 0 color-mix(in srgb, var(--vo-text-1, #fff) 8%, transparent), var(--vo-shadow-pixel, 2px 2px 0 rgba(0,0,0,.35)), var(--vo-shadow-3, 0 24px 64px rgba(0,0,0,.5));
+    animation: vo-login-in 220ms cubic-bezier(0,0,.2,1);
+    display: flex; flex-direction: column; gap: var(--vo-space-4, 16px);
+  }
+  @keyframes vo-login-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @media (prefers-reduced-motion: reduce) { .card { animation: none; } }
+  .brand { display: flex; flex-direction: column; align-items: center; gap: var(--vo-space-3, 12px); text-align: center; }
+  .brand img { width: 72px; height: 72px; image-rendering: pixelated; filter: drop-shadow(2px 2px 0 rgba(0,0,0,.35)); }
+  h1 {
+    margin: 0; color: var(--vo-accent, #f5c84c); font-family: var(--vo-font-pixel, monospace); font-size: var(--vo-pixel-lg, 16px);
+    font-weight: 400; letter-spacing: .02em; line-height: 1.5; text-transform: uppercase;
+  }
+  .lead { text-align: center; }
+  .foot { color: var(--vo-text-3, #8d9ab0); font-size: var(--vo-text-xs, 12px); text-shadow: 0 1px 2px rgba(0,0,0,.4); min-height: 1.5em; }
+  p { margin: 0; color: var(--vo-text-2, #c3cddc); }
+  label { font-size: var(--vo-text-sm, 13px); color: var(--vo-text-2, #c3cddc); }
+  form { display: flex; flex-direction: column; gap: var(--vo-space-2, 8px); }
+  input {
+    min-height: var(--vo-control-h-lg, 44px); padding: 0 var(--vo-space-3, 12px); box-sizing: border-box;
+    border-radius: var(--vo-radius-sm, 8px); border: var(--vo-border-w, 1px) solid var(--vo-border-strong, #5b6f8c);
+    background: var(--vo-surface-2, #131c2c); color: var(--vo-text-1, #f3f6fb); font: inherit; font-size: 16px;
+  }
+  button {
+    margin-top: var(--vo-space-2, 8px); min-height: var(--vo-control-h-lg, 44px);
+    border-radius: var(--vo-radius-sm, 8px); border: 0; cursor: pointer;
+    background: var(--vo-accent-fill, var(--vo-accent, #4f8cff)); color: var(--vo-accent-fill-ink, var(--vo-accent-ink, #fff));
+    font: inherit; font-weight: var(--vo-weight-bold, 700);
+  }
+  button[disabled] { opacity: .6; cursor: progress; }
+  input:focus-visible, button:focus-visible { outline: none; box-shadow: var(--vo-focus, 0 0 0 2px #4f8cff); }
+  .msg { min-height: 1.4em; font-size: var(--vo-text-sm, 13px); }
+  .msg.error { color: var(--vo-danger, #f85149); }
+  .hint { font-size: var(--vo-text-xs, 12px); color: var(--vo-text-3, #8d9ab0); }
+</style>
+</head>
+<body>
+<main class="card">
+  <div class="brand">
+    <img src="favicon.png" alt="" width="40" height="40">
+    <h1>My Virtual Office</h1>
+  </div>
+  <p class="lead">This office is protected. Enter the passcode to continue.</p>
+  <form id="login" novalidate>
+    <label for="passcode">Office passcode</label>
+    <input id="passcode" name="passcode" type="password" autocomplete="current-password" autofocus required>
+    <button id="submit" type="submit">Enter the office</button>
+    <div id="msg" class="msg" role="status" aria-live="polite"></div>
+  </form>
+  <p class="hint">Forgot it? Open the office on the computer that runs it: it never asks there, and you can change the passcode in Settings, Security.</p>
+</main>
+<footer class="foot" id="foot"></footer>
+<script>
+(function () {
+  // Only a path on this same office may follow sign-in. Resolve it the way the browser
+  // will (it drops tabs/newlines and reads \ as /) and compare origins, not a regex.
+  function safeNext(raw) {
+    var value = String(raw || '/');
+    if (/[\u0000-\u0020\u007f\\]/.test(value) || value.charAt(0) !== '/') return '/';
+    try {
+      var u = new URL(value, location.origin);
+      if (u.origin !== location.origin) return '/';
+      return u.pathname + u.search + u.hash;
+    } catch (e) { return '/'; }
+  }
+  var params = new URLSearchParams(location.search);
+  var next = safeNext(params.get('next'));
+  var form = document.getElementById('login');
+  var input = document.getElementById('passcode');
+  var button = document.getElementById('submit');
+  var msg = document.getElementById('msg');
+
+  function show(text) { msg.textContent = text; msg.className = 'msg' + (text ? ' error' : ''); }
+
+  fetch('/api/version', { credentials: 'same-origin' }).then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (v) { if (v && v.version) document.getElementById('foot').textContent = 'My Virtual Office ' + String(v.version).slice(0, 24); })
+    .catch(function () {});
+  fetch('/api/access/status', { credentials: 'same-origin' })
+    .then(function (r) { return r.json(); })
+    .then(function (st) { if (st && st.authenticated) location.replace(next); })
+    .catch(function () {});
+
+  form.addEventListener('submit', function (event) {
+    event.preventDefault();
+    if (!input.value) { show('Enter the passcode.'); input.focus(); return; }
+    button.disabled = true;
+    show('');
+    fetch('/api/access/login', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passcode: input.value })
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (data) { return { status: r.status, data: data }; });
+    }).then(function (res) {
+      if (res.status === 200 && res.data.ok) { location.replace(next); return; }
+      if (res.data.error === 'too_many_attempts') show('Too many tries. Wait ' + Math.ceil((res.data.retryAfter || 300) / 60) + ' minutes and try again.');
+      else if (res.data.error === 'bad_passcode') show('That passcode is not right.');
+      else show(res.data.message || 'Could not sign in. Try again.');
+      input.select();
+    }).catch(function () {
+      show('Could not reach the office. Check the connection and try again.');
+    }).then(function () { button.disabled = false; });
+  });
+})();
+</script>
+</body>
+</html>

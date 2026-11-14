@@ -10,6 +10,8 @@ import re
 import uuid
 from datetime import datetime, timezone
 
+import data_owner
+
 
 LAYOUT_FORMAT = "my-virtual-office-layout"
 LAYOUT_VERSION = 1
@@ -51,6 +53,82 @@ def _positive_number(value, field):
 
 def _slug(value):
     return re.sub(r"[^a-z0-9]+", "-", str(value or "").lower()).strip("-")[:48]
+
+
+_HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
+MAX_LABEL_TEXT = 120
+LABEL_FONT_MIN = 8
+LABEL_FONT_MAX = 32
+
+
+def _hex_color(value):
+    """#rrggbb or None; anything else (CSS, markup, short forms) is dropped."""
+    return value.lower() if isinstance(value, str) and _HEX_COLOR.match(value) else None
+
+
+# v0.13 furniture variants: item.variant / item.color are ids from game.js (FURNITURE_VARIANTS,
+# FURNITURE_COLORS). The server keeps any well-formed id; the office falls back to the classic look and
+# the variant's first colour for an id it does not know (a newer or hand-edited layout).
+_VARIANT_ID = re.compile(r"^[a-z0-9-]{1,32}$")
+
+
+def _variant_id(value):
+    return value if isinstance(value, str) and _VARIANT_ID.match(value) else None
+
+
+def _rotation(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return 0
+    return int(round(value / 90.0) * 90) % 360
+
+
+def _label_font_size(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        size = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(size):
+        return None
+    size = min(LABEL_FONT_MAX, max(LABEL_FONT_MIN, size))
+    return int(size) if size.is_integer() else round(size, 1)
+
+
+def _label_text(value):
+    return str(value if value is not None else "").replace("\x00", "")[:MAX_LABEL_TEXT]
+
+
+# Furniture fields a layout file may carry, per type (CV-01). Every item gets
+# type/x/y/rotation; anything not listed here is dropped, so a shared layout
+# cannot smuggle markup or stray state into another office.
+_FURNITURE_EXTRA_FIELDS = {
+    "couch": {"couchColor": _hex_color},
+    "desk": {"variant": _variant_id, "color": _variant_id},
+    "bossDesk": {"variant": _variant_id, "color": _variant_id},
+    "textLabel": {"text": _label_text, "labelColor": _hex_color, "fontSize": _label_font_size},
+    "interactiveWindow": {"weather": lambda v: v if isinstance(v, bool) else None,
+                          "showSun": lambda v: v if isinstance(v, bool) else None},
+}
+
+
+def _normalize_furniture_item(raw, index):
+    label = f"Furniture item {index + 1}"
+    item = {
+        "type": _text(raw.get("type"), f"{label} type", 64, required=True),
+        "x": _number(raw.get("x"), f"{label} x"),
+        "y": _number(raw.get("y"), f"{label} y"),
+    }
+    if raw.get("rotation") not in (None, 0):
+        rotation = _rotation(raw.get("rotation"))
+        if rotation:
+            item["rotation"] = rotation
+    for key, clean in _FURNITURE_EXTRA_FIELDS.get(item["type"], {}).items():
+        if key in raw:
+            value = clean(raw[key])
+            if value is not None:
+                item[key] = value
+    return item
 
 
 def _safe_json_copy(value, field):
@@ -102,13 +180,7 @@ def normalize_layout(asset, *, assign_id=False):
     for index, raw in enumerate(furniture):
         if not isinstance(raw, dict):
             raise LayoutValidationError(f"Furniture item {index + 1} must be an object")
-        item = _safe_json_copy(raw, f"Furniture item {index + 1}")
-        item["type"] = _text(item.get("type"), f"Furniture item {index + 1} type", 64, required=True)
-        item["x"] = _number(item.get("x"), f"Furniture item {index + 1} x")
-        item["y"] = _number(item.get("y"), f"Furniture item {index + 1} y")
-        item.pop("assignedTo", None)
-        item.pop("id", None)
-        normalized_furniture.append(item)
+        normalized_furniture.append(_normalize_furniture_item(raw, index))
 
     normalized_walls = []
     for index, raw in enumerate(walls):
@@ -190,6 +262,95 @@ def build_default_layout(default_config):
     return asset
 
 
+# Built-in room templates (read only), shown in the Layouts tab after the
+# user's own layouts. Coordinates are relative to the template's top-left
+# corner in world px (walls in tiles), laid out on the 40 px grid so they
+# drop in cleanly. Wall-mounted items are left out on purpose: templates can
+# land anywhere on the floor.
+_WALL = {"color": "#5d6271", "accentColor": "#5d6271", "trimColor": "#d2d4da", "trim2Color": "#989ca8"}
+ROOM_TEMPLATES = [
+    {
+        "id": "room-desk-pod", "name": "4-desk pod",
+        "description": "Four desks in a square with a plant and a bin. Assign agents to the desks after placing.",
+        "bounds": (200, 176),  # v0.10.1 camera: a desk draws from y - 60 (raised top + monitor) to y + 26
+        "furniture": [("desk", 40, 64), ("desk", 120, 64), ("desk", 40, 150), ("desk", 120, 150),
+                      ("plant", 172, 16), ("trashCan", 180, 156)],
+    },
+    {
+        "id": "room-desk-row", "name": "Desk row",
+        "description": "Four desks side by side and a bookshelf at the end.",
+        "bounds": (380, 90),
+        "furniture": [("desk", 40, 64), ("desk", 120, 64), ("desk", 200, 64), ("desk", 280, 64), ("bookshelf", 326, 16)],
+    },
+    {
+        "id": "room-meeting", "name": "Meeting room",
+        "description": "A meeting table and a whiteboard inside four walls with a door.",
+        "bounds": (320, 240),
+        "furniture": [("meetingTable", 40, 80), ("whiteboard", 52, 16), ("plant", 284, 14)],
+        "walls": [(0, 0, 8, 0), (0, 0, 0, 6), (8, 0, 8, 6), (0, 6, 3, 6), (4, 6, 8, 6)],
+    },
+    {
+        "id": "room-meeting-corner", "name": "Meeting corner",
+        "description": "An open meeting table with a whiteboard and a plant, no walls.",
+        "bounds": (320, 120),
+        "furniture": [("meetingTable", 0, 0), ("whiteboard", 252, 8), ("plant", 290, 80)],
+    },
+    {
+        "id": "room-kitchenette", "name": "Kitchenette",
+        "description": "Two counters with a coffee maker, toaster and microwave, a vending machine, water and a bin.",
+        "bounds": (264, 88),
+        "furniture": [("kitchenCounter", 0, 48), ("kitchenCounter", 72, 48), ("coffeeMaker", 8, 28), ("toaster", 44, 34),
+                      ("microwave", 96, 26), ("vendingMachine", 152, 8), ("waterCooler", 213, 37), ("trashCan", 252, 66)],
+    },
+    {
+        "id": "room-lounge", "name": "Lounge",
+        "description": "An L-couch around a coffee table, a TV, a lamp and a plant.",
+        "bounds": (240, 160),
+        "furniture": [("couch", 0, 25), ("coffeeTable", 48, 112), ("tv", 180, 16), ("floorLamp", 220, 112),
+                      ("plant", 180, 132)],
+    },
+    {
+        "id": "room-reception", "name": "Reception",
+        "description": "The front desk with plants on both sides and a couch for visitors. A Notice Board on the wall above fits well.",
+        "bounds": (200, 160),
+        # v0.10.1 W3: the visitor spot in front of the desk (y + 56) stays clear of the couch, the couch inside the bounds
+        "furniture": [("receptionDesk", 100, 56), ("tallPlant", 10, 22), ("tallPlant", 168, 22), ("engLounge", 16, 120)],
+    },
+    {
+        "id": "room-game-corner", "name": "Game corner",
+        "description": "Ping pong, darts and a vending machine for breaks.",
+        "bounds": (240, 120),
+        "furniture": [("pingPongTable", 60, 64), ("dartBoard", 150, 18), ("vendingMachine", 192, 0), ("plant", 132, 92)],
+    },
+]
+ROOM_TEMPLATE_IDS = {template["id"] for template in ROOM_TEMPLATES}
+
+
+def build_room_template(template):
+    """Turn one ROOM_TEMPLATES entry into a read-only selection layout."""
+    width, height = template["bounds"]
+    asset = normalize_layout({
+        "format": LAYOUT_FORMAT,
+        "version": LAYOUT_VERSION,
+        "id": template["id"],
+        "name": template["name"],
+        "description": template["description"],
+        "author": "My Virtual Office",
+        "kind": "selection",
+        "createdAt": "2026-11-03T00:00:00Z",
+        "bounds": {"width": width, "height": height},
+        "objects": {
+            "furniture": [{"type": kind, "x": x, "y": y} for kind, x, y in template["furniture"]],
+            "walls": [dict(_WALL, x1=x1, y1=y1, x2=x2, y2=y2) for x1, y1, x2, y2 in template.get("walls", [])],
+        },
+    })
+    asset["id"] = template["id"]
+    asset["source"] = "template"
+    asset["readOnly"] = True
+    asset["updatedAt"] = asset["createdAt"]
+    return asset
+
+
 class LayoutLibrary:
     def __init__(self, data_dir, default_config_path):
         self.layout_dir = os.path.join(data_dir, "layouts")
@@ -201,7 +362,7 @@ class LayoutLibrary:
 
     def _path(self, layout_id):
         safe_id = _slug(layout_id)
-        if not safe_id or safe_id != layout_id or safe_id == DEFAULT_LAYOUT_ID:
+        if not safe_id or safe_id != layout_id or safe_id == DEFAULT_LAYOUT_ID or safe_id in ROOM_TEMPLATE_IDS:
             raise LayoutValidationError("Invalid layout id")
         return os.path.join(self.layout_dir, f"{safe_id}.json")
 
@@ -237,18 +398,23 @@ class LayoutLibrary:
             except (OSError, json.JSONDecodeError, LayoutValidationError):
                 continue
         assets[1:] = sorted(assets[1:], key=lambda item: item.get("updatedAt", ""), reverse=True)
+        # Room templates last: the Layouts tab shows them in their own group.
+        assets.extend(self._metadata(build_room_template(template)) for template in ROOM_TEMPLATES)
         return assets
 
     def get(self, layout_id):
         if layout_id == DEFAULT_LAYOUT_ID:
             return self._default()
+        for template in ROOM_TEMPLATES:
+            if template["id"] == layout_id:
+                return build_room_template(template)
         with open(self._path(layout_id), "r", encoding="utf-8") as handle:
             asset = normalize_layout(json.load(handle))
         asset["source"] = "local"
         return asset
 
     def save(self, raw_asset):
-        os.makedirs(self.layout_dir, exist_ok=True)
+        data_owner.makedirs(self.layout_dir, exist_ok=True)
         if len([name for name in os.listdir(self.layout_dir) if name.endswith(".json")]) >= MAX_LAYOUTS:
             raise LayoutValidationError(f"Layout library is limited to {MAX_LAYOUTS} assets")
         asset = normalize_layout(raw_asset, assign_id=True)
@@ -257,6 +423,7 @@ class LayoutLibrary:
         path = self._path(asset["id"])
         tmp_path = f"{path}.tmp-{os.getpid()}"
         with open(tmp_path, "w", encoding="utf-8") as handle:
+            data_owner.adopt_fd(handle.fileno(), self.layout_dir)
             json.dump(asset, handle, indent=2, ensure_ascii=False, allow_nan=False)
             handle.write("\n")
             handle.flush()

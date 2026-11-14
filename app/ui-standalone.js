@@ -11,7 +11,7 @@
     var theme = currentTheme();
     var next = theme === 'dark' ? 'light' : 'dark';
     document.querySelectorAll('[data-ui-theme-toggle]').forEach(function (button) {
-      button.textContent = next === 'light' ? '☀️ Light' : '🌙 Dark';
+      button.textContent = next === 'light' ? 'Light' : 'Dark';
       button.title = 'Switch to ' + next + ' theme';
       button.setAttribute('aria-label', button.title);
       button.setAttribute('aria-pressed', theme === 'light' ? 'true' : 'false');

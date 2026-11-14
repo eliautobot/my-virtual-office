@@ -20,6 +20,8 @@ import urllib.request
 import urllib.parse
 import urllib.error
 
+import data_owner
+
 # --- Config ---
 _LICENSE_FILE = os.path.join(
     os.environ.get("VO_STATUS_DIR", "/data"),
@@ -255,8 +257,8 @@ def activate_license(key):
         "activated": True,
     }
 
-    os.makedirs(os.path.dirname(_LICENSE_FILE), exist_ok=True)
-    with open(_LICENSE_FILE, "w") as f:
+    data_owner.makedirs(os.path.dirname(_LICENSE_FILE), exist_ok=True)
+    with data_owner.open_new(_LICENSE_FILE, "w") as f:
         json.dump(receipt, f, indent=2)
 
     return {

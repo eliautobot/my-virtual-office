@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""Fake Codex CLI for office tests (never a real account, never a model).
+
+Emulates what app/providers/codex.py runs and parses:
+  codex app-server --stdio      newline JSON-RPC: initialize / initialized, account/read, thread/start, thread/resume,
+                                turn/start (+ turn/started, item/started|completed for userMessage, reasoning,
+                                commandExecution, agentMessage, item/agentMessage/delta, item/reasoning/summaryTextDelta,
+                                item/commandExecution/outputDelta, thread/tokenUsage/updated, turn/completed), turn/interrupt,
+                                thread/list, thread/read, thread/delete; server request item/commandExecution/requestApproval
+                                (decision accept -> the command runs; cancel/decline -> declined)
+  codex exec [--json ...] -     and  codex exec resume --json --skip-git-repo-check [-m M] <thread> -   (prompt on stdin):
+                                thread.started, turn.started, item.started/completed (reasoning, command_execution,
+                                agent_message), turn.completed {usage} / turn.failed
+  codex login status            "Logged in using an API key" (exit 0)
+  codex --version
+Scripted by directives in the message, see fake_cli_lib.py ([[tool]], [[approval]], [[slow]], [[error]]).
+State: $CODEX_HOME/fake-codex (threads, calls.log). FAKE_CODEX_REASONING=both|deltas|item (default both: summary deltas
+AND the completed reasoning item carry the text, as the real app-server does).
+"""
+from __future__ import annotations
+
+import os
+import sys
+import threading
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import fake_cli_lib as L  # noqa: E402
+
+LABEL = "Fake Codex"
+MODEL = os.environ.get("FAKE_CODEX_MODEL") or "fake-codex-1"
+HOME = os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+STATE = L.State(os.path.join(HOME, "fake-codex"))
+
+
+def _now() -> int:
+    return int(time.time())
+
+
+class Threads:
+    """Saved threads: {id, cwd, preview, name, createdAt, updatedAt, turns:[{id, status, items:[...]}]}"""
+
+    def get(self, tid: str):
+        return STATE.load(f"threads/{tid}.json", None) if tid else None
+
+    def put(self, thread: dict) -> None:
+        STATE.save(f"threads/{thread['id']}.json", thread)
+
+    def new(self, cwd: str) -> dict:
+        tid = STATE.next_id("thr-fake-", 6)
+        thread = {"id": tid, "cwd": cwd or "", "preview": "", "name": None, "createdAt": _now(), "updatedAt": _now(),
+                  "modelProvider": "fake", "turns": []}
+        self.put(thread)
+        return thread
+
+    def all(self) -> list[dict]:
+        root = STATE.path("threads", "x")
+        out = []
+        for name in os.listdir(os.path.dirname(root)):
+            if name.endswith(".json"):
+                t = STATE.load(f"threads/{name}", None)
+                if isinstance(t, dict):
+                    out.append(t)
+        return out
+
+    def delete(self, tid: str) -> bool:
+        return STATE.remove(f"threads/{tid}.json")
+
+    def record_turn(self, tid: str, turn_id: str, user_text: str, reply: str, status: str) -> int:
+        t = self.get(tid) or {"id": tid, "cwd": "", "createdAt": _now(), "turns": []}
+        items = [{"type": "userMessage", "id": f"{turn_id}-u", "content": [{"type": "text", "text": user_text}]}]
+        if reply:
+            items.append({"type": "agentMessage", "id": f"{turn_id}-m", "text": reply})
+        t.setdefault("turns", []).append({"id": turn_id, "status": status, "items": items})
+        if not t.get("preview"):
+            t["preview"] = L.clean(user_text)[:120]
+        t["updatedAt"] = _now()
+        self.put(t)
+        return len(t["turns"])
+
+    @staticmethod
+    def public(t: dict, turns: bool = False) -> dict:
+        out = {k: t.get(k) for k in ("id", "preview", "name", "createdAt", "updatedAt", "cwd", "modelProvider")}
+        out["source"] = "appServer"
+        out["turns"] = t.get("turns", []) if turns else []
+        return out
+
+
+THREADS = Threads()
+
+
+# ---------------------------------------------------------------- app-server
+class AppServer:
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.srv_id = 0
+        self.waiting: dict = {}          # server request id -> [threading.Event, response]
+        self.turns: dict = {}            # turn id -> {"interrupted": Event, "thread": tid}
+        self.cwd = os.getcwd()
+
+    def send(self, obj) -> None:
+        L.emit(obj, lock=self.lock)
+
+    def note(self, method: str, params: dict) -> None:
+        self.send({"method": method, "params": params})
+
+    def reply(self, rid, result=None, error=None) -> None:
+        self.send({"id": rid, "error": error} if error else {"id": rid, "result": result if result is not None else {}})
+
+    def ask(self, method: str, params: dict, timeout: float = 900.0):
+        """A server -> client request (approvals). Returns the client's result (or None on timeout/interrupt)."""
+        with self.lock:
+            self.srv_id += 1
+            rid = self.srv_id
+        ev = threading.Event()
+        self.waiting[rid] = [ev, None]
+        self.send({"id": rid, "method": method, "params": params})
+        turn = self.turns.get(params.get("turnId"))
+        end = time.time() + timeout
+        while time.time() < end:
+            if ev.wait(0.1):
+                break
+            if turn and turn["interrupted"].is_set():
+                break
+        return (self.waiting.pop(rid, [None, None]) or [None, None])[1]
+
+    def run(self) -> None:
+        for raw in sys.stdin:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                msg = L.json.loads(raw)
+            except ValueError:
+                continue
+            if not isinstance(msg, dict):
+                continue
+            if "method" not in msg and "id" in msg:              # a response to our request
+                slot = self.waiting.get(msg.get("id"))
+                if slot:
+                    slot[1] = msg.get("result") if "result" in msg else {"error": msg.get("error")}
+                    slot[0].set()
+                continue
+            method = str(msg.get("method") or "")
+            params = msg.get("params") if isinstance(msg.get("params"), dict) else {}
+            rid = msg.get("id")
+            if rid is None:                                       # notifications (initialized, ...)
+                continue
+            try:
+                self.dispatch(rid, method, params)
+            except Exception as exc:  # noqa: BLE001
+                self.reply(rid, error={"code": -32603, "message": f"fake-codex: {exc}"})
+        # stdin closed: stop running turns
+        for t in list(self.turns.values()):
+            t["interrupted"].set()
+
+    def dispatch(self, rid, method: str, params: dict) -> None:
+        if method == "initialize":
+            self.reply(rid, {"userAgent": "codex_cli_rs/0.0.0-fake (vo-tests)", "codexHome": HOME})
+        elif method == "account/read":
+            self.reply(rid, {"account": {"type": "apiKey"}, "requiresOpenaiAuth": True})
+        elif method in ("thread/start", "thread/resume"):
+            if method == "thread/resume":
+                t = THREADS.get(str(params.get("threadId") or ""))
+                if not t:
+                    self.reply(rid, error={"code": -32600, "message": f"thread not found: {params.get('threadId')}"})
+                    return
+            else:
+                t = THREADS.new(str(params.get("cwd") or self.cwd))
+            pub = Threads.public(t)
+            self.reply(rid, {"thread": pub, "model": MODEL, "modelProvider": "fake", "cwd": t.get("cwd"),
+                             "approvalPolicy": params.get("approvalPolicy") or "never",
+                             "sandbox": {"type": params.get("sandbox") or "workspace-write"}})
+            if method == "thread/start":
+                self.note("thread/started", {"thread": pub})
+        elif method == "turn/start":
+            tid = str(params.get("threadId") or "")
+            if not THREADS.get(tid):
+                self.reply(rid, error={"code": -32600, "message": f"thread not found: {tid}"})
+                return
+            text = " ".join(str(p.get("text") or "") for p in params.get("input") or [] if isinstance(p, dict))
+            turn_id = STATE.next_id("turn-fake-", 6)
+            self.turns[turn_id] = {"interrupted": threading.Event(), "thread": tid}
+            self.reply(rid, {"turn": {"id": turn_id, "status": "inProgress", "items": [], "error": None}})
+            threading.Thread(target=self.turn, args=(tid, turn_id, text, str(params.get("cwd") or self.cwd)),
+                             daemon=True).start()
+        elif method == "turn/interrupt":
+            t = self.turns.get(str(params.get("turnId") or ""))
+            if t:
+                t["interrupted"].set()
+            self.reply(rid, {})
+        elif method == "thread/list":
+            cwd = os.path.realpath(str(params.get("cwd") or "")) if params.get("cwd") else ""
+            rows = [t for t in THREADS.all() if not cwd or os.path.realpath(t.get("cwd") or "") == cwd]
+            rows.sort(key=lambda t: t.get("updatedAt") or 0, reverse=True)
+            limit = int(params.get("limit") or 40)
+            self.reply(rid, {"data": [Threads.public(t) for t in rows[:limit]], "nextCursor": None})
+        elif method == "thread/read":
+            t = THREADS.get(str(params.get("threadId") or ""))
+            if not t:
+                self.reply(rid, error={"code": -32600, "message": "thread not found"})
+            else:
+                self.reply(rid, {"thread": Threads.public(t, turns=bool(params.get("includeTurns")))})
+        elif method == "thread/delete":
+            ok = THREADS.delete(str(params.get("threadId") or ""))
+            self.reply(rid, {} if ok else None, None if ok else {"code": -32600, "message": "thread not found"})
+        else:
+            self.reply(rid, error={"code": -32601, "message": f"fake-codex: unsupported method {method}"})
+
+    # one scripted turn
+    def turn(self, tid: str, turn_id: str, text: str, cwd: str) -> None:
+        turn = self.turns[turn_id]
+        stop = turn["interrupted"]
+        d = L.directives(text)
+        delay = L.step_delay()
+        base = {"threadId": tid, "turnId": turn_id}
+        t = THREADS.get(tid) or {}
+        n = len(t.get("turns") or []) + 1
+        self.note("turn/started", {"threadId": tid, "turn": {"id": turn_id, "status": "inProgress", "items": [], "error": None}})
+        user_item = {"type": "userMessage", "id": f"{turn_id}-u", "content": [{"type": "text", "text": text}]}
+        self.note("item/started", {**base, "item": user_item})
+        self.note("item/completed", {**base, "item": user_item})
+
+        mode = (os.environ.get("FAKE_CODEX_REASONING") or "both").lower()
+        think = L.thinking(text)
+        rs = {"type": "reasoning", "id": f"{turn_id}-rs", "summary": [], "content": []}
+        self.note("item/started", {**base, "item": rs})
+        if mode in ("both", "deltas"):
+            for chunk in L.words(think):
+                self.note("item/reasoning/summaryTextDelta", {**base, "itemId": rs["id"], "delta": chunk, "summaryIndex": 0})
+                time.sleep(delay / 3)
+        self.note("item/completed", {**base, "item": {**rs, "summary": [think] if mode in ("both", "item") else []}})
+        time.sleep(delay)
+
+        status, reply, error = "completed", "", ""
+        if "error" in d:
+            error = "fake failure"
+        elif "tool" in d or "approval" in d:
+            call = f"{turn_id}-call"
+            item = {"type": "commandExecution", "id": call, "command": L.TOOL_COMMAND, "cwd": cwd, "status": "inProgress",
+                    "commandActions": [], "aggregatedOutput": None, "exitCode": None, "durationMs": None}
+            self.note("item/started", {**base, "item": item})
+            approved = True
+            if "approval" in d:
+                res = self.ask("item/commandExecution/requestApproval",
+                               {**base, "itemId": call, "command": L.TOOL_COMMAND, "cwd": cwd,
+                                "reason": "Fake Codex wants to run a command"})
+                decision = str((res or {}).get("decision") or "cancel")
+                approved = decision in ("accept", "acceptForSession", "approved")
+            if stop.is_set():
+                status = "interrupted"
+            elif approved:
+                time.sleep(delay)
+                self.note("item/commandExecution/outputDelta", {**base, "itemId": call, "delta": L.TOOL_OUTPUT})
+                time.sleep(delay)
+                self.note("item/completed", {**base, "item": {**item, "status": "completed", "aggregatedOutput": L.TOOL_OUTPUT,
+                                                               "exitCode": 0, "durationMs": int(delay * 2000)}})
+            else:
+                self.note("item/completed", {**base, "item": {**item, "status": "declined"}})
+                reply = f"{LABEL} reply {n}: the command was declined."
+        if status != "interrupted" and not error:
+            if not reply:
+                reply = L.slow_text(LABEL, n, text) if "slow" in d else L.answer(LABEL, n, text)
+            step = L.slow_plan()[1] if "slow" in d else delay / 2
+            msg = {"type": "agentMessage", "id": f"{turn_id}-msg", "text": ""}
+            self.note("item/started", {**base, "item": msg})
+            sent = ""
+            for chunk in L.words(reply):
+                if stop.is_set():
+                    status = "interrupted"
+                    break
+                self.note("item/agentMessage/delta", {**base, "itemId": msg["id"], "delta": chunk})
+                sent += chunk
+                time.sleep(step)
+            if status == "interrupted":
+                reply = sent
+            else:
+                self.note("item/completed", {**base, "item": {**msg, "text": reply}})
+        elif stop.is_set():
+            status = "interrupted"
+        if error:
+            status = "failed"
+            self.note("error", {**base, "error": {"message": error}, "willRetry": False})
+        usage = {"totalTokens": 120 + len(reply), "inputTokens": 100, "cachedInputTokens": 0,
+                 "outputTokens": 20 + len(reply), "reasoningOutputTokens": 10}
+        self.note("thread/tokenUsage/updated", {**base, "tokenUsage": {"total": usage, "last": usage, "modelContextWindow": 200000}})
+        THREADS.record_turn(tid, turn_id, text, reply, status)
+        self.note("turn/completed", {"threadId": tid, "turn": {"id": turn_id, "status": status, "items": [],
+                                                                "error": {"message": error} if error else None}})
+        self.turns.pop(turn_id, None)
+
+
+# ---------------------------------------------------------------- exec --json
+def exec_main(args: list[str]) -> int:
+    resume = ""
+    cwd = os.getcwd()
+    if args and args[0] == "resume":
+        # the thread id is the first positional (flags with values: -m M, -C DIR, --sandbox S)
+        vals = args[1:]
+        skip = set()
+        for i, a in enumerate(vals):
+            if a in ("-m", "--model", "-C", "--cd", "--sandbox", "-s"):
+                skip.add(i + 1)
+        rest = [a for i, a in enumerate(vals) if i not in skip and not a.startswith("-")]
+        resume = rest[0] if rest else ""
+    else:
+        for i, a in enumerate(args):
+            if a in ("-C", "--cd") and i + 1 < len(args):
+                cwd = args[i + 1]
+    prompt = sys.stdin.read() if (args and args[-1] == "-") else (args[-1] if args else "")
+    d = L.directives(prompt)
+    if resume:
+        t = THREADS.get(resume)
+        if not t:
+            print(f"Error: thread {resume} not found", file=sys.stderr)
+            return 1
+    else:
+        t = THREADS.new(cwd)
+    tid = t["id"]
+    n = len(t.get("turns") or []) + 1
+    turn_id = STATE.next_id("turn-fake-", 6)
+    L.emit({"type": "thread.started", "thread_id": tid})
+    L.emit({"type": "turn.started"})
+    L.emit({"type": "item.completed", "item": {"id": "item_0", "type": "reasoning", "text": L.thinking(prompt)}})
+    if "error" in d:
+        THREADS.record_turn(tid, turn_id, prompt, "", "failed")
+        L.emit({"type": "turn.failed", "error": {"message": "fake failure"}})
+        print("fake failure", file=sys.stderr)
+        return 1
+    if "tool" in d or "approval" in d:
+        item = {"id": "item_1", "type": "command_execution", "command": f"bash -lc '{L.TOOL_COMMAND}'",
+                "aggregated_output": "", "exit_code": None, "status": "in_progress"}
+        L.emit({"type": "item.started", "item": item})
+        time.sleep(L.step_delay())
+        L.emit({"type": "item.completed", "item": {**item, "aggregated_output": L.TOOL_OUTPUT, "exit_code": 0, "status": "completed"}})
+    if "slow" in d:
+        count, step = L.slow_plan()
+        time.sleep(count * step)
+        reply = L.slow_text(LABEL, n, prompt)
+    else:
+        reply = L.answer(LABEL, n, prompt)
+    L.emit({"type": "item.completed", "item": {"id": "item_2", "type": "agent_message", "text": reply}})
+    L.emit({"type": "turn.completed", "usage": {"input_tokens": 100, "cached_input_tokens": 0, "output_tokens": 20 + len(reply)}})
+    THREADS.record_turn(tid, turn_id, prompt, reply, "completed")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    STATE.log_call(argv)
+    if not argv or argv[0] in ("--version", "-V"):
+        print("codex-cli 0.0.0-fake")
+        return 0
+    if argv[0] == "app-server":
+        AppServer().run()
+        return 0
+    if argv[0] == "exec":
+        return exec_main(argv[1:])
+    if argv[:2] == ["login", "status"]:
+        print("Logged in using an API key - fake-****")
+        return 0
+    print(f"fake-codex: unsupported command {' '.join(argv)[:200]}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

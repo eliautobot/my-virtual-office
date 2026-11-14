@@ -1,0 +1,204 @@
+[
+ {
+  "type": "run.status",
+  "phase": "Thinking"
+ },
+ {
+  "type": "native",
+  "ev": {
+   "op": "title",
+   "text": "hello there [[think]] [[long:1]]"
+  }
+ },
+ {
+  "type": "run.delta",
+  "thinking": "Let ",
+  "tat": 0
+ },
+ {
+  "type": "run.delta",
+  "thinking": "me ",
+  "tat": 4
+ },
+ {
+  "type": "run.delta",
+  "thinking": "think ",
+  "tat": 7
+ },
+ {
+  "type": "run.delta",
+  "thinking": "about ",
+  "tat": 13
+ },
+ {
+  "type": "run.delta",
+  "thinking": "this ",
+  "tat": 19
+ },
+ {
+  "type": "run.delta",
+  "thinking": "step ",
+  "tat": 24
+ },
+ {
+  "type": "run.delta",
+  "thinking": "by ",
+  "tat": 29
+ },
+ {
+  "type": "run.delta",
+  "thinking": "step.",
+  "tat": 32
+ },
+ {
+  "type": "run.delta",
+  "text": "Stub reply 4",
+  "at": 0
+ },
+ {
+  "type": "run.delta",
+  "text": "14 to: hello",
+  "at": 12
+ },
+ {
+  "type": "run.delta",
+  "text": " there\n\nPara",
+  "at": 24
+ },
+ {
+  "type": "run.delta",
+  "text": "graph 1: The",
+  "at": 36
+ },
+ {
+  "type": "run.delta",
+  "text": " quick brown",
+  "at": 48
+ },
+ {
+  "type": "run.delta",
+  "text": " fox jumps o",
+  "at": 60
+ },
+ {
+  "type": "run.delta",
+  "text": "ver the lazy",
+  "at": 72
+ },
+ {
+  "type": "run.delta",
+  "text": " dog. The qu",
+  "at": 84
+ },
+ {
+  "type": "run.delta",
+  "text": "ick brown fo",
+  "at": 96
+ },
+ {
+  "type": "run.delta",
+  "text": "x jumps over",
+  "at": 108
+ },
+ {
+  "type": "run.delta",
+  "text": " the lazy do",
+  "at": 120
+ },
+ {
+  "type": "run.delta",
+  "text": "g. The quick",
+  "at": 132
+ },
+ {
+  "type": "run.delta",
+  "text": " brown fox j",
+  "at": 144
+ },
+ {
+  "type": "run.delta",
+  "text": "umps over th",
+  "at": 156
+ },
+ {
+  "type": "run.delta",
+  "text": "e lazy dog. ",
+  "at": 168
+ },
+ {
+  "type": "run.delta",
+  "text": "The quick br",
+  "at": 180
+ },
+ {
+  "type": "run.delta",
+  "text": "own fox jump",
+  "at": 192
+ },
+ {
+  "type": "run.delta",
+  "text": "s over the l",
+  "at": 204
+ },
+ {
+  "type": "run.delta",
+  "text": "azy dog. The",
+  "at": 216
+ },
+ {
+  "type": "run.delta",
+  "text": " quick brown",
+  "at": 228
+ },
+ {
+  "type": "run.delta",
+  "text": " fox jumps o",
+  "at": 240
+ },
+ {
+  "type": "run.delta",
+  "text": "ver the lazy",
+  "at": 252
+ },
+ {
+  "type": "run.delta",
+  "text": " dog. The qu",
+  "at": 264
+ },
+ {
+  "type": "run.delta",
+  "text": "ick brown fo",
+  "at": 276
+ },
+ {
+  "type": "run.delta",
+  "text": "x jumps over",
+  "at": 288
+ },
+ {
+  "type": "run.delta",
+  "text": " the lazy do",
+  "at": 300
+ },
+ {
+  "type": "run.delta",
+  "text": "g.",
+  "at": 312
+ },
+ {
+  "type": "usage.update",
+  "used": 14443,
+  "size": 256000
+ },
+ {
+  "type": "run.end",
+  "status": "ok",
+  "text": "Stub reply 414 to: hello there\n\nParagraph 1: The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog. The quick brown fox jumps over the lazy dog.",
+  "ms": 0,
+  "model": "custom:stub-1",
+  "thinking": "Let me think about this step by step.",
+  "tokensIn": 14443,
+  "tokensOut": 79,
+  "title": "hello there [[think]] [[long:1]]"
+ }
+]

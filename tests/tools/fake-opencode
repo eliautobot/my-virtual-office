@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""Fake OpenCode CLI for office tests (never a real account, never a model).
+
+Emulates what app/providers/opencode.py runs and parses:
+  opencode run --format json [--agent A] [--session S] [--model M] [--auto] <prompt> [--file P]...
+      JSON lines like the real CLI: step_start, tool_use {part:{type:'tool', tool, callID, state:{status, input,
+      output, title}}}, text {part:{type:'text', text}} (one per finished text part; a [[slow]] answer comes as many
+      parts over time), step_finish {part:{tokens}}; a failure is an `error` event and exit 1. Every event carries
+      sessionID. An unknown --session fails.
+  opencode session list --format json --max-count N    [{id, title, updated, created, directory, projectID}]
+  opencode export <id>                                 {info:{...}, messages:[{info:{role}, parts:[{type:'text', text}]}]}
+  opencode session delete <id>
+  opencode --version
+Scripted by directives in the message, see fake_cli_lib.py ([[tool]], [[slow]], [[error]]). Stop = SIGTERM of the group.
+State: $XDG_DATA_HOME/opencode/fake (else ~/.local/share/opencode/fake).
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import fake_cli_lib as L  # noqa: E402
+
+LABEL = "Fake OpenCode"
+DATA = os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share")
+STATE = L.State(os.path.join(DATA, "opencode", "fake"))
+
+
+def load(sid: str):
+    return STATE.load(f"sessions/{sid}.json", None) if sid else None
+
+
+def save(s: dict) -> None:
+    STATE.save(f"sessions/{s['id']}.json", s)
+
+
+def all_sessions() -> list[dict]:
+    root = os.path.dirname(STATE.path("sessions", "x"))
+    rows = []
+    for name in os.listdir(root):
+        if name.endswith(".json"):
+            s = STATE.load(f"sessions/{name}", None)
+            if isinstance(s, dict):
+                rows.append(s)
+    rows.sort(key=lambda s: s.get("updated") or 0, reverse=True)
+    return rows
+
+
+def event(kind: str, sid: str, part: dict | None = None, **extra) -> None:
+    obj = {"type": kind, "timestamp": L.now_ms(), "sessionID": sid}
+    if part is not None:
+        obj["part"] = {"sessionID": sid, **part}
+    obj.update(extra)
+    L.emit(obj)
+
+
+def run(args: list[str]) -> int:
+    opts, pos, files = {}, [], []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("--format", "--agent", "--session", "-s", "--model", "-m") and i + 1 < len(args):
+            opts[a] = args[i + 1]
+            i += 2
+            continue
+        if a == "--file" and i + 1 < len(args):
+            files.append(args[i + 1])
+            i += 2
+            continue
+        if a.startswith("-"):
+            opts[a] = True
+        else:
+            pos.append(a)
+        i += 1
+    prompt = " ".join(pos)
+    sid = str(opts.get("--session") or opts.get("-s") or "")
+    if sid:
+        s = load(sid)
+        if not s:
+            event("error", sid, error={"name": "NotFoundError", "data": {"message": f"Session not found: {sid}"}})
+            return 1
+    else:
+        sid = STATE.next_id("ses_fake", 6)
+        s = {"id": sid, "title": L.clean(prompt)[:80] or "New session", "directory": os.path.realpath(os.getcwd()),
+             "projectID": "fake-project", "created": L.now_ms(), "updated": L.now_ms(), "messages": []}
+    n = sum(1 for m in s["messages"] if m.get("role") == "user") + 1
+    d = L.directives(prompt)
+    delay = L.step_delay()
+    s["messages"].append({"role": "user", "text": prompt, "files": [os.path.basename(f) for f in files]})
+    s["updated"] = L.now_ms()
+    save(s)
+    msg_id = f"msg_fake{n:04d}"
+    event("step_start", sid, {"id": f"prt_{msg_id}_s", "messageID": msg_id, "type": "step-start"})
+    if "error" in d:
+        event("error", sid, error={"name": "UnknownError", "data": {"message": "fake failure"}})
+        return 1
+    if "tool" in d:
+        time.sleep(delay)
+        event("tool_use", sid, {"id": f"prt_{msg_id}_t", "messageID": msg_id, "type": "tool", "callID": f"call_{msg_id}",
+                                "tool": "bash", "state": {"status": "completed",
+                                                          "input": {"command": L.TOOL_COMMAND, "description": "Print a test line"},
+                                                          "output": L.TOOL_OUTPUT, "title": L.TOOL_COMMAND,
+                                                          "metadata": {"exit": 0},
+                                                          "time": {"start": L.now_ms() - 5, "end": L.now_ms()}}})
+    # --file names show in the answer unless the office already listed them in the message
+    note = "" if (not files or L.attachments(prompt)) else "files: " + ", ".join(os.path.basename(f) for f in files)
+    reply = L.answer(LABEL, n, prompt) + (f" ({note})" if note else "")
+    parts = [reply]
+    if "slow" in d:
+        count, step = L.slow_plan()
+        extra = [f"w{i}" for i in range(1, count + 1)]
+        parts += [" ".join(extra[k:k + 5]) for k in range(0, len(extra), 5)]
+    else:
+        step = delay
+    texts = []
+    for k, text in enumerate(parts):
+        time.sleep(step * (5 if "slow" in d and k else 1))
+        event("text", sid, {"id": f"prt_{msg_id}_x{k}", "messageID": msg_id, "type": "text", "text": text,
+                            "time": {"start": L.now_ms(), "end": L.now_ms()}})
+        texts.append(text)
+        s["messages"].append({"role": "assistant", "text": text}) if k == 0 else s["messages"][-1].update(
+            text=s["messages"][-1]["text"] + "\n" + text)
+        save(s)
+    event("step_finish", sid, {"id": f"prt_{msg_id}_f", "messageID": msg_id, "type": "step-finish", "reason": "stop",
+                               "cost": 0, "tokens": {"input": 100, "output": 20 + len(reply), "reasoning": 0,
+                                                     "cache": {"read": 0, "write": 0}}})
+    return 0
+
+
+def export(sid: str) -> int:
+    s = load(sid)
+    if not s:
+        print(f"Session not found: {sid}", file=sys.stderr)
+        return 1
+    msgs = []
+    for k, m in enumerate(s["messages"]):
+        mid = f"msg_fake_x{k:04d}"
+        msgs.append({"info": {"id": mid, "sessionID": sid, "role": m["role"], "time": {"created": s["created"] + k}},
+                     "parts": [{"id": f"prt_{mid}", "sessionID": sid, "messageID": mid, "type": "text", "text": m["text"]}]})
+    print(json.dumps({"info": {k: s[k] for k in ("id", "title", "directory", "projectID")} |
+                      {"time": {"created": s["created"], "updated": s["updated"]}}, "messages": msgs}))
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    STATE.log_call(argv)
+    if not argv or argv[0] in ("--version", "-v"):
+        print("0.0.0-fake")
+        return 0
+    if argv[0] == "run":
+        return run(argv[1:])
+    if argv[:2] == ["session", "list"]:
+        limit = 50
+        if "--max-count" in argv:
+            try:
+                limit = int(argv[argv.index("--max-count") + 1])
+            except (ValueError, IndexError):
+                pass
+        rows = [{"id": s["id"], "title": s["title"], "updated": s["updated"], "created": s["created"],
+                 "projectID": s.get("projectID"), "directory": s.get("directory")} for s in all_sessions()[:limit]]
+        print(json.dumps(rows))
+        return 0
+    if argv[:2] == ["session", "delete"] and len(argv) > 2:
+        if STATE.remove(f"sessions/{argv[2]}.json"):
+            print(f"Session {argv[2]} deleted")
+            return 0
+        print(f"Session not found: {argv[2]}", file=sys.stderr)
+        return 1
+    if argv[0] == "export" and len(argv) > 1:
+        return export(argv[1])
+    print(f"fake-opencode: unsupported command {' '.join(argv)[:200]}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -242,7 +242,7 @@
     /** Animate a task card spawn */
     function animateTaskSpawn(taskId) {
         requestAnimationFrame(() => {
-            const card = document.getElementById(`task-${taskId}`);
+            const card = findTaskCard(taskId);
             if (card) {
                 card.classList.add('anim-spawn');
                 card.addEventListener('animationend', () => card.classList.remove('anim-spawn'), { once: true });
@@ -253,7 +253,7 @@
     /** Animate a task card deletion (returns promise that resolves when animation done) */
     function animateTaskDelete(taskId) {
         return new Promise(resolve => {
-            const card = document.getElementById(`task-${taskId}`);
+            const card = findTaskCard(taskId);
             if (card) {
                 card.classList.add('anim-delete');
                 card.addEventListener('animationend', () => resolve(), { once: true });
@@ -268,7 +268,7 @@
     /** Animate a task completion (sparkle + confetti + score) */
     function animateTaskComplete(taskId, scoreResult) {
         requestAnimationFrame(() => {
-            const card = document.getElementById(`task-${taskId}`);
+            const card = findTaskCard(taskId);
             if (card) {
                 card.classList.add('anim-complete');
                 const rect = card.getBoundingClientRect();
@@ -280,10 +280,11 @@
                 }
                 // Gamified toast
                 if (scoreResult && scoreResult.pointsAwarded) {
-                    const agentInfo = state.agentRoster.find(a => a.key === scoreResult.agent);
-                    const name = agentInfo ? agentInfo.name : scoreResult.agent;
+                    const agentInfo = resolveAgent(scoreResult.agent);
+                    const name = agentInfo ? agentInfo.name : 'An agent';
                     const emoji = agentInfo ? agentInfo.emoji : '🤖';
-                    toast(`${emoji} ${name} earned +${scoreResult.pointsAwarded} XP! ${scoreResult.streak > 1 ? '🔥 Streak x' + scoreResult.streak : ''}`, 'success');
+                    const streak = num(scoreResult.streak);
+                    toast(`${emoji} ${name} earned +${num(scoreResult.pointsAwarded)} XP! ${streak > 1 ? '🔥 Streak x' + streak : ''}`, 'success');
                 } else {
                     toast('✅ Task completed!', 'success');
                 }
@@ -304,19 +305,29 @@
                 container.innerHTML = '<div class="proj-lb-empty">No scores yet — complete tasks to earn XP!</div>';
                 return;
             }
-            const top5 = lb.slice(0, 5);
-            container.innerHTML = top5.map((entry, i) => {
-                const agent = state.agentRoster.find(a => a.key === entry.agent);
-                const emoji = agent ? agent.emoji : '🤖';
-                const name = agent ? agent.name : entry.agent;
-                return `<div class="proj-lb-row">
+            const { known, other } = groupScores(lb);
+            const top5 = known.filter(row => row.score > 0).slice(0, 5);
+            if (top5.length === 0 && !(other && other.score > 0)) {
+                container.innerHTML = '<div class="proj-lb-empty">No scores yet — complete tasks to earn XP!</div>';
+                return;
+            }
+            const rows = top5.map((row, i) => `<div class="proj-lb-row">
                     <span class="proj-lb-rank rank-${i + 1}">${i === 0 ? '👑' : i === 1 ? '🥈' : i === 2 ? '🥉' : '#' + (i + 1)}</span>
-                    <span class="proj-lb-emoji">${emoji}</span>
-                    <span class="proj-lb-name">${escHtml(name)}</span>
-                    <span class="proj-lb-score">${entry.score} XP</span>
-                    ${entry.streak > 1 ? `<span class="proj-streak">🔥${entry.streak}</span>` : ''}
-                </div>`;
-            }).join('');
+                    <span class="proj-lb-emoji">${escHtml(row.emoji)}</span>
+                    <span class="proj-lb-name">${escHtml(row.name)}</span>
+                    <span class="proj-lb-score">${row.score} XP</span>
+                    ${row.streak > 1 ? `<span class="proj-streak">🔥${row.streak}</span>` : ''}
+                    ${trophyBadge(row)}
+                </div>`);
+            if (other && other.score > 0) {
+                rows.push(`<div class="proj-lb-row proj-lb-other" title="Agents that are not in this office">
+                    <span class="proj-lb-rank">·</span>
+                    <span class="proj-lb-emoji">👥</span>
+                    <span class="proj-lb-name">${escHtml(otherAgentsLabel(other.count))}</span>
+                    <span class="proj-lb-score">${other.score} XP</span>
+                </div>`);
+            }
+            container.innerHTML = rows.join('');
         } catch (e) { /* silent */ }
     }
 
@@ -340,49 +351,196 @@
             // Filter to agents in this project
             const assignees = new Set();
             state.currentProject.tasks.forEach(t => { if (t.assignee) assignees.add(t.assignee); });
-            const relevant = lb.filter(e => assignees.has(e.agent));
+            const relevant = lb.filter(e => e && assignees.has(e.agent));
             if (relevant.length === 0) { el.remove(); return; }
-            el.innerHTML = relevant.slice(0, 5).map((entry, i) => {
-                const agent = state.agentRoster.find(a => a.key === entry.agent);
-                const emoji = agent ? agent.emoji : '🤖';
-                const name = agent ? agent.name : entry.agent;
-                return `<div class="proj-scoreboard-item ${i === 0 ? 'rank-1' : ''}">
-                    <span class="sb-emoji">${emoji}</span>
-                    <span>${escHtml(name)}</span>
-                    <span class="sb-score">${entry.score} XP</span>
-                    ${entry.streak > 1 ? `<span class="proj-streak">🔥${entry.streak}</span>` : ''}
-                </div>`;
-            }).join('');
+            const { known, other } = groupScores(relevant);
+            const items = known.slice(0, 5).map((row, i) => `<div class="proj-scoreboard-item ${i === 0 ? 'rank-1' : ''}">
+                    <span class="sb-emoji">${escHtml(row.emoji)}</span>
+                    <span>${escHtml(row.name)}</span>
+                    <span class="sb-score">${row.score} XP</span>
+                    ${row.streak > 1 ? `<span class="proj-streak">🔥${row.streak}</span>` : ''}
+                    ${trophyBadge(row)}
+                </div>`);
+            if (other) {
+                items.push(`<div class="proj-scoreboard-item proj-scoreboard-other" title="Agents that are not in this office">
+                    <span class="sb-emoji">👥</span>
+                    <span>${escHtml(otherAgentsLabel(other.count))}</span>
+                    <span class="sb-score">${other.score} XP</span>
+                </div>`);
+            }
+            el.innerHTML = items.join('');
         } catch (e) { el.remove(); }
     }
 
     // ── HELPERS ───────────────────────────────────────────────────
+    // Everything rendered below comes from the projects API, which agents can
+    // write to. Text goes through escHtml; values that land in class names,
+    // style= or value= go through a fixed allow-list first.
+    const STATUS_VALUES = ['active', 'paused', 'completed', 'archived'];
+    const PRIORITY_VALUES = ['critical', 'high', 'medium', 'low'];
+    const REVIEW_STATUS_VALUES = ['pass', 'needs_more_work', 'did_not_pass', 'requires_user_review', 'pending'];
+    const DEFAULT_COLOR = '#6c757d';
+
+    function safeStatus(v) { return STATUS_VALUES.includes(v) ? v : 'active'; }
+    function safePriority(v) { return PRIORITY_VALUES.includes(v) ? v : 'medium'; }
+    function safeReviewStatus(v) { return REVIEW_STATUS_VALUES.includes(v) ? v : 'pending'; }
+    function safeColor(c, fallback = DEFAULT_COLOR) {
+        return (typeof c === 'string' && /^#[0-9a-fA-F]{3,8}$/.test(c)) ? c : fallback;
+    }
+    /** Color as #rrggbb so an alpha suffix can be appended safely. */
+    function hexBase(c) {
+        const s = safeColor(c);
+        if (s.length === 4 || s.length === 5) return '#' + s[1] + s[1] + s[2] + s[2] + s[3] + s[3];
+        return s.slice(0, 7);
+    }
+    /** yyyy-mm-dd for <input type=date value=...>, or '' when the stored value is not an ISO date. */
+    function safeDateValue(v) {
+        if (typeof v !== 'string') return '';
+        const s = v.slice(0, 10);
+        return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : '';
+    }
+    function num(v) {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : 0;
+    }
+    function cssEsc(s) {
+        if (window.CSS && typeof CSS.escape === 'function') return CSS.escape(String(s));
+        return String(s).replace(/[^a-zA-Z0-9_-]/g, ch => '\\' + ch.charCodeAt(0).toString(16) + ' ');
+    }
+
+    // DOM lookups by data attribute (ids from the server never become DOM ids).
+    function findCol(colId) {
+        return document.querySelector(`#projectsModal .proj-col[data-col-id="${cssEsc(colId)}"]`);
+    }
+    function findColPart(colId, selector) {
+        const col = findCol(colId);
+        return col ? col.querySelector(selector) : null;
+    }
+    function findTaskCard(taskId) {
+        return document.querySelector(`#projectsModal .proj-task-card[data-task-id="${cssEsc(taskId)}"]`);
+    }
+
+    // ── AGENT NAMES ───────────────────────────────────────────────
+    /** Find the office agent for a stored agent id (assignee, score owner). */
+    function resolveAgent(id) {
+        if (!id) return null;
+        const key = String(id);
+        const roster = state.agentRoster || [];
+        const match = roster.find(a => a && (a.key === key || a.agentId === key || a.statusKey === key || a.id === key))
+            || roster.find(a => a && Array.isArray(a.selectionAliases) && a.selectionAliases.includes(key));
+        if (!match) return null;
+        const name = String(match.name || match.key || match.statusKey || match.id || '').trim();
+        if (!name) return null;
+        return { key: agentValue(match), name, emoji: String(match.emoji || '🤖') };
+    }
+    /** The id the server expects for an assignee picked from the roster. */
+    function agentValue(a) {
+        return String(a.key || a.statusKey || a.id || a.agentId || '');
+    }
+    function otherAgentsLabel(count) {
+        return count === 1 ? 'Other agent' : `Other agents (${count})`;
+    }
+    /** "🤖 Name" for a known agent, a neutral label for ids outside this office. */
+    function agentLabel(id) {
+        const agent = resolveAgent(id);
+        return agent ? `${agent.emoji} ${agent.name}` : 'Other agent';
+    }
+    /**
+     * Merge leaderboard entries by office agent. Ids that are not in this
+     * office are summed into one "other" bucket instead of showing raw ids.
+     */
+    function trophyBadge(row) {
+        const n = Math.floor(num(row && row.titles));
+        if (n <= 0) return '';
+        const label = n === 1 ? '1 tournament title' : `${n} tournament titles`;
+        return `<span class="proj-streak proj-trophies" title="${label}" aria-label="${label}">🏆${n}</span>`;
+    }
+    function groupScores(entries) {
+        const byKey = new Map();
+        let other = null;
+        (entries || []).forEach(entry => {
+            if (!entry) return;
+            const score = num(entry.score);
+            const streak = num(entry.streak);
+            // Office life tournaments: titles won (games never change XP).
+            const titles = num(entry.games && entry.games.titles);
+            const agent = resolveAgent(entry.agent);
+            if (!agent) {
+                if (!other) other = { score: 0, count: 0 };
+                other.score += score;
+                other.count += 1;
+                return;
+            }
+            const row = byKey.get(agent.key);
+            if (row) {
+                row.score += score;
+                row.streak = Math.max(row.streak, streak);
+                row.titles += titles;
+            } else {
+                byKey.set(agent.key, { name: agent.name, emoji: agent.emoji, score, streak, titles });
+            }
+        });
+        const known = [...byKey.values()].sort((a, b) => b.score - a.score);
+        return { known, other };
+    }
+
+    // ── DIALOGS (VOUI with native fallback) ───────────────────────
+    function trackDialog(promise) {
+        state.dialogDepth = (state.dialogDepth || 0) + 1;
+        const done = () => { state.dialogDepth = Math.max(0, (state.dialogDepth || 1) - 1); };
+        return promise.then(v => { done(); return v; }, err => { done(); throw err; });
+    }
+    function uiConfirm(opts) {
+        const ui = window.VOUI;
+        if (ui && typeof ui.confirm === 'function') {
+            return trackDialog(Promise.resolve().then(() => ui.confirm(opts)).then(Boolean, () => false));
+        }
+        return Promise.resolve(window.confirm(opts.body ? `${opts.title}\n\n${opts.body}` : opts.title));
+    }
+    function uiPrompt(opts) {
+        const ui = window.VOUI;
+        if (ui && typeof ui.prompt === 'function') {
+            return trackDialog(Promise.resolve().then(() => ui.prompt(opts)).then(v => (v == null ? null : String(v)), () => null));
+        }
+        return Promise.resolve(window.prompt(opts.label || opts.title, opts.value || ''));
+    }
+
     function priorityColor(p) {
         return { critical: '#dc3545', high: '#fd7e14', medium: '#0d6efd', low: '#6c757d' }[p] || '#6c757d';
     }
     function formatDate(iso) {
         if (!iso) return '';
-        try {
-            const d = new Date(iso);
-            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-        } catch { return iso; }
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     }
     function isOverdue(iso) {
         if (!iso) return false;
-        return new Date(iso) < new Date();
+        const d = new Date(iso);
+        return !isNaN(d.getTime()) && d < new Date();
     }
     function timeAgo(iso) {
         if (!iso) return '';
         const diff = Date.now() - new Date(iso).getTime();
+        if (!Number.isFinite(diff)) return '';
         const s = Math.floor(diff / 1000);
         if (s < 60) return 'just now';
         if (s < 3600) return Math.floor(s / 60) + 'm ago';
         if (s < 86400) return Math.floor(s / 3600) + 'h ago';
         return Math.floor(s / 86400) + 'd ago';
     }
+    // Pixel icon from the sprite in index.html (decorative: the button keeps its text or aria-label).
+    function icon(id) {
+        return `<svg class="vo-icon" aria-hidden="true"><use href="#i-${id}"/></svg>`;
+    }
     function escHtml(s) {
-        if (!s) return '';
-        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        if (s === null || s === undefined) return '';
+        return String(s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
     function simpleMarkdown(text) {
         if (!text) return '';
@@ -393,6 +551,10 @@
             .replace(/\n/g, '<br>');
     }
     function toast(msg, type = 'info') {
+        const ui = window.VOUI;
+        if (ui && typeof ui.toast === 'function') {
+            try { ui.toast(msg, { kind: type }); return; } catch (e) { /* fall back to the local toast */ }
+        }
         let el = document.getElementById('proj-toast');
         if (!el) {
             el = document.createElement('div');
@@ -412,44 +574,129 @@
     function getMainContent() { return document.getElementById('proj-main-content'); }
 
     // ── OPEN / CLOSE ──────────────────────────────────────────────
-    window.openProjectsManager = function () {
+    function isModalOpen() {
+        const modal = getModal();
+        return !!(modal && !modal.classList.contains('hidden'));
+    }
+
+    /** First control worth focusing inside the board (skips hidden ones). */
+    function firstControl(root) {
+        if (!root) return null;
+        const candidates = root.querySelectorAll('button, [href], input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])');
+        for (const el of candidates) {
+            if (el.disabled || el.closest('.hidden')) continue;
+            if (el.offsetParent === null && getComputedStyle(el).position !== 'fixed') continue;
+            return el;
+        }
+        return null;
+    }
+
+    function focusFirstInMain() {
+        const mc = getMainContent();
+        const target = firstControl(mc) || mc;
+        if (target && typeof target.focus === 'function') target.focus({ preventScroll: true });
+    }
+
+    /** Open the Projects window; `{ projectId }` opens that project's board directly. */
+    function openProjectsManager(opts) {
         const modal = getModal();
         if (!modal) return;
+        ensureBound();
+        const projectId = opts && typeof opts === 'object' && typeof opts.projectId === 'string' ? opts.projectId : '';
+        const wasOpen = isModalOpen();
+        if (!wasOpen) {
+            const active = document.activeElement;
+            state.opener = active && active !== document.body && !modal.contains(active) ? active : null;
+        }
         modal.classList.remove('hidden');
-        loadAgentRoster();
-        showListView();
-        refreshLeaderboard();
-    };
+        const mc = getMainContent();
+        if (mc && !mc.hasAttribute('tabindex')) mc.setAttribute('tabindex', '-1');
+        const listReady = projectId ? openProject(projectId) : showListView();
+        if (!wasOpen) {
+            const ui = window.VOUI;
+            let handled = false;
+            if (ui && typeof ui.openWindow === 'function') {
+                try {
+                    // onClose: VOUI's Escape and scrim close the topmost layer, not the whole board.
+                    ui.openWindow(modal, { opener: state.opener, initialFocus: mc, onClose: closeTopLayer });
+                    handled = true;
+                } catch (e) { /* fall back below */ }
+            }
+            if (!handled && mc) mc.focus({ preventScroll: true });
+            // Move focus to the first real control once the list has rendered,
+            // unless the user already moved it somewhere else.
+            Promise.resolve(listReady).then(() => {
+                if (!isModalOpen()) return;
+                const active = document.activeElement;
+                if (!active || active === document.body || active === mc) focusFirstInMain();
+            });
+        }
+        loadAgentRoster().then(() => refreshLeaderboard());
+    }
+    window.openProjectsManager = openProjectsManager;
 
-    window.closeProjectsModal = function () {
+    function closeProjectsModal() {
         const modal = getModal();
-        if (modal) modal.classList.add('hidden');
+        if (!modal) return;
+        const wasOpen = isModalOpen();
+        hideFormModal();
         closeDetailPanel();
-    };
+        stopWorkflowPolling();
+        modal.classList.add('hidden');
+        if (!wasOpen) return;
+        const ui = window.VOUI;
+        if (ui && typeof ui.closeWindow === 'function') {
+            try { ui.closeWindow(modal); } catch (e) { /* ignore */ }
+        }
+        const opener = state.opener;
+        state.opener = null;
+        const active = document.activeElement;
+        if (opener && opener.isConnected && typeof opener.focus === 'function'
+            && (!active || active === document.body || modal.contains(active))) {
+            opener.focus({ preventScroll: true });
+        }
+    }
+    window.closeProjectsModal = closeProjectsModal;
 
     async function loadAgentRoster() {
         try {
             const d = await api.getAgents();
-            state.agentRoster = (d.agents || []);
-        } catch (e) { /* non-fatal */ }
+            const agents = Array.isArray(d && d.agents) ? d.agents : [];
+            if (agents.length) { state.agentRoster = agents; return; }
+        } catch (e) { /* try the newer endpoint below */ }
+        try {
+            const r = await fetch('/api/agents');
+            const d = await r.json();
+            if (Array.isArray(d && d.agents)) state.agentRoster = d.agents;
+        } catch (e) { /* non-fatal: names fall back to "Other agent" */ }
     }
 
     // ── LIST VIEW ─────────────────────────────────────────────────
+    /** Each view change gets a token; a slow response for an older view is dropped. */
+    function nextViewToken() {
+        state.viewSeq = (state.viewSeq || 0) + 1;
+        return state.viewSeq;
+    }
+    function isCurrentView(token) { return token === state.viewSeq; }
+
     async function showListView() {
+        const token = nextViewToken();
         state.view = 'list';
-        state.currentProject = null;
         closeDetailPanel();
+        state.currentProject = null;
+        stopWorkflowPolling();
         const mc = getMainContent();
         if (!mc) return;
         mc.innerHTML = renderListSkeleton();
         try {
             const d = await api.listProjects();
-            state.projects = d.projects || [];
+            if (!isCurrentView(token)) return;
+            state.projects = Array.isArray(d && d.projects) ? d.projects : [];
             mc.innerHTML = renderListView();
-            bindListEvents();
             updateSidebar();
         } catch (e) {
-            mc.innerHTML = `<div class="proj-loading"><div>⚠️ Failed to load projects</div><div style="font-size:10px;color:#555">${escHtml(String(e))}</div></div>`;
+            if (!isCurrentView(token)) return;
+            mc.innerHTML = `<div class="proj-loading"><div>⚠️ Failed to load projects</div><div class="proj-loading-detail">${escHtml(String(e))}</div></div>`;
         }
     }
 
@@ -457,178 +704,225 @@
         return `<div class="proj-loading"><div class="proj-spinner"></div><div>Loading projects…</div></div>`;
     }
 
-    function renderListView() {
+    function filteredProjects() {
         const { filters } = state;
-        let projects = [...state.projects];
+        let projects = state.projects.filter(p => p && typeof p === 'object');
 
         // Filter
         if (filters.status) projects = projects.filter(p => p.status === filters.status);
         if (filters.priority) projects = projects.filter(p => p.priority === filters.priority);
-        if (filters.tag) projects = projects.filter(p => (p.tags || []).includes(filters.tag));
+        if (filters.tag) projects = projects.filter(p => tagList(p.tags).includes(filters.tag));
         if (filters.search) {
             const q = filters.search.toLowerCase();
-            projects = projects.filter(p => p.title.toLowerCase().includes(q) || (p.description || '').toLowerCase().includes(q));
+            projects = projects.filter(p => String(p.title || '').toLowerCase().includes(q) || String(p.description || '').toLowerCase().includes(q));
         }
 
         // Sort
         const sortKey = filters.sort || 'updatedAt';
         projects.sort((a, b) => {
-            if (sortKey === 'title') return (a.title || '').localeCompare(b.title || '');
+            if (sortKey === 'title') return String(a.title || '').localeCompare(String(b.title || ''));
             if (sortKey === 'priority') {
                 const pOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-                return (pOrder[a.priority] || 2) - (pOrder[b.priority] || 2);
+                return (pOrder[safePriority(a.priority)]) - (pOrder[safePriority(b.priority)]);
             }
-            const aDate = a[sortKey] || a.updatedAt || '';
-            const bDate = b[sortKey] || b.updatedAt || '';
+            const aDate = String(a[sortKey] || a.updatedAt || '');
+            const bDate = String(b[sortKey] || b.updatedAt || '');
             return bDate.localeCompare(aDate);
         });
+        return projects;
+    }
 
+    function tagList(tags) {
+        return Array.isArray(tags) ? tags.filter(t => typeof t === 'string' || typeof t === 'number').map(String) : [];
+    }
+
+    function renderProjectGrid() {
+        const projects = filteredProjects();
+        if (projects.length === 0) return renderEmptyList();
+        // A "new project" tile closes the grid, so a board with one or two projects still looks finished.
+        const filtered = state.filters.search || state.filters.status || state.filters.priority || state.filters.tag;
+        return projects.map(renderProjectCard).join('') + (filtered ? '' :
+            `<button type="button" class="proj-card-new" data-action="new-project">${icon('plus')}<span>New project</span></button>`);
+    }
+
+    function selectedAttr(cond) { return cond ? 'selected' : ''; }
+
+    function renderListView() {
+        const { filters } = state;
         // Collect all tags for filter
-        const allTags = [...new Set(state.projects.flatMap(p => p.tags || []))];
+        const allTags = [...new Set(state.projects.flatMap(p => tagList(p && p.tags)))];
 
         return `
         <div class="proj-toolbar">
-            <span class="proj-toolbar-title">📋 Projects</span>
-            <button class="proj-btn proj-btn-primary" onclick="ProjMgr.newProjectDialog()">➕ New Project</button>
-            <button class="proj-btn" onclick="ProjMgr.showTemplatesView()">📁 Templates</button>
-            <input class="proj-search" id="proj-search" type="text" placeholder="🔍 Search projects…" value="${escHtml(filters.search)}" oninput="ProjMgr.filterChange('search', this.value)">
+            <button class="proj-btn proj-btn-primary" data-action="new-project">${icon('plus')}New Project</button>
+            <button class="proj-btn" data-action="show-templates">${icon('grid')}Templates</button>
+            <input class="proj-search" id="proj-search" type="search" aria-label="Search projects" placeholder="Search projects…" value="${escHtml(filters.search)}" data-input="search">
             <div class="proj-filter-row">
-                <select class="proj-select" onchange="ProjMgr.filterChange('status', this.value)">
-                    <option value="" ${!filters.status ? 'selected' : ''}>All Statuses</option>
-                    <option value="active" ${filters.status === 'active' ? 'selected' : ''}>Active</option>
-                    <option value="paused" ${filters.status === 'paused' ? 'selected' : ''}>Paused</option>
-                    <option value="completed" ${filters.status === 'completed' ? 'selected' : ''}>Completed</option>
-                    <option value="archived" ${filters.status === 'archived' ? 'selected' : ''}>Archived</option>
+                <select class="proj-select" aria-label="Filter by status" data-change="filter" data-filter="status">
+                    <option value="" ${selectedAttr(!filters.status)}>All Statuses</option>
+                    <option value="active" ${selectedAttr(filters.status === 'active')}>Active</option>
+                    <option value="paused" ${selectedAttr(filters.status === 'paused')}>Paused</option>
+                    <option value="completed" ${selectedAttr(filters.status === 'completed')}>Completed</option>
+                    <option value="archived" ${selectedAttr(filters.status === 'archived')}>Archived</option>
                 </select>
-                <select class="proj-select" onchange="ProjMgr.filterChange('priority', this.value)">
-                    <option value="" ${!filters.priority ? 'selected' : ''}>All Priorities</option>
-                    <option value="critical" ${filters.priority === 'critical' ? 'selected' : ''}>🔴 Critical</option>
-                    <option value="high" ${filters.priority === 'high' ? 'selected' : ''}>🟠 High</option>
-                    <option value="medium" ${filters.priority === 'medium' ? 'selected' : ''}>🔵 Medium</option>
-                    <option value="low" ${filters.priority === 'low' ? 'selected' : ''}>⚪ Low</option>
+                <select class="proj-select" aria-label="Filter by priority" data-change="filter" data-filter="priority">
+                    <option value="" ${selectedAttr(!filters.priority)}>All Priorities</option>
+                    <option value="critical" ${selectedAttr(filters.priority === 'critical')}>Critical</option>
+                    <option value="high" ${selectedAttr(filters.priority === 'high')}>High</option>
+                    <option value="medium" ${selectedAttr(filters.priority === 'medium')}>Medium</option>
+                    <option value="low" ${selectedAttr(filters.priority === 'low')}>Low</option>
                 </select>
                 ${allTags.length ? `
-                <select class="proj-select" onchange="ProjMgr.filterChange('tag', this.value)">
+                <select class="proj-select" aria-label="Filter by tag" data-change="filter" data-filter="tag">
                     <option value="">All Tags</option>
-                    ${allTags.map(t => `<option value="${escHtml(t)}" ${filters.tag === t ? 'selected' : ''}>${escHtml(t)}</option>`).join('')}
+                    ${allTags.map(t => `<option value="${escHtml(t)}" ${selectedAttr(filters.tag === t)}>${escHtml(t)}</option>`).join('')}
                 </select>` : ''}
-                <select class="proj-select" onchange="ProjMgr.filterChange('sort', this.value)">
-                    <option value="updatedAt" ${filters.sort === 'updatedAt' ? 'selected' : ''}>Recently Updated</option>
-                    <option value="createdAt" ${filters.sort === 'createdAt' ? 'selected' : ''}>Date Created</option>
-                    <option value="dueDate" ${filters.sort === 'dueDate' ? 'selected' : ''}>Due Date</option>
-                    <option value="title" ${filters.sort === 'title' ? 'selected' : ''}>Name</option>
-                    <option value="priority" ${filters.sort === 'priority' ? 'selected' : ''}>Priority</option>
+                <select class="proj-select" aria-label="Sort projects" data-change="filter" data-filter="sort">
+                    <option value="updatedAt" ${selectedAttr(filters.sort === 'updatedAt')}>Recently Updated</option>
+                    <option value="createdAt" ${selectedAttr(filters.sort === 'createdAt')}>Date Created</option>
+                    <option value="dueDate" ${selectedAttr(filters.sort === 'dueDate')}>Due Date</option>
+                    <option value="title" ${selectedAttr(filters.sort === 'title')}>Name</option>
+                    <option value="priority" ${selectedAttr(filters.sort === 'priority')}>Priority</option>
                 </select>
             </div>
         </div>
         <div class="proj-list-body">
             <div class="proj-grid">
-                ${projects.length === 0 ? renderEmptyList() : projects.map(renderProjectCard).join('')}
+                ${renderProjectGrid()}
             </div>
         </div>`;
     }
 
     function renderEmptyList() {
+        const filtered = state.filters.search || state.filters.status || state.filters.priority || state.filters.tag;
+        if (filtered && state.projects.length) {
+            return `
+        <div class="proj-empty vo-empty" role="status">
+            <span class="vo-empty-icon">${icon('search')}</span>
+            <strong class="vo-empty-title">No matching projects</strong>
+            <span class="vo-empty-text">Try another search or clear the filters.</span>
+        </div>`;
+        }
         return `
-        <div class="proj-empty">
-            <div class="proj-empty-icon">📋</div>
-            <div class="proj-empty-title">No Projects Yet</div>
-            <div class="proj-empty-text">Create your first project to get started</div>
-            <br>
-            <button class="proj-btn proj-btn-primary" style="margin: 10px auto;display:inline-block" onclick="ProjMgr.newProjectDialog()">➕ Create Project</button>
+        <div class="proj-empty vo-empty" role="status">
+            <span class="vo-empty-icon">${icon('projects')}</span>
+            <strong class="vo-empty-title">No projects yet</strong>
+            <span class="vo-empty-text">A project holds tasks your agents can pick up and work through.</span>
+            <button type="button" class="vo-btn vo-btn--primary vo-empty-action proj-empty-cta" data-action="new-project">${icon('plus')}<span>Create project</span></button>
         </div>`;
     }
 
     function renderProjectCard(p) {
-        const done = p.taskDone || 0;
-        const total = p.taskCount || 0;
-        const pct = total > 0 ? Math.round(done / total * 100) : 0;
-        const overdue = p.dueDate && isOverdue(p.dueDate);
+        const done = num(p.taskDone);
+        const total = num(p.taskCount);
+        const pct = total > 0 ? Math.max(0, Math.min(100, Math.round(done / total * 100))) : 0;
+        const dueText = formatDate(p.dueDate);
+        const overdue = dueText && isOverdue(p.dueDate);
+        const status = safeStatus(p.status);
+        const priority = safePriority(p.priority);
+        const id = escHtml(p.id);
         return `
-        <div class="proj-card" onclick="ProjMgr.openProject('${p.id}')">
+        <div class="proj-card" data-action="open-project" data-id="${id}" tabindex="0" role="button" aria-label="Open project ${escHtml(p.title)}">
             <div class="proj-card-header">
                 <div class="proj-card-title">${escHtml(p.title)}</div>
-                <div class="proj-card-actions" onclick="event.stopPropagation()">
-                    <button class="proj-btn proj-btn-sm proj-btn-icon" title="Report" onclick="ProjMgr.showReport('${p.id}')">📊</button>
-                    <button class="proj-btn proj-btn-sm proj-btn-icon" title="Archive" onclick="ProjMgr.archiveProject('${p.id}', event)">📁</button>
-                    <button class="proj-btn proj-btn-sm proj-btn-icon" title="Delete" onclick="ProjMgr.deleteProject('${p.id}', event)">🗑️</button>
+                <div class="proj-card-actions" data-action="none">
+                    <button class="proj-btn proj-btn-sm proj-btn-icon" title="Report" aria-label="Report" data-action="show-report" data-id="${id}">${icon('log')}</button>
+                    <button class="proj-btn proj-btn-sm proj-btn-icon" title="Archive" aria-label="Archive" data-action="archive-project" data-id="${id}">${icon('book')}</button>
+                    <button class="proj-btn proj-btn-sm proj-btn-icon" title="Delete" aria-label="Delete" data-action="delete-project" data-id="${id}">${icon('close')}</button>
                 </div>
             </div>
             ${p.description ? `<div class="proj-card-desc">${escHtml(p.description)}</div>` : ''}
             <div class="proj-card-meta">
-                <span class="proj-badge badge-${p.status || 'active'}">${p.status || 'active'}</span>
-                <span class="proj-badge badge-${p.priority || 'medium'}">${p.priority || 'medium'}</span>
-                ${p.branch ? `<span class="proj-badge" style="background:rgba(255,215,0,0.1);border-color:#ffd700;color:#ffd700">🏢 ${escHtml(p.branch)}</span>` : ''}
-                ${(p.tags || []).slice(0, 2).map(t => `<span class="proj-tag">${escHtml(t)}</span>`).join('')}
+                <span class="proj-badge badge-${status}">${status}</span>
+                <span class="proj-badge badge-${priority}">${priority}</span>
+                ${p.branch ? `<span class="proj-badge proj-badge-branch">🏢 ${escHtml(p.branch)}</span>` : ''}
+                ${tagList(p.tags).slice(0, 2).map(t => `<span class="proj-tag">${escHtml(t)}</span>`).join('')}
             </div>
             <div class="proj-progress-row">
                 <div class="proj-progress-track"><div class="proj-progress-bar" style="width:${pct}%"></div></div>
                 <span class="proj-progress-label">${done}/${total}</span>
             </div>
-            ${p.dueDate ? `<div style="font-size:10px;color:${overdue ? '#f87171' : '#888'}">📅 ${overdue ? '⚠️ Overdue: ' : 'Due: '}${formatDate(p.dueDate)}</div>` : ''}
+            ${dueText ? `<div class="proj-card-due ${overdue ? 'overdue' : ''}">📅 ${overdue ? '⚠️ Overdue: ' : 'Due: '}${escHtml(dueText)}</div>` : ''}
         </div>`;
     }
 
-    function bindListEvents() { /* events bound via inline handlers */ }
-
     // ── PROJECT BOARD ─────────────────────────────────────────────
     async function openProject(id) {
+        const token = nextViewToken();
         state.view = 'board';
+        stopWorkflowPolling();
+        closeDetailPanel();
         const mc = getMainContent();
         if (!mc) return;
         mc.innerHTML = renderListSkeleton();
         try {
             const d = await api.getProject(id);
-            if (!d.project) throw new Error('Not found');
-            state.currentProject = d.project;
+            if (!isCurrentView(token)) return;
+            if (!d || !d.project) throw new Error('Not found');
+            state.currentProject = normalizeProject(d.project);
             mc.innerHTML = renderBoardView();
             bindBoardEvents();
             populateBoardScoreboard();
             checkWorkflowOnOpen();
         } catch (e) {
-            mc.innerHTML = `<div class="proj-loading">⚠️ Failed to load project</div>`;
+            if (!isCurrentView(token)) return;
+            mc.innerHTML = `<div class="proj-loading"><div>⚠️ Failed to load project</div><button class="proj-btn" data-action="back-to-list">← Back to Projects</button></div>`;
         }
+    }
+
+    /** Make sure the arrays the board iterates over are arrays. */
+    function normalizeProject(p) {
+        if (!p || typeof p !== 'object') return p;
+        if (!Array.isArray(p.columns)) p.columns = [];
+        p.columns = p.columns.filter(c => c && typeof c === 'object');
+        if (!Array.isArray(p.tasks)) p.tasks = [];
+        p.tasks = p.tasks.filter(t => t && typeof t === 'object');
+        if (!Array.isArray(p.activity)) p.activity = [];
+        return p;
     }
 
     function renderBoardView() {
         const p = state.currentProject;
         if (!p) return '';
-        const cols = (p.columns || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+        const cols = (p.columns || []).slice().sort((a, b) => num(a.order) - num(b.order));
         const tasks = p.tasks || [];
+        const status = safeStatus(p.status);
+        const priority = safePriority(p.priority);
+        const id = escHtml(p.id);
 
         return `
-        <div class="proj-toolbar">
-            <button class="proj-btn" onclick="ProjMgr.backToList()">← Back</button>
-            <span class="proj-toolbar-title" style="font-size:8px;max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(p.title)}</span>
-            <span class="proj-badge badge-${p.status || 'active'}">${p.status || 'active'}</span>
-            <span class="proj-badge badge-${p.priority || 'medium'}">${p.priority || 'medium'}</span>
-            <div style="flex:1"></div>
+        <div class="proj-toolbar proj-board-toolbar">
+            <button class="proj-btn proj-board-back" data-action="back-to-list" aria-label="Back to projects"><span class="proj-icon-back">${icon('chev')}</span>Back</button>
+            <h3 class="proj-board-title" title="${escHtml(p.title)}">${escHtml(p.title)}</h3>
+            <span class="proj-badge badge-${status}">${status}</span>
+            <span class="proj-badge badge-${priority}">${priority}</span>
+            <div class="proj-toolbar-spacer"></div>
             <div class="proj-workflow-controls" id="proj-wf-controls">
-                <button class="proj-btn proj-btn-sm proj-btn-start" id="wf-start-btn" onclick="ProjMgr.workflowStart()" title="Start workflow">▶ Start</button>
-                <button class="proj-btn proj-btn-sm proj-btn-stop hidden" id="wf-stop-btn" onclick="ProjMgr.workflowStop()" title="Stop workflow">⏹ Stop</button>
+                <button class="proj-btn proj-btn-sm proj-btn-start" id="wf-start-btn" data-action="workflow-start" title="Start workflow">Start</button>
+                <button class="proj-btn proj-btn-sm proj-btn-stop hidden" id="wf-stop-btn" data-action="workflow-stop" title="Stop workflow">Stop</button>
                 <div class="proj-auto-toggle" title="Auto Mode: automatically process next backlog task when current finishes">
                     <label class="proj-toggle-switch">
-                        <input type="checkbox" id="wf-auto-toggle" ${p.autoMode ? 'checked' : ''} onchange="ProjMgr.toggleAutoMode(this.checked)">
+                        <input type="checkbox" id="wf-auto-toggle" aria-label="Auto mode" ${p.autoMode ? 'checked' : ''} data-change="auto-mode">
                         <span class="proj-toggle-slider"></span>
                     </label>
                     <span class="proj-toggle-label">Auto</span>
                 </div>
                 <span class="proj-wf-status" id="wf-status-badge"></span>
             </div>
-            <button class="proj-btn proj-btn-sm" onclick="ProjMgr.editProjectDialog('${p.id}')">✏️ Edit</button>
-            <button class="proj-btn proj-btn-sm" onclick="ProjMgr.showReport('${p.id}')">📊 Report</button>
-            <button class="proj-btn proj-btn-sm" onclick="ProjMgr.saveAsTemplateDialog('${p.id}')">💾 Template</button>
+            <button class="proj-btn proj-btn-sm" data-action="edit-project" data-id="${id}">${icon('edit')}Edit</button>
+            <button class="proj-btn proj-btn-sm" data-action="show-report" data-id="${id}">${icon('log')}Report</button>
+            <button class="proj-btn proj-btn-sm" data-action="save-template" data-id="${id}">${icon('save')}Template</button>
         </div>
         ${p.description ? `
         <div class="proj-board-header">
-            <span class="proj-board-desc-toggle" onclick="this.nextElementSibling.classList.toggle('expanded');this.textContent=this.nextElementSibling.classList.contains('expanded')?'▲ Hide description':'▼ Show description'">▼ Show description</span>
+            <button type="button" class="proj-board-desc-toggle" data-action="toggle-desc" aria-expanded="false">▼ Show description</button>
             <div class="proj-board-desc">${escHtml(p.description)}</div>
         </div>` : ''}
         ${renderBoardScoreboard()}
         <div class="proj-board-body" id="proj-board-cols">
             <div class="proj-col proj-chat-col" id="proj-wf-chat-col">
-                <div class="proj-col-header" style="border-bottom-color:#4caf50">
-                    <div class="proj-col-dot" style="background:#4caf50"></div>
+                <div class="proj-col-header proj-chat-col-header">
+                    <div class="proj-col-dot"></div>
                     <div class="proj-col-title">Chat</div>
                     <span class="proj-wf-chat-live" id="proj-chat-live-dot"></span>
                 </div>
@@ -641,54 +935,51 @@
     }
 
     function renderColumn(col, allTasks) {
-        const tasks = allTasks.filter(t => t.columnId === col.id).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+        const tasks = allTasks.filter(t => t.columnId === col.id).slice().sort((a, b) => num(a.order) - num(b.order));
+        const colId = escHtml(col.id);
         return `
-        <div class="proj-col" id="col-${col.id}" data-col-id="${col.id}" style="--col-color:${col.color || '#6c757d'}">
+        <div class="proj-col" data-col-id="${colId}" style="--col-color:${safeColor(col.color)}">
             <div class="proj-col-header">
                 <div class="proj-col-dot"></div>
-                <div class="proj-col-title" ondblclick="ProjMgr.renameColumn('${col.id}')">${escHtml(col.title)}</div>
+                <div class="proj-col-title" data-dblclick="rename-column" data-col-id="${colId}" title="Double-click to rename">${escHtml(col.title)}</div>
                 <span class="proj-col-count">${tasks.length}</span>
-                <button class="proj-col-add-btn" onclick="ProjMgr.showQuickAdd('${col.id}')" title="Add task">+</button>
+                <button class="proj-col-add-btn" data-action="show-quick-add" data-col-id="${colId}" title="Add task" aria-label="Add task to ${escHtml(col.title)}">+</button>
             </div>
-            <div class="proj-col-tasks" id="tasks-${col.id}"
-                ondragover="ProjMgr.onDragOver(event, '${col.id}')"
-                ondragleave="ProjMgr.onDragLeave(event, '${col.id}')"
-                ondrop="ProjMgr.onDrop(event, '${col.id}')">
+            <div class="proj-col-tasks" data-col-id="${colId}">
                 ${tasks.map(t => renderTaskCard(t)).join('')}
             </div>
-            <div class="proj-quick-add hidden" id="quick-add-${col.id}">
-                <input class="proj-quick-add-input" id="quick-input-${col.id}" type="text" placeholder="Task title… (Enter to add)">
+            <div class="proj-quick-add hidden" data-col-id="${colId}">
+                <input class="proj-quick-add-input" type="text" aria-label="New task title" placeholder="Task title… (Enter to add)" data-keydown="quick-add" data-col-id="${colId}">
                 <div class="proj-quick-add-actions">
-                    <button class="proj-btn proj-btn-sm proj-btn-primary" onclick="ProjMgr.submitQuickAdd('${col.id}')">Add</button>
-                    <button class="proj-btn proj-btn-sm" onclick="ProjMgr.hideQuickAdd('${col.id}')">Cancel</button>
+                    <button class="proj-btn proj-btn-sm proj-btn-primary" data-action="submit-quick-add" data-col-id="${colId}">Add</button>
+                    <button class="proj-btn proj-btn-sm" data-action="hide-quick-add" data-col-id="${colId}">Cancel</button>
                 </div>
             </div>
         </div>`;
     }
 
     function renderTaskCard(task) {
-        const pc = priorityColor(task.priority);
-        const due = task.dueDate;
-        const overdue = due && !task.completedAt && isOverdue(due);
-        const checklist = task.checklist || [];
+        const priority = safePriority(task.priority);
+        const pc = priorityColor(priority);
+        const due = formatDate(task.dueDate);
+        const overdue = due && !task.completedAt && isOverdue(task.dueDate);
+        const checklist = Array.isArray(task.checklist) ? task.checklist.filter(c => c && typeof c === 'object') : [];
         const checkDone = checklist.filter(c => c.done).length;
         const hasCheck = checklist.length > 0;
-        const comments = (task.comments || []).length;
-        const assignee = task.assignee ? state.agentRoster.find(a => a.key === task.assignee || a.statusKey === task.assignee || a.agentId === task.assignee) : null;
+        const comments = Array.isArray(task.comments) ? task.comments.length : 0;
+        const assignee = task.assignee ? resolveAgent(task.assignee) : null;
+        const taskId = escHtml(task.id);
         return `
-        <div class="proj-task-card" id="task-${task.id}" data-task-id="${task.id}"
+        <div class="proj-task-card" data-task-id="${taskId}" data-action="open-task"
             style="--pri-color:${pc}"
-            draggable="true"
-            ondragstart="ProjMgr.onDragStart(event, '${task.id}')"
-            ondragend="ProjMgr.onDragEnd(event)"
-            ontouchstart="ProjMgr.onTouchStart(event, '${task.id}')"
-            onclick="ProjMgr.openTaskDetail('${task.id}')">
+            draggable="true" tabindex="0" role="button" aria-label="Open task ${escHtml(task.title)}">
             <div class="proj-task-title">${escHtml(task.title)}</div>
             <div class="proj-task-meta">
-                ${task.priority !== 'medium' ? `<span class="proj-badge badge-${task.priority}" style="font-size:9px">${task.priority}</span>` : ''}
-                ${assignee ? `<span class="proj-task-assignee" title="${escHtml(assignee.name)}">${escHtml(assignee.emoji || '👤')}</span>` : ''}
-                ${due ? `<span class="proj-task-due ${overdue ? 'overdue' : ''}" title="${formatDate(due)}">${overdue ? '⚠️' : '📅'} ${formatDate(due)}</span>` : ''}
-                ${(task.tags || []).slice(0, 2).map(t => `<span class="proj-tag" style="font-size:9px">${escHtml(t)}</span>`).join('')}
+                ${priority !== 'medium' ? `<span class="proj-badge proj-badge-xs badge-${priority}">${priority}</span>` : ''}
+                ${assignee ? `<span class="proj-task-assignee" title="${escHtml(assignee.name)}">${escHtml(assignee.emoji || '👤')}</span>`
+                    : (task.assignee ? `<span class="proj-task-assignee proj-task-assignee-other" title="Assigned to an agent outside this office">👤</span>` : '')}
+                ${due ? `<span class="proj-task-due ${overdue ? 'overdue' : ''}" title="${escHtml(due)}">${overdue ? '⚠️' : '📅'} ${escHtml(due)}</span>` : ''}
+                ${tagList(task.tags).slice(0, 2).map(t => `<span class="proj-tag proj-tag-xs">${escHtml(t)}</span>`).join('')}
                 ${comments > 0 ? `<span class="proj-task-comment-icon">💬 ${comments}</span>` : ''}
             </div>
             ${hasCheck ? `
@@ -700,9 +991,33 @@
     }
 
     function bindBoardEvents() {
-        // Quick add key handler
-        document.removeEventListener('keydown', handleGlobalKeys);
-        document.addEventListener('keydown', handleGlobalKeys);
+        // Board events are delegated from the modal root (see ensureBound);
+        // nothing to rebind after a re-render.
+    }
+
+    /**
+     * Re-render the open board in place, keeping what the template cannot
+     * rebuild: workflow chat messages, scoreboard, Start/Stop state, scroll.
+     */
+    function rerenderBoard() {
+        const mc = getMainContent();
+        if (!mc || state.view !== 'board' || !state.currentProject) return;
+        const chat = document.getElementById('proj-wf-chat-messages');
+        const chatHtml = chat ? chat.innerHTML : null;
+        const chatScroll = chat ? chat.scrollTop : 0;
+        const body = document.getElementById('proj-board-cols');
+        const scroll = body ? [body.scrollLeft, body.scrollTop] : null;
+        const board = document.getElementById('proj-board-scoreboard');
+        const boardHtml = board ? board.innerHTML : '';
+        mc.innerHTML = renderBoardView();
+        const newChat = document.getElementById('proj-wf-chat-messages');
+        if (newChat && chatHtml !== null) { newChat.innerHTML = chatHtml; newChat.scrollTop = chatScroll; }
+        const newBody = document.getElementById('proj-board-cols');
+        if (newBody && scroll) { newBody.scrollLeft = scroll[0]; newBody.scrollTop = scroll[1]; }
+        const newBoard = document.getElementById('proj-board-scoreboard');
+        if (newBoard && boardHtml) newBoard.innerHTML = boardHtml;
+        updateWorkflowUI();
+        updateActiveColumnIndicator();
     }
 
     // ── DRAG & DROP (HTML5) ───────────────────────────────────────
@@ -719,7 +1034,7 @@
         _pendingDropPosition = null;
         if (_dropIndicator) _dropIndicator.remove();
         _dragTaskId = taskId;
-        const card = document.getElementById(`task-${taskId}`);
+        const card = findTaskCard(taskId);
         const p = state.currentProject;
         const task = p && p.tasks.find(t => t.id === taskId);
         if (task) {
@@ -736,7 +1051,7 @@
         _pendingDropPosition = null;
         if (_dropIndicator) _dropIndicator.remove();
         if (_dragTaskId) {
-            const card = document.getElementById(`task-${_dragTaskId}`);
+            const card = findTaskCard(_dragTaskId);
             if (card) card.classList.remove('dragging');
         }
         // Remove all col highlights
@@ -749,10 +1064,10 @@
     function onDragOver(e, colId) {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
-        const col = document.getElementById(`col-${colId}`);
+        const col = findCol(colId);
         if (col) col.classList.add('drag-over');
         // Determine insert position
-        const tasksEl = document.getElementById(`tasks-${colId}`);
+        const tasksEl = findColPart(colId, '.proj-col-tasks');
         if (tasksEl) {
             _pendingDropPosition = { container: tasksEl, clientY: e.clientY };
             if (!_dragOverFrame) _dragOverFrame = requestAnimationFrame(flushDropIndicator);
@@ -760,10 +1075,10 @@
     }
 
     function onDragLeave(e, colId) {
-        const col = document.getElementById(`col-${colId}`);
+        const col = findCol(colId);
         if (col && !col.contains(e.relatedTarget)) {
             col.classList.remove('drag-over');
-            const tasksEl = document.getElementById(`tasks-${colId}`);
+            const tasksEl = findColPart(colId, '.proj-col-tasks');
             if (tasksEl) {
                 if (_pendingDropPosition?.container === tasksEl) _pendingDropPosition = null;
                 if (_dropIndicator?.parentElement === tasksEl) _dropIndicator.remove();
@@ -781,7 +1096,7 @@
         const cards = Array.from(container.querySelectorAll('.proj-task-card'));
         let insertBefore = null;
         for (const card of cards) {
-            if (card.id === `task-${_dragTaskId}`) continue;
+            if (card.dataset.taskId === _dragTaskId) continue;
             const rect = card.getBoundingClientRect();
             if (clientY < rect.top + rect.height / 2) {
                 insertBefore = card;
@@ -811,12 +1126,12 @@
         _pendingDropPosition = null;
         const taskId = e.dataTransfer.getData('text/plain') || _dragTaskId;
         if (!taskId) return;
-        const col = document.getElementById(`col-${colId}`);
+        const col = findCol(colId);
         if (col) col.classList.remove('drag-over');
         const p = state.currentProject;
         if (!p) return;
         // Determine new order
-        const tasksEl = document.getElementById(`tasks-${colId}`);
+        const tasksEl = findColPart(colId, '.proj-col-tasks');
         const line = tasksEl && tasksEl.querySelector('.proj-drop-line');
         let newOrder = 0;
         if (tasksEl) {
@@ -825,7 +1140,7 @@
                 const idx = cards.indexOf(line.previousElementSibling);
                 newOrder = idx + 1;
             } else {
-                newOrder = cards.filter(c => c.id !== `task-${taskId}`).length;
+                newOrder = cards.filter(c => c.dataset.taskId !== taskId).length;
             }
             tasksEl.querySelectorAll('.proj-drop-line').forEach(l => l.remove());
         }
@@ -839,13 +1154,10 @@
         colTasks.splice(newOrder, 0, task);
         colTasks.forEach((t, i) => t.order = i);
         // Re-render board
-        const mc = getMainContent();
-        if (mc) {
-            mc.innerHTML = renderBoardView();
-            bindBoardEvents();
-        }
-        // Persist
-        const updates = p.tasks.map(t => ({ id: t.id, columnId: t.columnId, order: t.order || 0 }));
+        rerenderBoard();
+        // Persist only the column it went to (v0.10.1 saves): sending every task's column
+        // from this copy undid moves made meanwhile by agents, the workflow or another tab.
+        const updates = colTasks.map(t => (t.id === taskId ? { id: t.id, columnId: colId, order: t.order } : { id: t.id, order: t.order }));
         api.reorderTasks(p.id, updates).catch(() => toast('Save failed', 'error'));
         // Also update task's columnId via task update for activity log
         if (oldColId !== colId) {
@@ -858,9 +1170,9 @@
             }).catch(() => {});
             // Check if target is a "done" column and show preview animation
             const targetCol = p.columns.find(c => c.id === colId);
-            if (targetCol && ['done', 'completed', 'verified', 'published', 'fixed', 'closed'].includes(targetCol.title.toLowerCase())) {
+            if (targetCol && ['done', 'completed', 'verified', 'published', 'fixed', 'closed'].includes(String(targetCol.title || '').toLowerCase())) {
                 // Optimistic complete animation (full one triggers after API confirms score)
-                const card = document.getElementById(`task-${taskId}`);
+                const card = findTaskCard(taskId);
                 if (card) card.classList.add('anim-complete');
             }
         }
@@ -871,24 +1183,38 @@
     let _touchGhost = null;
     let _touchLongPressTimer = null;
     let _touchActive = false;
+    let _touchTarget = null;
+
+    function detachTouchListeners() {
+        if (!_touchTarget) return;
+        _touchTarget.removeEventListener('touchmove', onTouchMove);
+        _touchTarget.removeEventListener('touchend', onTouchEnd);
+        _touchTarget.removeEventListener('touchcancel', onTouchEnd);
+        _touchTarget = null;
+    }
 
     function onTouchStart(e, taskId) {
+        clearTimeout(_touchLongPressTimer);
+        detachTouchListeners();
         _touchLongPressTimer = setTimeout(() => {
             _touchActive = true;
             _touchTask = taskId;
-            const card = document.getElementById(`task-${taskId}`);
+            const card = findTaskCard(taskId);
             if (!card) return;
             // Create ghost
             _touchGhost = card.cloneNode(true);
+            _touchGhost.removeAttribute('data-action');
+            _touchGhost.removeAttribute('data-task-id');
             _touchGhost.id = 'proj-touch-ghost';
             _touchGhost.className = card.className + ' drag-ghost';
             _touchGhost.style.cssText = `position:fixed;pointer-events:none;z-index:10000;width:${card.offsetWidth}px;opacity:0.85;transform:rotate(2deg);`;
             document.body.appendChild(_touchGhost);
             card.style.opacity = '0.3';
-            e.preventDefault();
         }, 400);
-        e.target.addEventListener('touchmove', onTouchMove, { passive: false });
-        e.target.addEventListener('touchend', onTouchEnd);
+        _touchTarget = e.target;
+        _touchTarget.addEventListener('touchmove', onTouchMove, { passive: false });
+        _touchTarget.addEventListener('touchend', onTouchEnd);
+        _touchTarget.addEventListener('touchcancel', onTouchEnd);
     }
 
     function onTouchMove(e) {
@@ -904,21 +1230,24 @@
         _touchGhost.style.display = '';
         // Highlight target col
         document.querySelectorAll('.proj-col').forEach(c => c.classList.remove('drag-over'));
-        const colEl = el && el.closest('[data-col-id]');
+        const colEl = el && el.closest('.proj-col[data-col-id]');
         if (colEl) colEl.classList.add('drag-over');
     }
 
     function onTouchEnd(e) {
         clearTimeout(_touchLongPressTimer);
+        detachTouchListeners();
         if (!_touchActive || !_touchTask) { _touchActive = false; return; }
-        const touch = e.changedTouches[0];
+        // The browser may still send a click for this touch: do not open the task.
+        state.suppressClickUntil = Date.now() + 500;
+        const touch = e.changedTouches && e.changedTouches[0];
         if (_touchGhost) { _touchGhost.remove(); _touchGhost = null; }
         document.querySelectorAll('.proj-col').forEach(c => c.classList.remove('drag-over'));
-        const card = document.getElementById(`task-${_touchTask}`);
+        const card = findTaskCard(_touchTask);
         if (card) card.style.opacity = '';
         // Find drop target
-        const el = document.elementFromPoint(touch.clientX, touch.clientY);
-        const colEl = el && el.closest('[data-col-id]');
+        const el = touch && e.type !== 'touchcancel' ? document.elementFromPoint(touch.clientX, touch.clientY) : null;
+        const colEl = el && el.closest('.proj-col[data-col-id]');
         if (colEl) {
             const colId = colEl.dataset.colId;
             simulateDrop(_touchTask, colId);
@@ -937,8 +1266,8 @@
         const colTasks = p.tasks.filter(t => t.columnId === colId).sort((a, b) => (a.order || 0) - (b.order || 0));
         colTasks.forEach((t, i) => t.order = i);
         const mc = getMainContent();
-        if (mc) { mc.innerHTML = renderBoardView(); bindBoardEvents(); }
-        const updates = p.tasks.map(t => ({ id: t.id, columnId: t.columnId, order: t.order || 0 }));
+        rerenderBoard();
+        const updates = colTasks.map(t => (t.id === taskId ? { id: t.id, columnId: colId, order: t.order } : { id: t.id, order: t.order }));
         api.reorderTasks(p.id, updates).catch(() => {});
         if (oldColId !== colId) {
             api.updateTask(p.id, taskId, { columnId: colId }).then(result => {
@@ -949,8 +1278,8 @@
             }).catch(() => {});
             // Optimistic complete animation for done columns
             const targetCol = p.columns.find(c => c.id === colId);
-            if (targetCol && ['done', 'completed', 'verified', 'published', 'fixed', 'closed'].includes(targetCol.title.toLowerCase())) {
-                const card = document.getElementById(`task-${taskId}`);
+            if (targetCol && ['done', 'completed', 'verified', 'published', 'fixed', 'closed'].includes(String(targetCol.title || '').toLowerCase())) {
+                const card = findTaskCard(taskId);
                 if (card) card.classList.add('anim-complete');
             }
         }
@@ -958,21 +1287,24 @@
 
     // ── QUICK ADD ─────────────────────────────────────────────────
     function showQuickAdd(colId) {
-        const qa = document.getElementById(`quick-add-${colId}`);
+        const qa = findColPart(colId, '.proj-quick-add');
         if (!qa) return;
         qa.classList.remove('hidden');
-        const inp = document.getElementById(`quick-input-${colId}`);
-        if (inp) {
-            inp.focus();
-            inp.onkeydown = (e) => { if (e.key === 'Enter') submitQuickAdd(colId); if (e.key === 'Escape') hideQuickAdd(colId); };
-        }
+        const inp = findColPart(colId, '.proj-quick-add-input');
+        if (inp) inp.focus();
     }
     function hideQuickAdd(colId) {
-        const qa = document.getElementById(`quick-add-${colId}`);
-        if (qa) qa.classList.add('hidden');
+        const qa = findColPart(colId, '.proj-quick-add');
+        if (!qa) return;
+        const hadFocus = qa.contains(document.activeElement);
+        qa.classList.add('hidden');
+        if (hadFocus) {
+            const addBtn = findColPart(colId, '.proj-col-add-btn');
+            if (addBtn) addBtn.focus({ preventScroll: true });
+        }
     }
     async function submitQuickAdd(colId) {
-        const inp = document.getElementById(`quick-input-${colId}`);
+        const inp = findColPart(colId, '.proj-quick-add-input');
         const title = inp && inp.value.trim();
         if (!title) { hideQuickAdd(colId); return; }
         const p = state.currentProject;
@@ -982,7 +1314,7 @@
             if (d.task) {
                 p.tasks.push(d.task);
                 const mc = getMainContent();
-                if (mc) { mc.innerHTML = renderBoardView(); bindBoardEvents(); }
+                rerenderBoard();
                 animateTaskSpawn(d.task.id);
                 toast('Task added', 'success');
                 populateBoardScoreboard();
@@ -994,7 +1326,8 @@
     async function addColumn() {
         const p = state.currentProject;
         if (!p) return;
-        const title = prompt('Column title:');
+        const raw = await uiPrompt({ title: 'New column', label: 'Column title', value: '' });
+        const title = raw && raw.trim();
         if (!title) return;
         const colors = ['#6c757d', '#0d6efd', '#ffc107', '#fd7e14', '#198754', '#17a2b8', '#dc3545'];
         const color = colors[p.columns.length % colors.length];
@@ -1003,7 +1336,7 @@
         try {
             await api.updateColumns(p.id, p.columns);
             const mc = getMainContent();
-            if (mc) { mc.innerHTML = renderBoardView(); bindBoardEvents(); }
+            rerenderBoard();
         } catch (e) { toast('Failed to add column', 'error'); }
     }
 
@@ -1012,7 +1345,7 @@
         if (!p) return;
         const col = p.columns.find(c => c.id === colId);
         if (!col) return;
-        const titleEl = document.querySelector(`#col-${colId} .proj-col-title`);
+        const titleEl = findColPart(colId, '.proj-col-title');
         if (!titleEl) return;
         const inp = document.createElement('input');
         inp.className = 'proj-col-title-input';
@@ -1025,10 +1358,13 @@
             col.title = newTitle;
             try { await api.updateColumns(p.id, p.columns); } catch (e) {}
             const mc = getMainContent();
-            if (mc) { mc.innerHTML = renderBoardView(); bindBoardEvents(); }
+            rerenderBoard();
         }
         inp.onblur = save;
-        inp.onkeydown = (e) => { if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') { inp.value = col.title; inp.blur(); } };
+        inp.onkeydown = (e) => {
+            if (e.key === 'Enter') inp.blur();
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); inp.value = col.title; inp.blur(); }
+        };
     }
 
     // ── TASK DETAIL PANEL ─────────────────────────────────────────
@@ -1037,123 +1373,191 @@
         if (!p) return;
         const task = p.tasks.find(t => t.id === taskId);
         if (!task) return;
+        const panel = document.getElementById('proj-detail-panel');
+        const wasOpen = !!(panel && panel.classList.contains('open') && state.currentTask);
+        if (state.currentTask && state.currentTask.id !== task.id) flushPendingTaskEdits();
         state.currentTask = task;
         renderDetailPanel(task);
-        const panel = document.getElementById('proj-detail-panel');
-        if (panel) panel.classList.add('open');
+        if (!panel) return;
+        panel.classList.add('open');
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-label', 'Task detail');
+        if (!wasOpen) {
+            const closeBtn = panel.querySelector('.proj-detail-close');
+            if (closeBtn) closeBtn.focus({ preventScroll: true });
+        }
     }
 
     function closeDetailPanel() {
-        state.currentTask = null;
+        const task = state.currentTask;
         const panel = document.getElementById('proj-detail-panel');
-        if (panel) panel.classList.remove('open');
+        if (task) flushPendingTaskEdits();
+        state.currentTask = null;
+        if (panel) panel.dataset.taskId = '';
+        if (!panel || !panel.classList.contains('open')) return;
+        const hadFocus = panel.contains(document.activeElement);
+        panel.classList.remove('open');
+        if (hadFocus) {
+            const card = task && findTaskCard(task.id);
+            if (card) card.focus({ preventScroll: true });
+            else focusFirstInMain();
+        }
+    }
+
+    /** Save a title or description edit that is still waiting for its debounce. */
+    function flushPendingTaskEdits() {
+        if (state._titleTimer) {
+            clearTimeout(state._titleTimer);
+            state._titleTimer = null;
+            const titleEl = document.getElementById('detail-title');
+            const value = titleEl && titleEl.value.trim();
+            if (value && state.currentTask && value !== state.currentTask.title) saveTaskField('title', value);
+        }
+        if (state._descAutoSaveTimer) {
+            clearTimeout(state._descAutoSaveTimer);
+            state._descAutoSaveTimer = null;
+            saveDescription();
+        }
     }
 
     function renderDetailPanel(task) {
         const panel = document.getElementById('proj-detail-panel');
         if (!panel) return;
+        const sameTask = !!task && panel.dataset.taskId === String(task.id);
         // Preserve unsaved description text from textarea before re-render
+        // (only when re-rendering the same task, never into another task).
         const existingDescEl = document.getElementById('detail-desc');
-        if (existingDescEl && task) {
+        if (existingDescEl && sameTask) {
             task.description = existingDescEl.value;
         }
+        // Keep drafts, focus and scroll when the same task re-renders (poll refresh, checklist toggle).
+        const drafts = {};
+        let focusId = '';
+        let focusSel = null;
+        let bodyScroll = 0;
+        if (sameTask) {
+            ['detail-title', 'detail-comment-input', 'new-checklist-item', 'detail-tag-in'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el && el.value && (id !== 'detail-title' || state._titleTimer)) drafts[id] = el.value;
+            });
+            const active = document.activeElement;
+            if (active && panel.contains(active) && active.id) {
+                focusId = active.id;
+                if (typeof active.selectionStart === 'number') focusSel = [active.selectionStart, active.selectionEnd];
+            }
+            const bodyEl = panel.querySelector('.proj-detail-body');
+            bodyScroll = bodyEl ? bodyEl.scrollTop : 0;
+        }
+        panel.dataset.taskId = task ? String(task.id) : '';
         const p = state.currentProject;
         const cols = (p && p.columns) || [];
-        const agents = state.agentRoster;
-        const checklist = task.checklist || [];
-        const checkDone = checklist.filter(c => c.done).length;
-        const comments = task.comments || [];
-        const reviewItems = (task.reviewCheck && task.reviewCheck.length) ? task.reviewCheck : (task.lastReviewCheck || []);
-        const reviewTitle = (task.reviewCheck && task.reviewCheck.length) ? '🔍 Review Check' : ((task.lastReviewCheck && task.lastReviewCheck.length) ? '🕘 Last Failed Review' : '🔍 Review Check');
-        const activity = (p && p.activity || []).filter(a => a.taskId === task.id).slice().reverse().slice(0, 20);
+        const agents = (state.agentRoster || []).filter(a => a && agentValue(a));
+        const checklist = Array.isArray(task.checklist) ? task.checklist : [];
+        const checkDone = checklist.filter(c => c && c.done).length;
+        const checkPct = checklist.length ? Math.round(checkDone / checklist.length * 100) : 0;
+        const comments = Array.isArray(task.comments) ? task.comments.filter(c => c && typeof c === 'object') : [];
+        const hasReview = Array.isArray(task.reviewCheck) && task.reviewCheck.length > 0;
+        const lastReview = Array.isArray(task.lastReviewCheck) ? task.lastReviewCheck : [];
+        const reviewItems = (hasReview ? task.reviewCheck : lastReview).filter(rc => rc && typeof rc === 'object');
+        const reviewTitle = hasReview ? '🔍 Review Check' : (lastReview.length ? '🕘 Last Failed Review' : '🔍 Review Check');
+        const activity = (p && Array.isArray(p.activity) ? p.activity : []).filter(a => a && a.taskId === task.id).slice().reverse().slice(0, 20);
+        const priority = safePriority(task.priority);
+        const assigneeKnown = !task.assignee || agents.some(a => agentValue(a) === task.assignee);
+        const reviewOptions = [
+            ['pass', '✅ Pass'],
+            ['needs_more_work', '⚠️ Needs More Work'],
+            ['did_not_pass', '❌ Did Not Pass'],
+            ['requires_user_review', '👤 Requires User Review'],
+        ];
 
         panel.innerHTML = `
         <div class="proj-detail-header">
-            <span style="font-size:11px;color:#888">Task Detail</span>
-            <div style="display:flex;gap:6px">
-                <button class="proj-btn proj-btn-sm proj-btn-danger" onclick="ProjMgr.deleteCurrentTask()">🗑️ Delete</button>
-                <button class="proj-btn proj-btn-sm" onclick="ProjMgr.duplicateTask('${task.id}')">📋 Duplicate</button>
-                <button class="proj-detail-close" onclick="ProjMgr.closeDetailPanel()">✕</button>
+            <span class="proj-detail-kicker">Task Detail</span>
+            <div class="proj-detail-header-actions">
+                <button class="proj-btn proj-btn-sm proj-btn-danger" data-action="delete-current-task">${icon('close')}Delete</button>
+                <button class="proj-btn proj-btn-sm" data-action="duplicate-task" data-task-id="${escHtml(task.id)}">${icon('list')}Duplicate</button>
+                <button class="proj-detail-close" data-action="close-detail" aria-label="Close task detail" title="Close (Esc)">${icon('close')}</button>
             </div>
         </div>
         <div class="proj-detail-body">
-            <input class="proj-detail-title-input" id="detail-title" value="${escHtml(task.title)}" placeholder="Task title">
-            
+            <input class="proj-detail-title-input" id="detail-title" aria-label="Task title" value="${escHtml(task.title)}" placeholder="Task title">
+
             <div class="proj-section">
                 <div class="proj-field">
-                    <label class="proj-field-label">Column</label>
-                    <select class="proj-detail-select" id="detail-col" onchange="ProjMgr.updateTaskField('columnId', this.value)">
-                        ${cols.map(c => `<option value="${c.id}" ${task.columnId === c.id ? 'selected' : ''}>${escHtml(c.title)}</option>`).join('')}
+                    <label class="proj-field-label" for="detail-col">Column</label>
+                    <select class="proj-detail-select" id="detail-col" data-change="task-field" data-field="columnId">
+                        ${cols.map(c => `<option value="${escHtml(c.id)}" ${selectedAttr(task.columnId === c.id)}>${escHtml(c.title)}</option>`).join('')}
                     </select>
                 </div>
-                <div style="display:flex;gap:8px">
-                    <div class="proj-field" style="flex:1">
-                        <label class="proj-field-label">Priority</label>
-                        <select class="proj-detail-select" id="detail-pri" onchange="ProjMgr.updateTaskField('priority', this.value)">
-                            <option value="critical" ${task.priority === 'critical' ? 'selected' : ''}>🔴 Critical</option>
-                            <option value="high" ${task.priority === 'high' ? 'selected' : ''}>🟠 High</option>
-                            <option value="medium" ${task.priority === 'medium' ? 'selected' : ''}>🔵 Medium</option>
-                            <option value="low" ${task.priority === 'low' ? 'selected' : ''}>⚪ Low</option>
+                <div class="proj-field-row">
+                    <div class="proj-field">
+                        <label class="proj-field-label" for="detail-pri">Priority</label>
+                        <select class="proj-detail-select" id="detail-pri" data-change="task-field" data-field="priority">
+                            <option value="critical" ${selectedAttr(priority === 'critical')}>Critical</option>
+                            <option value="high" ${selectedAttr(priority === 'high')}>High</option>
+                            <option value="medium" ${selectedAttr(priority === 'medium')}>Medium</option>
+                            <option value="low" ${selectedAttr(priority === 'low')}>Low</option>
                         </select>
                     </div>
-                    <div class="proj-field" style="flex:1">
-                        <label class="proj-field-label">Due Date</label>
-                        <input class="proj-detail-input" type="date" id="detail-due" value="${task.dueDate ? task.dueDate.split('T')[0] : ''}" onchange="ProjMgr.updateTaskField('dueDate', this.value ? new Date(this.value).toISOString() : null)">
+                    <div class="proj-field">
+                        <label class="proj-field-label" for="detail-due">Due Date</label>
+                        <input class="proj-detail-input" type="date" id="detail-due" value="${safeDateValue(task.dueDate)}" data-change="task-field" data-field="dueDate">
                     </div>
                 </div>
                 <div class="proj-field">
-                    <label class="proj-field-label">Assignee</label>
-                    <select class="proj-detail-select" id="detail-assignee" onchange="ProjMgr.updateTaskField('assignee', this.value || null)">
+                    <label class="proj-field-label" for="detail-assignee">Assignee</label>
+                    <select class="proj-detail-select" id="detail-assignee" data-change="task-field" data-field="assignee">
                         <option value="">— Unassigned —</option>
-                        ${agents.map(a => `<option value="${a.key || a.statusKey || a.id}" ${task.assignee === (a.key || a.statusKey || a.id) ? 'selected' : ''}>${escHtml((a.emoji || '👤') + ' ' + a.name)}</option>`).join('')}
+                        ${agents.map(a => `<option value="${escHtml(agentValue(a))}" ${selectedAttr(task.assignee === agentValue(a))}>${escHtml((a.emoji || '👤') + ' ' + (a.name || agentValue(a)))}</option>`).join('')}
+                        ${assigneeKnown ? '' : `<option value="${escHtml(task.assignee)}" selected>👥 Other agent (not in this office)</option>`}
                     </select>
                 </div>
                 <div class="proj-field">
-                    <label class="proj-field-label">Tags</label>
-                    <div class="proj-tag-input-wrap" id="detail-tags-wrap" onclick="document.getElementById('detail-tag-in').focus()">
-                        ${(task.tags || []).map(t => `<span class="proj-tag">${escHtml(t)}<span class="tag-remove" onclick="ProjMgr.removeTag('${escHtml(t)}')">×</span></span>`).join('')}
-                        <input class="proj-tag-input" id="detail-tag-in" placeholder="Add tag…" onkeydown="ProjMgr.handleTagKey(event)">
+                    <label class="proj-field-label" for="detail-tag-in">Tags</label>
+                    <div class="proj-tag-input-wrap" id="detail-tags-wrap" data-action="focus-tag-input">
+                        ${tagList(task.tags).map((t, i) => `<span class="proj-tag">${escHtml(t)}<button type="button" class="tag-remove" data-action="remove-tag" data-index="${i}" aria-label="Remove tag ${escHtml(t)}">×</button></span>`).join('')}
+                        <input class="proj-tag-input" id="detail-tag-in" placeholder="Add tag…" data-keydown="tag-input">
                     </div>
                 </div>
             </div>
 
             <div class="proj-section">
                 <div class="proj-section-header"><span class="proj-section-title">📝 Description</span></div>
-                <div class="proj-desc-tabs">
-                    <button class="proj-desc-tab active" id="desc-tab-edit" onclick="ProjMgr.switchDescTab('edit')">Edit</button>
-                    <button class="proj-desc-tab" id="desc-tab-preview" onclick="ProjMgr.switchDescTab('preview')">Preview</button>
+                <div class="proj-desc-tabs" role="tablist">
+                    <button class="proj-desc-tab active" id="desc-tab-edit" role="tab" data-action="desc-tab" data-tab="edit">Edit</button>
+                    <button class="proj-desc-tab" id="desc-tab-preview" role="tab" data-action="desc-tab" data-tab="preview">Preview</button>
                 </div>
-                <textarea class="proj-detail-textarea" id="detail-desc" rows="4" placeholder="Task description (Markdown supported)">${escHtml(task.description || '')}</textarea>
+                <textarea class="proj-detail-textarea" id="detail-desc" rows="4" aria-label="Task description" placeholder="Task description (Markdown supported)">${escHtml(task.description || '')}</textarea>
                 <div class="proj-desc-preview hidden" id="detail-desc-preview">${simpleMarkdown(task.description || '')}</div>
-                <div style="text-align:right;margin-top:4px">
-                    <button class="proj-btn proj-btn-sm proj-btn-gold" onclick="ProjMgr.saveDescription()">💾 Save</button>
+                <div class="proj-section-actions">
+                    <button class="proj-btn proj-btn-sm proj-btn-gold" id="detail-desc-save" data-action="save-description">${icon('save')}Save</button>
                 </div>
             </div>
 
             <div class="proj-section">
                 <div class="proj-section-header">
                     <span class="proj-section-title">✅ Checklist</span>
-                    <span style="font-size:10px;color:#888">${checkDone}/${checklist.length}</span>
+                    <span class="proj-section-meta">${checkDone}/${checklist.length}</span>
                 </div>
                 ${checklist.length ? `
                 <div class="proj-checklist-progress">
                     <div class="proj-checklist-progress-track">
-                        <div class="proj-checklist-progress-fill" style="width:${checklist.length ? Math.round(checkDone/checklist.length*100) : 0}%"></div>
+                        <div class="proj-checklist-progress-fill" style="width:${checkPct}%"></div>
                     </div>
-                    <span style="font-size:10px;color:#888">${checklist.length ? Math.round(checkDone/checklist.length*100) : 0}%</span>
+                    <span class="proj-section-meta">${checkPct}%</span>
                 </div>` : ''}
                 <ul class="proj-checklist" id="detail-checklist">
                     ${checklist.map((c, i) => `
-                    <li class="proj-checklist-item ${c.done ? 'done' : ''}">
-                        <input type="checkbox" ${c.done ? 'checked' : ''} onchange="ProjMgr.toggleChecklistItem(${i}, this.checked)">
-                        <span class="proj-checklist-item-text" ondblclick="ProjMgr.editChecklistItem(${i})" title="Double-click to edit">${escHtml(c.text)}</span>
-                        <button class="proj-checklist-edit" onclick="ProjMgr.editChecklistItem(${i})" title="Edit">✏️</button>
-                        <button class="proj-checklist-delete" onclick="ProjMgr.deleteChecklistItem(${i})">×</button>
+                    <li class="proj-checklist-item ${c && c.done ? 'done' : ''}">
+                        <input type="checkbox" aria-label="Done" ${c && c.done ? 'checked' : ''} data-change="checklist-toggle" data-index="${i}">
+                        <span class="proj-checklist-item-text" data-dblclick="edit-checklist" data-index="${i}" title="Double-click to edit">${escHtml(c && c.text)}</span>
+                        <button class="proj-checklist-edit" data-action="edit-checklist" data-index="${i}" title="Edit" aria-label="Edit item">${icon('edit')}</button>
+                        <button class="proj-checklist-delete" data-action="delete-checklist" data-index="${i}" title="Delete" aria-label="Delete item">×</button>
                     </li>`).join('')}
                 </ul>
-                <div style="display:flex;gap:6px;margin-top:6px">
-                    <input class="proj-detail-input" id="new-checklist-item" type="text" placeholder="Add checklist item…" onkeydown="if(event.key==='Enter')ProjMgr.addChecklistItem()" style="flex:1">
-                    <button class="proj-btn proj-btn-sm" onclick="ProjMgr.addChecklistItem()">Add</button>
+                <div class="proj-inline-add">
+                    <input class="proj-detail-input" id="new-checklist-item" type="text" aria-label="New checklist item" placeholder="Add checklist item…" data-keydown="checklist-input">
+                    <button class="proj-btn proj-btn-sm" data-action="add-checklist">Add</button>
                 </div>
             </div>
 
@@ -1162,45 +1566,42 @@
                 <div class="proj-section-header"><span class="proj-section-title">${reviewTitle}</span></div>
                 <div class="proj-review-check-list" id="detail-review-check">
                     ${reviewItems.map((rc, i) => {
-                        const icon = {'pass':'✅','needs_more_work':'⚠️','did_not_pass':'❌','requires_user_review':'👤'}[rc.status] || '❓';
-                        const statusClass = 'review-' + (rc.status || 'pending').replace(/_/g, '-');
-                        const editable = !!(task.reviewCheck && task.reviewCheck.length);
+                        const status = safeReviewStatus(rc.status);
+                        const icon = {'pass':'✅','needs_more_work':'⚠️','did_not_pass':'❌','requires_user_review':'👤'}[status] || '❓';
+                        const statusClass = 'review-' + status.replace(/_/g, '-');
                         return `
                         <div class="proj-review-item ${statusClass}">
                             <span class="proj-review-icon">${icon}</span>
                             <span class="proj-review-text">${escHtml(rc.text)}</span>
-                            ${editable ? `
-                            <select class="proj-review-select" onchange="ProjMgr.updateReviewItemStatus(${i}, this.value)">
-                                <option value="pass" ${rc.status === 'pass' ? 'selected' : ''}>✅ Pass</option>
-                                <option value="needs_more_work" ${rc.status === 'needs_more_work' ? 'selected' : ''}>⚠️ Needs More Work</option>
-                                <option value="did_not_pass" ${rc.status === 'did_not_pass' ? 'selected' : ''}>❌ Did Not Pass</option>
-                                <option value="requires_user_review" ${rc.status === 'requires_user_review' ? 'selected' : ''}>👤 Requires User Review</option>
-                            </select>` : `<span style="font-size:11px;color:#777">preserved from prior review</span>`}
+                            ${hasReview ? `
+                            <select class="proj-review-select" aria-label="Review result" data-change="review-status" data-index="${i}">
+                                ${reviewOptions.map(([value, label]) => `<option value="${value}" ${selectedAttr(status === value)}>${label}</option>`).join('')}
+                            </select>` : `<span class="proj-review-note">preserved from prior review</span>`}
                         </div>`;
                     }).join('')}
                 </div>
-                ${(task.reviewCheck && task.reviewCheck.length) ? `
-                <div style="text-align:right;margin-top:6px">
-                    <button class="proj-btn proj-btn-sm proj-btn-gold" onclick="ProjMgr.saveReviewCheck()">💾 Save Review</button>
+                ${hasReview ? `
+                <div class="proj-section-actions">
+                    <button class="proj-btn proj-btn-sm proj-btn-gold" data-action="save-review">${icon('save')}Save Review</button>
                 </div>` : ''}
             </div>` : ''}
 
             <div class="proj-section">
                 <div class="proj-section-header"><span class="proj-section-title">💬 Comments</span></div>
                 <div class="proj-comments-list" id="detail-comments">
-                    ${comments.length === 0 ? '<div style="font-size:11px;color:#555">No comments yet</div>' : ''}
+                    ${comments.length === 0 ? '<div class="proj-muted-note">No comments yet</div>' : ''}
                     ${comments.map(c => `
                     <div class="proj-comment">
                         <div class="proj-comment-header">
-                            <span class="proj-comment-author">${escHtml(c.author)}</span>
-                            <span class="proj-comment-time">${timeAgo(c.createdAt)}</span>
+                            <span class="proj-comment-author">${escHtml(commentAuthor(c.author))}</span>
+                            <span class="proj-comment-time">${escHtml(timeAgo(c.createdAt))}</span>
                         </div>
                         <div class="proj-comment-text">${simpleMarkdown(c.text)}</div>
                     </div>`).join('')}
                 </div>
-                <textarea class="proj-detail-textarea" id="detail-comment-input" rows="2" placeholder="Add a comment… (Markdown supported)"></textarea>
-                <div style="text-align:right;margin-top:4px">
-                    <button class="proj-btn proj-btn-sm proj-btn-gold" onclick="ProjMgr.submitComment()">Post Comment</button>
+                <textarea class="proj-detail-textarea" id="detail-comment-input" rows="2" aria-label="New comment" placeholder="Add a comment… (Markdown supported)"></textarea>
+                <div class="proj-section-actions">
+                    <button class="proj-btn proj-btn-sm proj-btn-gold" data-action="submit-comment">Post Comment</button>
                 </div>
             </div>
 
@@ -1211,20 +1612,38 @@
                     ${activity.map(a => `
                     <div class="proj-activity-item">
                         <div class="proj-activity-dot"></div>
-                        <span class="proj-activity-time">${timeAgo(a.at)}</span>
+                        <span class="proj-activity-time">${escHtml(timeAgo(a.at))}</span>
                         <span>${escHtml(a.detail)}</span>
                     </div>`).join('')}
                 </div>
             </div>` : ''}
         </div>`;
 
+        Object.keys(drafts).forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = drafts[id];
+        });
+        if (bodyScroll) {
+            const bodyEl = panel.querySelector('.proj-detail-body');
+            if (bodyEl) bodyEl.scrollTop = bodyScroll;
+        }
+        if (focusId) {
+            const el = document.getElementById(focusId);
+            if (el && panel.contains(el)) {
+                el.focus({ preventScroll: true });
+                if (focusSel && typeof el.setSelectionRange === 'function') {
+                    try { el.setSelectionRange(focusSel[0], focusSel[1]); } catch (e) { /* not a text field */ }
+                }
+            }
+        }
+
         // Bind title auto-save
         const titleEl = document.getElementById('detail-title');
         if (titleEl) {
-            let titleTimer;
             titleEl.oninput = () => {
-                clearTimeout(titleTimer);
-                titleTimer = setTimeout(() => {
+                clearTimeout(state._titleTimer);
+                state._titleTimer = setTimeout(() => {
+                    state._titleTimer = null;
                     if (titleEl.value.trim()) saveTaskField('title', titleEl.value.trim());
                 }, 800);
             };
@@ -1236,19 +1655,20 @@
             descEl.oninput = () => {
                 clearTimeout(state._descAutoSaveTimer);
                 state._descAutoSaveTimer = setTimeout(() => {
+                    state._descAutoSaveTimer = null;
                     saveDescription();
                 }, 1500);
             };
         }
-        // Save button: cancel debounce then save immediately
-        const descSaveBtn = document.querySelector('.proj-btn-gold[onclick*="saveDescription"]');
-        if (descSaveBtn) {
-            descSaveBtn.onclick = (e) => {
-                e.preventDefault();
-                clearTimeout(state._descAutoSaveTimer);
-                saveDescription();
-            };
-        }
+    }
+
+    /** Comment authors are "user", "workflow", an agent id or a free-text name. */
+    function commentAuthor(author) {
+        if (!author || author === 'user') return 'You';
+        if (author === 'workflow') return '⚙️ Workflow';
+        const agent = resolveAgent(author);
+        if (agent) return `${agent.emoji} ${agent.name}`;
+        return String(author);
     }
 
     function switchDescTab(tab) {
@@ -1285,24 +1705,42 @@
         task.description = desc;
         // Visual feedback: disable save button during save
         const saveBtn = el.parentElement && el.parentElement.querySelector('.proj-btn-gold');
-        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '⏳ Saving…'; }
+        if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = 'Saving…'; }
         try {
-            await api.updateTask(projId, taskId, { description: desc });
+            await queueTaskUpdate(projId, taskId, { description: desc });
             // Also update the card on the board
-            const cardEl = document.getElementById(`task-${taskId}`);
+            const cardEl = findTaskCard(taskId);
             if (cardEl) {
                 const newCard = document.createElement('div');
                 newCard.innerHTML = renderTaskCard(task);
                 const rendered = newCard.firstElementChild;
                 if (rendered) cardEl.replaceWith(rendered);
             }
-            if (saveBtn) { saveBtn.textContent = '✅ Saved'; }
+            if (saveBtn) { saveBtn.innerHTML = icon('check') + 'Saved'; }
             toast('Description saved', 'success');
-            setTimeout(() => { if (saveBtn) { saveBtn.textContent = '💾 Save'; saveBtn.disabled = false; } }, 1500);
+            setTimeout(() => { if (saveBtn) { saveBtn.innerHTML = icon('save') + 'Save'; saveBtn.disabled = false; } }, 1500);
         } catch (e) {
-            if (saveBtn) { saveBtn.textContent = '💾 Save'; saveBtn.disabled = false; }
+            if (saveBtn) { saveBtn.innerHTML = icon('save') + 'Save'; saveBtn.disabled = false; }
             toast('Failed to save description', 'error');
         }
+    }
+
+    // One update at a time per task, in order (v0.10.1 saves): two quick checklist or tag
+    // saves (whole lists) could land out of order and the older list won. Fields asked for
+    // while one is on its way go together in the next update, each with its latest value.
+    const taskSaves = new Map();
+    function queueTaskUpdate(projectId, taskId, body) {
+        let q = taskSaves.get(taskId);
+        if (!q) { q = { chain: Promise.resolve(), pending: null, waiting: null }; taskSaves.set(taskId, q); }
+        if (q.pending) { Object.assign(q.pending, body); return q.waiting; }
+        q.pending = Object.assign({}, body);
+        q.waiting = q.chain.then(() => {
+            const send = q.pending;
+            q.pending = null;
+            return api.updateTask(projectId, taskId, send);
+        });
+        q.chain = q.waiting.catch(() => {});
+        return q.waiting;
     }
 
     async function saveTaskField(field, value) {
@@ -1317,9 +1755,9 @@
         }
         task[field] = value;
         try {
-            await api.updateTask(p.id, task.id, { [field]: value });
+            await queueTaskUpdate(p.id, task.id, { [field]: value });
             // Re-render board card
-            const cardEl = document.getElementById(`task-${task.id}`);
+            const cardEl = findTaskCard(task.id);
             if (cardEl) {
                 const newCard = document.createElement('div');
                 newCard.innerHTML = renderTaskCard(task);
@@ -1334,7 +1772,7 @@
         if (field === 'columnId') {
             // Re-render board
             const mc = getMainContent();
-            if (mc && state.currentProject) { mc.innerHTML = renderBoardView(); bindBoardEvents(); }
+            rerenderBoard();
             // Re-open detail panel
             const task = state.currentTask;
             if (task) { openTaskDetail(task.id); }
@@ -1344,7 +1782,7 @@
     // Checklist
     async function toggleChecklistItem(idx, done) {
         const task = state.currentTask;
-        if (!task || !task.checklist) return;
+        if (!task || !Array.isArray(task.checklist) || !task.checklist[idx]) return;
         task.checklist[idx].done = done;
         const li = document.querySelectorAll('#detail-checklist .proj-checklist-item')[idx];
         if (li) li.classList.toggle('done', done);
@@ -1353,7 +1791,7 @@
     }
     async function deleteChecklistItem(idx) {
         const task = state.currentTask;
-        if (!task || !task.checklist) return;
+        if (!task || !Array.isArray(task.checklist) || !(idx >= 0 && idx < task.checklist.length)) return;
         task.checklist.splice(idx, 1);
         await saveTaskField('checklist', task.checklist);
         renderDetailPanel(task);
@@ -1402,7 +1840,7 @@
         inp.onblur = save;
         inp.onkeydown = (e) => {
             if (e.key === 'Enter') { e.preventDefault(); inp.blur(); }
-            if (e.key === 'Escape') { inp.value = item.text; inp.blur(); }
+            if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); inp.value = item.text; inp.blur(); }
         };
     }
 
@@ -1458,7 +1896,8 @@
         const task = state.currentTask;
         const p = state.currentProject;
         if (!task || !p) return;
-        if (!confirm(`Delete task "${task.title}"?`)) return;
+        const ok = await uiConfirm({ title: 'Delete task?', body: `"${String(task.title || 'Untitled')}" will be removed from this project.`, okLabel: 'Delete', danger: true });
+        if (!ok || !state.currentTask || state.currentTask.id !== task.id) return;
         try {
             closeDetailPanel();
             // Animate the deletion first
@@ -1466,7 +1905,7 @@
             await api.deleteTask(p.id, task.id);
             p.tasks = p.tasks.filter(t => t.id !== task.id);
             const mc = getMainContent();
-            if (mc) { mc.innerHTML = renderBoardView(); bindBoardEvents(); }
+            rerenderBoard();
             toast('Task deleted', 'success');
             populateBoardScoreboard();
         } catch (e) { toast('Failed to delete task', 'error'); }
@@ -1479,7 +1918,7 @@
         const copy = { title: src.title + ' (copy)', description: src.description, columnId: src.columnId, priority: src.priority, tags: [...(src.tags || [])], checklist: (src.checklist || []).map(c => ({ ...c, id: genId(), done: false })) };
         try {
             const d = await api.createTask(p.id, copy);
-            if (d.task) { p.tasks.push(d.task); const mc = getMainContent(); if (mc) { mc.innerHTML = renderBoardView(); bindBoardEvents(); } toast('Task duplicated', 'success'); }
+            if (d.task) { p.tasks.push(d.task); const mc = getMainContent(); rerenderBoard(); toast('Task duplicated', 'success'); }
         } catch (e) { toast('Failed to duplicate', 'error'); }
     }
 
@@ -1497,226 +1936,283 @@
     function showFormModal(type, data, extra) {
         const overlay = document.getElementById('proj-form-overlay');
         if (!overlay) return;
+        if (overlay.classList.contains('hidden')) {
+            const active = document.activeElement;
+            state.formOpener = active && active !== document.body ? active : null;
+        }
         overlay.classList.remove('hidden');
+        data = data || {};
+        const status = safeStatus(data.status);
+        const priority = safePriority(data.priority);
+        const box = (formName, titleId, inner, maxWidth) => `
+            <div class="proj-form-modal proj-form-inner" style="position:static;padding:0;background:transparent" role="dialog" aria-modal="true" aria-labelledby="${titleId}">
+            <form class="proj-form-box${maxWidth ? ' proj-form-box-narrow' : ''}" data-form="${formName}" novalidate>
+                ${inner}
+            </form>
+            </div>`;
 
         if (type === 'new-project') {
-            overlay.innerHTML = `
-            <div class="proj-form-modal" style="position:static;padding:0;background:transparent" onclick="event.stopPropagation()">
-            <div class="proj-form-box">
-                <div class="proj-form-title">📋 NEW PROJECT</div>
+            overlay.innerHTML = box('new-project', 'pf-heading', `
+                <div class="proj-form-title" id="pf-heading">📋 NEW PROJECT</div>
                 <div class="proj-form-group">
-                    <label class="proj-form-label">Title *</label>
-                    <input class="proj-form-input" id="pf-title" type="text" placeholder="Project title" autofocus>
+                    <label class="proj-form-label" for="pf-title">Title *</label>
+                    <input class="proj-form-input" id="pf-title" type="text" placeholder="Project title" required>
                 </div>
                 <div class="proj-form-group">
-                    <label class="proj-form-label">Description</label>
+                    <label class="proj-form-label" for="pf-desc">Description</label>
                     <textarea class="proj-form-textarea" id="pf-desc" placeholder="What is this project about?"></textarea>
                 </div>
                 <div class="proj-form-row">
                     <div class="proj-form-group">
-                        <label class="proj-form-label">Status</label>
+                        <label class="proj-form-label" for="pf-status">Status</label>
                         <select class="proj-form-select" id="pf-status">
                             <option value="active">Active</option>
                             <option value="paused">Paused</option>
                         </select>
                     </div>
                     <div class="proj-form-group">
-                        <label class="proj-form-label">Priority</label>
+                        <label class="proj-form-label" for="pf-priority">Priority</label>
                         <select class="proj-form-select" id="pf-priority">
-                            <option value="critical">🔴 Critical</option>
-                            <option value="high">🟠 High</option>
-                            <option value="medium" selected>🔵 Medium</option>
-                            <option value="low">⚪ Low</option>
+                            <option value="critical">Critical</option>
+                            <option value="high">High</option>
+                            <option value="medium" selected>Medium</option>
+                            <option value="low">Low</option>
                         </select>
                     </div>
                 </div>
                 <div class="proj-form-row">
                     <div class="proj-form-group">
-                        <label class="proj-form-label">Due Date</label>
+                        <label class="proj-form-label" for="pf-due">Due Date</label>
                         <input class="proj-form-input" id="pf-due" type="date">
                     </div>
                     <div class="proj-form-group">
-                        <label class="proj-form-label">Tags (comma-sep)</label>
+                        <label class="proj-form-label" for="pf-tags">Tags (comma-sep)</label>
                         <input class="proj-form-input" id="pf-tags" type="text" placeholder="tag1, tag2">
                     </div>
                 </div>
                 ${extra ? `<input type="hidden" id="pf-template-id" value="${escHtml(extra)}">` : ''}
                 <div class="proj-form-actions">
-                    <button class="proj-btn" onclick="ProjMgr.hideFormModal()">Cancel</button>
-                    <button class="proj-btn proj-btn-primary" onclick="ProjMgr.submitNewProject()">Create Project</button>
-                </div>
-            </div>
-            </div>`;
-            document.getElementById('pf-title').focus();
+                    <button type="button" class="proj-btn" data-action="hide-form">Cancel</button>
+                    <button type="submit" class="proj-btn proj-btn-primary">Create Project</button>
+                </div>`);
+            focusById('pf-title');
 
         } else if (type === 'edit-project') {
-            overlay.innerHTML = `
-            <div class="proj-form-modal" style="position:static;padding:0;background:transparent" onclick="event.stopPropagation()">
-            <div class="proj-form-box">
-                <div class="proj-form-title">✏️ EDIT PROJECT</div>
+            overlay.innerHTML = box('edit-project', 'pf-heading', `
+                <div class="proj-form-title" id="pf-heading">✏️ EDIT PROJECT</div>
                 <div class="proj-form-group">
-                    <label class="proj-form-label">Title *</label>
-                    <input class="proj-form-input" id="pf-title" type="text" value="${escHtml(data.title || '')}">
+                    <label class="proj-form-label" for="pf-title">Title *</label>
+                    <input class="proj-form-input" id="pf-title" type="text" value="${escHtml(data.title || '')}" required>
                 </div>
                 <div class="proj-form-group">
-                    <label class="proj-form-label">Description</label>
+                    <label class="proj-form-label" for="pf-desc">Description</label>
                     <textarea class="proj-form-textarea" id="pf-desc">${escHtml(data.description || '')}</textarea>
                 </div>
                 <div class="proj-form-row">
                     <div class="proj-form-group">
-                        <label class="proj-form-label">Status</label>
+                        <label class="proj-form-label" for="pf-status">Status</label>
                         <select class="proj-form-select" id="pf-status">
-                            <option value="active" ${data.status === 'active' ? 'selected' : ''}>Active</option>
-                            <option value="paused" ${data.status === 'paused' ? 'selected' : ''}>Paused</option>
-                            <option value="completed" ${data.status === 'completed' ? 'selected' : ''}>Completed</option>
-                            <option value="archived" ${data.status === 'archived' ? 'selected' : ''}>Archived</option>
+                            <option value="active" ${selectedAttr(status === 'active')}>Active</option>
+                            <option value="paused" ${selectedAttr(status === 'paused')}>Paused</option>
+                            <option value="completed" ${selectedAttr(status === 'completed')}>Completed</option>
+                            <option value="archived" ${selectedAttr(status === 'archived')}>Archived</option>
                         </select>
                     </div>
                     <div class="proj-form-group">
-                        <label class="proj-form-label">Priority</label>
+                        <label class="proj-form-label" for="pf-priority">Priority</label>
                         <select class="proj-form-select" id="pf-priority">
-                            <option value="critical" ${data.priority === 'critical' ? 'selected' : ''}>🔴 Critical</option>
-                            <option value="high" ${data.priority === 'high' ? 'selected' : ''}>🟠 High</option>
-                            <option value="medium" ${data.priority === 'medium' ? 'selected' : ''}>🔵 Medium</option>
-                            <option value="low" ${data.priority === 'low' ? 'selected' : ''}>⚪ Low</option>
+                            <option value="critical" ${selectedAttr(priority === 'critical')}>Critical</option>
+                            <option value="high" ${selectedAttr(priority === 'high')}>High</option>
+                            <option value="medium" ${selectedAttr(priority === 'medium')}>Medium</option>
+                            <option value="low" ${selectedAttr(priority === 'low')}>Low</option>
                         </select>
                     </div>
                 </div>
                 <div class="proj-form-row">
                     <div class="proj-form-group">
-                        <label class="proj-form-label">Due Date</label>
-                        <input class="proj-form-input" id="pf-due" type="date" value="${data.dueDate ? data.dueDate.split('T')[0] : ''}">
+                        <label class="proj-form-label" for="pf-due">Due Date</label>
+                        <input class="proj-form-input" id="pf-due" type="date" value="${safeDateValue(data.dueDate)}">
                     </div>
                     <div class="proj-form-group">
-                        <label class="proj-form-label">Tags (comma-sep)</label>
-                        <input class="proj-form-input" id="pf-tags" type="text" value="${escHtml((data.tags || []).join(', '))}">
+                        <label class="proj-form-label" for="pf-tags">Tags (comma-sep)</label>
+                        <input class="proj-form-input" id="pf-tags" type="text" value="${escHtml(tagList(data.tags).join(', '))}">
                     </div>
                 </div>
-                <input type="hidden" id="pf-edit-id" value="${data.id || ''}">
+                <input type="hidden" id="pf-edit-id" value="${escHtml(data.id || '')}">
                 <div class="proj-form-actions">
-                    <button class="proj-btn" onclick="ProjMgr.hideFormModal()">Cancel</button>
-                    <button class="proj-btn proj-btn-primary" onclick="ProjMgr.submitEditProject()">Save Changes</button>
-                </div>
-            </div>
-            </div>`;
+                    <button type="button" class="proj-btn" data-action="hide-form">Cancel</button>
+                    <button type="submit" class="proj-btn proj-btn-primary">Save Changes</button>
+                </div>`);
+            focusById('pf-title');
 
         } else if (type === 'save-template') {
-            overlay.innerHTML = `
-            <div class="proj-form-modal" style="position:static;padding:0;background:transparent" onclick="event.stopPropagation()">
-            <div class="proj-form-box" style="max-width:400px">
-                <div class="proj-form-title">💾 SAVE AS TEMPLATE</div>
+            overlay.innerHTML = box('save-template', 'pf-heading', `
+                <div class="proj-form-title" id="pf-heading">💾 SAVE AS TEMPLATE</div>
                 <div class="proj-form-group">
-                    <label class="proj-form-label">Template Name</label>
-                    <input class="proj-form-input" id="pf-tpl-title" type="text" value="${escHtml(data.title + ' Template')}" autofocus>
+                    <label class="proj-form-label" for="pf-tpl-title">Template Name</label>
+                    <input class="proj-form-input" id="pf-tpl-title" type="text" value="${escHtml(String(data.title || 'Project') + ' Template')}" required>
                 </div>
                 <div class="proj-form-group">
-                    <label class="proj-form-label">Description</label>
+                    <label class="proj-form-label" for="pf-tpl-desc">Description</label>
                     <textarea class="proj-form-textarea" id="pf-tpl-desc" placeholder="What is this template for?">${escHtml(data.description || '')}</textarea>
                 </div>
-                <input type="hidden" id="pf-tpl-proj-id" value="${data.id || ''}">
+                <input type="hidden" id="pf-tpl-proj-id" value="${escHtml(data.id || '')}">
                 <div class="proj-form-actions">
-                    <button class="proj-btn" onclick="ProjMgr.hideFormModal()">Cancel</button>
-                    <button class="proj-btn proj-btn-primary" onclick="ProjMgr.submitSaveTemplate()">Save Template</button>
-                </div>
-            </div>
-            </div>`;
+                    <button type="button" class="proj-btn" data-action="hide-form">Cancel</button>
+                    <button type="submit" class="proj-btn proj-btn-primary">Save Template</button>
+                </div>`, true);
+            focusById('pf-tpl-title');
         }
+    }
+
+    function focusById(id) {
+        const el = document.getElementById(id);
+        if (el) el.focus({ preventScroll: true });
+    }
+
+    function isFormOpen() {
+        const overlay = document.getElementById('proj-form-overlay');
+        return !!(overlay && !overlay.classList.contains('hidden'));
     }
 
     function hideFormModal() {
         const overlay = document.getElementById('proj-form-overlay');
-        if (overlay) { overlay.innerHTML = ''; overlay.classList.add('hidden'); }
+        if (!overlay) return;
+        const wasOpen = !overlay.classList.contains('hidden');
+        const hadFocus = overlay.contains(document.activeElement);
+        overlay.innerHTML = '';
+        overlay.classList.add('hidden');
+        const opener = state.formOpener;
+        state.formOpener = null;
+        if (wasOpen && (hadFocus || document.activeElement === document.body) && opener && opener.isConnected && isModalOpen()) {
+            opener.focus({ preventScroll: true });
+        }
+    }
+
+    /** <input type=date> value -> ISO string at noon UTC, so the day does not shift across time zones. */
+    function dateInputToIso(value) {
+        return /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? `${value}T12:00:00.000Z` : null;
+    }
+
+    function fieldValue(id) {
+        const el = document.getElementById(id);
+        return el ? String(el.value || '') : '';
+    }
+
+    function readProjectForm() {
+        return {
+            title: fieldValue('pf-title').trim(),
+            description: fieldValue('pf-desc'),
+            status: safeStatus(fieldValue('pf-status')),
+            priority: safePriority(fieldValue('pf-priority')),
+            dueDate: dateInputToIso(fieldValue('pf-due')),
+            tags: fieldValue('pf-tags').split(',').map(t => t.trim()).filter(Boolean),
+        };
+    }
+
+    function setFormBusy(busy) {
+        const btn = document.querySelector('#proj-form-overlay button[type="submit"]');
+        if (btn) btn.disabled = !!busy;
     }
 
     async function submitNewProject() {
-        const title = (document.getElementById('pf-title') || {}).value.trim();
-        if (!title) { toast('Title is required', 'error'); return; }
-        const tplId = document.getElementById('pf-template-id');
-        const body = {
-            title,
-            description: (document.getElementById('pf-desc') || {}).value || '',
-            status: (document.getElementById('pf-status') || {}).value || 'active',
-            priority: (document.getElementById('pf-priority') || {}).value || 'medium',
-            dueDate: (document.getElementById('pf-due') || {}).value ? new Date(document.getElementById('pf-due').value).toISOString() : null,
-            tags: ((document.getElementById('pf-tags') || {}).value || '').split(',').map(t => t.trim()).filter(Boolean),
-        };
+        const body = readProjectForm();
+        if (!body.title) { toast('Title is required', 'error'); focusById('pf-title'); return; }
+        const templateId = fieldValue('pf-template-id');
+        setFormBusy(true);
         try {
-            let d;
-            if (tplId && tplId.value) {
-                d = await api.createFromTemplate({ ...body, templateId: tplId.value });
-            } else {
-                d = await api.createProject(body);
-            }
+            const d = templateId
+                ? await api.createFromTemplate({ ...body, templateId })
+                : await api.createProject(body);
+            if (!d || !d.project) throw new Error((d && d.error) || 'No project returned');
             hideFormModal();
-            if (d.project) {
-                toast('Project created!', 'success');
-                await openProject(d.project.id);
-            }
-        } catch (e) { toast('Failed to create project', 'error'); }
+            toast('Project created!', 'success');
+            await openProject(d.project.id);
+        } catch (e) {
+            setFormBusy(false);
+            toast('Failed to create project', 'error');
+        }
     }
 
     async function submitEditProject() {
-        const id = (document.getElementById('pf-edit-id') || {}).value;
-        const title = (document.getElementById('pf-title') || {}).value.trim();
-        if (!title || !id) return;
-        const body = {
-            title,
-            description: (document.getElementById('pf-desc') || {}).value || '',
-            status: (document.getElementById('pf-status') || {}).value || 'active',
-            priority: (document.getElementById('pf-priority') || {}).value || 'medium',
-            dueDate: (document.getElementById('pf-due') || {}).value ? new Date(document.getElementById('pf-due').value).toISOString() : null,
-            tags: ((document.getElementById('pf-tags') || {}).value || '').split(',').map(t => t.trim()).filter(Boolean),
-        };
+        const id = fieldValue('pf-edit-id');
+        const body = readProjectForm();
+        if (!id) return;
+        if (!body.title) { toast('Title is required', 'error'); focusById('pf-title'); return; }
+        setFormBusy(true);
         try {
             const d = await api.updateProject(id, body);
+            if (d && d.error) throw new Error(d.error);
             hideFormModal();
             if (state.currentProject && state.currentProject.id === id) Object.assign(state.currentProject, body);
             toast('Project updated!', 'success');
-            if (state.view === 'board') { const mc = getMainContent(); if (mc) { mc.innerHTML = renderBoardView(); bindBoardEvents(); } }
+            if (state.view === 'board') { rerenderBoard(); populateBoardScoreboard(); }
             else { showListView(); }
-        } catch (e) { toast('Failed to update project', 'error'); }
+        } catch (e) {
+            setFormBusy(false);
+            toast('Failed to update project', 'error');
+        }
     }
 
     // ── PROJECT CRUD ──────────────────────────────────────────────
+    function projectTitle(id) {
+        const p = (state.currentProject && state.currentProject.id === id) ? state.currentProject : state.projects.find(x => x && x.id === id);
+        return p && p.title ? String(p.title) : 'this project';
+    }
+
     async function archiveProject(id, e) {
-        if (e) e.stopPropagation();
-        if (!confirm('Archive this project?')) return;
+        if (e && e.stopPropagation) e.stopPropagation();
+        const ok = await uiConfirm({ title: 'Archive project?', body: `"${projectTitle(id)}" moves to Archived. You can find it with the status filter.`, okLabel: 'Archive' });
+        if (!ok) return;
         try {
             await api.updateProject(id, { status: 'archived' });
             toast('Project archived', 'success');
             showListView();
-        } catch (e) { toast('Failed to archive', 'error'); }
+        } catch (err) { toast('Failed to archive', 'error'); }
     }
 
     async function deleteProject(id, e) {
-        if (e) e.stopPropagation();
-        if (!confirm('Delete this project? This cannot be undone.')) return;
+        if (e && e.stopPropagation) e.stopPropagation();
+        const ok = await uiConfirm({ title: 'Delete project?', body: `"${projectTitle(id)}" and all of its tasks will be deleted. This cannot be undone.`, okLabel: 'Delete', danger: true });
+        if (!ok) return;
         try {
             await api.deleteProject(id);
             toast('Project deleted', 'success');
             showListView();
-        } catch (e) { toast('Failed to delete', 'error'); }
+        } catch (err) { toast('Failed to delete', 'error'); }
     }
 
     function filterChange(key, value) {
-        state.filters[key] = value;
+        if (!Object.prototype.hasOwnProperty.call(state.filters, key)) return;
+        state.filters[key] = String(value || '');
         const mc = getMainContent();
-        if (mc) mc.innerHTML = renderListView();
+        if (!mc || state.view !== 'list') return;
+        if (key === 'search') {
+            // Only refresh the cards so the search box keeps focus and caret.
+            const grid = mc.querySelector('.proj-grid');
+            if (grid) { grid.innerHTML = renderProjectGrid(); return; }
+        }
+        mc.innerHTML = renderListView();
+        const sel = mc.querySelector(`select[data-filter="${cssEsc(key)}"]`);
+        if (sel) sel.focus({ preventScroll: true });
     }
 
     function backToList() { closeDetailPanel(); showListView(); }
 
     // ── TEMPLATES VIEW ────────────────────────────────────────────
     async function showTemplatesView() {
+        const token = nextViewToken();
         state.view = 'templates';
         closeDetailPanel();
+        stopWorkflowPolling();
         const mc = getMainContent();
         if (!mc) return;
         mc.innerHTML = renderListSkeleton();
         try {
             const d = await api.listTemplates();
-            state.templates = d.templates || [];
+            state.templates = Array.isArray(d && d.templates) ? d.templates.filter(t => t && typeof t === 'object') : [];
         } catch (e) { state.templates = []; }
+        if (!isCurrentView(token)) return;
         mc.innerHTML = renderTemplatesView();
     }
 
@@ -1727,11 +2223,11 @@
         const all = [...DEFAULT_TEMPLATES, ...serverOnly];
         return `
         <div class="proj-toolbar">
-            <button class="proj-btn" onclick="ProjMgr.backToList()">← Back to Projects</button>
-            <span class="proj-toolbar-title">📁 Templates</span>
+            <button class="proj-btn" data-action="back-to-list"><span class="proj-icon-back">${icon('chev')}</span>Back to Projects</button>
+            <span class="proj-toolbar-title proj-subview-title">${icon('grid')}Templates</span>
         </div>
         <div class="proj-list-body">
-            <div style="margin-bottom:16px;font-size:12px;color:#888">Choose a template to create a new project, or save your current project as a template.</div>
+            <div class="proj-view-intro">Choose a template to create a new project, or save your current project as a template.</div>
             <div class="proj-tpl-grid">
                 ${all.map(tpl => renderTemplateCard(tpl)).join('')}
             </div>
@@ -1740,27 +2236,34 @@
 
     function renderTemplateCard(tpl) {
         const isBuiltin = DEFAULT_TEMPLATES.some(t => t.id === tpl.id);
+        const id = escHtml(tpl.id);
+        const columns = Array.isArray(tpl.columns) ? tpl.columns.filter(c => c && typeof c === 'object') : [];
         return `
         <div class="proj-tpl-card">
             <div class="proj-tpl-title">${escHtml(tpl.title)}</div>
             <div class="proj-tpl-desc">${escHtml(tpl.description || '')}</div>
             <div class="proj-tpl-cols">
-                ${(tpl.columns || []).map(c => `<span class="proj-tpl-col-chip" style="background:${c.color}22;border-color:${c.color}55;color:${c.color}">${escHtml(c.title)}</span>`).join('')}
+                ${columns.map(c => {
+                    const color = hexBase(c.color);
+                    return `<span class="proj-tpl-col-chip" style="background:${color}22;border-color:${color}55;color:${color}">${escHtml(c.title)}</span>`;
+                }).join('')}
             </div>
             <div class="proj-tpl-actions">
-                <button class="proj-btn proj-btn-sm proj-btn-primary" onclick="ProjMgr.newProjectDialog('${tpl.id}')">Use Template</button>
-                ${!isBuiltin ? `<button class="proj-btn proj-btn-sm proj-btn-danger" onclick="ProjMgr.deleteTemplate('${tpl.id}')">Delete</button>` : ''}
+                <button class="proj-btn proj-btn-sm proj-btn-primary" data-action="use-template" data-id="${id}">Use Template</button>
+                ${!isBuiltin ? `<button class="proj-btn proj-btn-sm proj-btn-danger" data-action="delete-template" data-id="${id}">Delete</button>` : ''}
             </div>
         </div>`;
     }
 
     async function deleteTemplate(id) {
-        if (!confirm('Delete this template?')) return;
+        const tpl = state.templates.find(t => t.id === id);
+        const ok = await uiConfirm({ title: 'Delete template?', body: `"${tpl && tpl.title ? String(tpl.title) : 'This template'}" will be removed. Projects made from it stay.`, okLabel: 'Delete', danger: true });
+        if (!ok) return;
         try {
             await api.deleteTemplate(id);
             state.templates = state.templates.filter(t => t.id !== id);
             const mc = getMainContent();
-            if (mc) mc.innerHTML = renderTemplatesView();
+            if (mc && state.view === 'templates') mc.innerHTML = renderTemplatesView();
             toast('Template deleted', 'success');
         } catch (e) { toast('Failed to delete template', 'error'); }
     }
@@ -1772,68 +2275,93 @@
     }
 
     async function submitSaveTemplate() {
-        const title = (document.getElementById('pf-tpl-title') || {}).value.trim();
-        const projectId = (document.getElementById('pf-tpl-proj-id') || {}).value;
-        const desc = (document.getElementById('pf-tpl-desc') || {}).value || '';
-        if (!title) return;
+        const title = fieldValue('pf-tpl-title').trim();
+        const projectId = fieldValue('pf-tpl-proj-id');
+        const desc = fieldValue('pf-tpl-desc');
+        if (!title) { toast('Template name is required', 'error'); focusById('pf-tpl-title'); return; }
+        setFormBusy(true);
         try {
-            await api.saveTemplate({ title, description: desc, projectId });
+            const d = await api.saveTemplate({ title, description: desc, projectId });
+            if (d && d.error) throw new Error(d.error);
             hideFormModal();
             toast('Template saved!', 'success');
-        } catch (e) { toast('Failed to save template', 'error'); }
+        } catch (e) {
+            setFormBusy(false);
+            toast('Failed to save template', 'error');
+        }
     }
 
     // ── REPORT VIEW ───────────────────────────────────────────────
     async function showReport(id) {
+        const token = nextViewToken();
         const mc = getMainContent();
         if (!mc) return;
-        mc.innerHTML = renderListSkeleton();
         state.view = 'report';
         closeDetailPanel();
+        stopWorkflowPolling();
+        mc.innerHTML = renderListSkeleton();
         try {
             const d = await api.getReport(id);
-            if (!d.report) throw new Error('No report');
+            if (!isCurrentView(token)) return;
+            if (!d || !d.report) throw new Error('No report');
             mc.innerHTML = renderReportView(d.report);
         } catch (e) {
-            mc.innerHTML = `<div class="proj-loading">⚠️ Failed to generate report</div>`;
+            if (!isCurrentView(token)) return;
+            mc.innerHTML = `<div class="proj-loading"><div>⚠️ Failed to generate report</div><button class="proj-btn" data-action="back-to-list">← Back to Projects</button></div>`;
         }
     }
 
     function renderReportView(r) {
-        const { stats, columns, agentWorkload, timeline, title } = r;
-        const maxColCount = Math.max(...columns.map(c => c.count), 1);
-        const maxAgentCount = Math.max(...Object.values(agentWorkload || {}), 1);
+        const stats = (r && r.stats) || {};
+        const columns = Array.isArray(r && r.columns) ? r.columns.filter(c => c && typeof c === 'object') : [];
+        const timeline = Array.isArray(r && r.timeline) ? r.timeline.filter(t => t && typeof t === 'object') : [];
+        const title = r && r.title;
+        // Merge workload by office agent; ids outside the office become one "Other agents" row.
+        const workload = new Map();
+        let otherCount = 0;
+        let otherIds = 0;
+        Object.entries((r && r.agentWorkload) || {}).forEach(([agentId, count]) => {
+            const agent = resolveAgent(agentId);
+            if (!agent) { otherCount += num(count); otherIds += 1; return; }
+            const label = `${agent.emoji} ${agent.name}`;
+            workload.set(label, (workload.get(label) || 0) + num(count));
+        });
+        if (otherIds) workload.set('👥 ' + otherAgentsLabel(otherIds), otherCount);
+        const maxColCount = Math.max(...columns.map(c => num(c.count)), 1);
+        const maxAgentCount = Math.max(...workload.values(), 1);
+        const generated = r && r.generatedAt ? new Date(r.generatedAt) : null;
+        const generatedText = generated && !isNaN(generated.getTime()) ? generated.toLocaleString() : '';
 
         return `
         <div class="proj-toolbar">
-            <button class="proj-btn" onclick="ProjMgr.backToList()">← Back</button>
-            <span class="proj-toolbar-title">📊 Report</span>
-            <div style="flex:1"></div>
-            <button class="proj-btn proj-btn-sm" onclick="ProjMgr.exportReport()">📤 Export Markdown</button>
+            <button class="proj-btn" data-action="back-to-list"><span class="proj-icon-back">${icon('chev')}</span>Back</button>
+            <span class="proj-toolbar-title proj-subview-title">${icon('log')}Report</span>
+            <div class="proj-toolbar-spacer"></div>
+            <button class="proj-btn proj-btn-sm" data-action="export-report">${icon('save')}Export Markdown</button>
         </div>
         <div class="proj-report-body">
             <div class="proj-report-header">
                 <div>
                     <div class="proj-report-title">${escHtml(title)}</div>
-                    <div class="proj-report-subtitle">Generated ${new Date(r.generatedAt).toLocaleString()}</div>
+                    ${generatedText ? `<div class="proj-report-subtitle">Generated ${escHtml(generatedText)}</div>` : ''}
                 </div>
             </div>
 
             <div class="proj-stats-grid">
                 <div class="proj-stat-card">
-                    <div class="proj-stat-value">${stats.total}</div>
+                    <div class="proj-stat-value">${num(stats.total)}</div>
                     <div class="proj-stat-label">Total Tasks</div>
                 </div>
                 <div class="proj-stat-card">
-                    <div class="proj-stat-value" style="color:#4caf50">${stats.done}</div>
+                    <div class="proj-stat-value proj-stat-done">${num(stats.done)}</div>
                     <div class="proj-stat-label">Completed</div>
                 </div>
                 <div class="proj-stat-card">
-                    <div class="proj-stat-value" style="color:#ffc107">${stats.inProgress}</div>
+                    <div class="proj-stat-value proj-stat-progress">${num(stats.inProgress)}</div>
                     <div class="proj-stat-label">In Progress</div>
                 </div>
                 <div class="proj-stat-card">
-                    <div class="proj-stat-value" style="color:#f44336">${stats.overdue}</div>
+                    <div class="proj-stat-value proj-stat-overdue">${num(stats.overdue)}</div>
                     <div class="proj-stat-label">Overdue</div>
                 </div>
             </div>
@@ -1841,26 +2369,29 @@
             <div class="proj-chart-section">
                 <div class="proj-chart-title">📊 Tasks by Column</div>
                 <div class="proj-bar-chart">
-                    ${columns.map(c => `
+                    ${columns.map(c => {
+                        const count = num(c.count);
+                        return `
                     <div class="proj-bar-row">
                         <div class="proj-bar-label" title="${escHtml(c.title)}">${escHtml(c.title)}</div>
                         <div class="proj-bar-track">
-                            <div class="proj-bar-fill" style="width:${Math.round(c.count/maxColCount*100)}%;background:${c.color}">${c.count}</div>
+                            <div class="proj-bar-fill" style="width:${Math.round(count / maxColCount * 100)}%;background:${safeColor(c.color)}">${count}</div>
                         </div>
-                        <div class="proj-bar-count">${c.count}</div>
-                    </div>`).join('')}
+                        <div class="proj-bar-count">${count}</div>
+                    </div>`;
+                    }).join('')}
                 </div>
             </div>
 
-            ${Object.keys(agentWorkload || {}).length ? `
+            ${workload.size ? `
             <div class="proj-chart-section">
                 <div class="proj-chart-title">👥 Agent Workload</div>
                 <div class="proj-bar-chart">
-                    ${Object.entries(agentWorkload).map(([agent, count]) => `
+                    ${[...workload.entries()].map(([label, count]) => `
                     <div class="proj-bar-row">
-                        <div class="proj-bar-label" title="${escHtml(agent)}">${escHtml(agent)}</div>
+                        <div class="proj-bar-label" title="${escHtml(label)}">${escHtml(label)}</div>
                         <div class="proj-bar-track">
-                            <div class="proj-bar-fill" style="width:${Math.round(count/maxAgentCount*100)}%;background:#ffd700"></div>
+                            <div class="proj-bar-fill proj-bar-fill-agent" style="width:${Math.round(count / maxAgentCount * 100)}%"></div>
                         </div>
                         <div class="proj-bar-count">${count}</div>
                     </div>`).join('')}
@@ -1873,14 +2404,15 @@
                 <div class="proj-timeline">
                     ${timeline.map(t => {
                         const over = t.dueDate && !t.completedAt && isOverdue(t.dueDate);
+                        const priority = safePriority(t.priority);
                         return `
                         <div class="proj-tl-item ${t.completedAt ? 'completed' : over ? 'overdue' : ''}">
                             <div class="proj-tl-title">${escHtml(t.title)}</div>
                             <div class="proj-tl-meta">
-                                <span>📅 ${formatDate(t.dueDate)}</span>
-                                ${t.assignee ? `<span>👤 ${escHtml(t.assignee)}</span>` : ''}
-                                <span class="proj-badge badge-${t.priority || 'medium'}" style="font-size:9px">${t.priority || 'medium'}</span>
-                                ${t.completedAt ? `<span style="color:#4caf50">✅ Done</span>` : over ? `<span style="color:#f87171">⚠️ Overdue</span>` : ''}
+                                <span>📅 ${escHtml(formatDate(t.dueDate))}</span>
+                                ${t.assignee ? `<span>${escHtml(agentLabel(t.assignee))}</span>` : ''}
+                                <span class="proj-badge proj-badge-xs badge-${priority}">${priority}</span>
+                                ${t.completedAt ? `<span class="proj-tl-done">✅ Done</span>` : over ? `<span class="proj-tl-overdue">⚠️ Overdue</span>` : ''}
                             </div>
                         </div>`;
                     }).join('')}
@@ -1919,27 +2451,47 @@
     function updateSidebar() {
         const el = document.getElementById('sidebar-projects-list');
         if (!el) return;
-        const active = state.projects.filter(p => p.status === 'active').slice(0, 5);
+        bindSidebar(el);
+        const active = state.projects.filter(p => p && p.status === 'active').slice(0, 5);
         if (active.length === 0) {
-            el.innerHTML = '<div style="font-size:10px;color:#555;padding:4px">No active projects</div>';
+            el.innerHTML = '<div class="sidebar-proj-empty">No active projects</div>';
             return;
         }
         el.innerHTML = active.map(p => {
-            const pct = p.taskCount > 0 ? Math.round(p.taskDone / p.taskCount * 100) : 0;
+            const total = num(p.taskCount);
+            const pct = total > 0 ? Math.max(0, Math.min(100, Math.round(num(p.taskDone) / total * 100))) : 0;
             return `
-            <div class="sidebar-proj-item" onclick="ProjMgr.openProjectsManager();ProjMgr.openProject('${p.id}')">
-                <div class="proj-dot" style="background:${priorityColor(p.priority)}"></div>
+            <div class="sidebar-proj-item" data-project-id="${escHtml(p.id)}" tabindex="0" role="button" aria-label="Open project ${escHtml(p.title)}">
+                <div class="proj-dot" style="background:${priorityColor(safePriority(p.priority))}"></div>
                 <span class="proj-name">${escHtml(p.title)}</span>
                 <span class="proj-progress-mini">${pct}%</span>
             </div>`;
         }).join('');
     }
 
+    function bindSidebar(el) {
+        if (el.dataset.projBound) return;
+        el.dataset.projBound = '1';
+        const open = (item) => {
+            const id = item && item.dataset.projectId;
+            if (id) openProjectsManager({ projectId: id });
+        };
+        el.addEventListener('click', e => open(e.target.closest('.sidebar-proj-item[data-project-id]')));
+        el.addEventListener('keydown', e => {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            const item = e.target.closest('.sidebar-proj-item[data-project-id]');
+            if (!item) return;
+            e.preventDefault();
+            open(item);
+        });
+    }
+
     // Init sidebar on load
     (async function initSidebar() {
+        ensureBound();
         try {
             const d = await api.listProjects('active');
-            state.projects = d.projects || [];
+            state.projects = Array.isArray(d && d.projects) ? d.projects : [];
             updateSidebar();
             // Also load agent roster for leaderboard names
             await loadAgentRoster();
@@ -1948,12 +2500,212 @@
     })();
 
     // ── GLOBAL KEYBOARD ───────────────────────────────────────────
+    /** Close the topmost Projects layer: form, then task detail, then the board. */
+    function closeTopLayer() {
+        if (!isModalOpen()) return false;
+        if (isFormOpen()) { hideFormModal(); return true; }
+        const panel = document.getElementById('proj-detail-panel');
+        if (state.currentTask || (panel && panel.classList.contains('open'))) { closeDetailPanel(); return true; }
+        closeProjectsModal();
+        return true;
+    }
+
+    /**
+     * One Escape handler for the whole board, registered in the capture phase
+     * so it runs before the generic VOUI window handler (which would close the
+     * whole board). It marks the event handled with preventDefault.
+     */
     function handleGlobalKeys(e) {
-        if (e.key === 'Escape') {
-            if (state.currentTask) closeDetailPanel();
-            const overlay = document.getElementById('proj-form-overlay');
-            if (overlay && !overlay.classList.contains('hidden')) hideFormModal();
-        }
+        if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing) return;
+        if (!isModalOpen()) return;
+        // A VOUI confirm/prompt we opened is on top: let it handle Escape.
+        if (state.dialogDepth > 0) return;
+        const modal = getModal();
+        const target = e.target;
+        const targetIsPage = !target || target === document || target === document.body || target === document.documentElement;
+        // Another window above the board has focus: not ours.
+        if (!targetIsPage && target.nodeType === 1 && !modal.contains(target)) return;
+        // Inline editors cancel their own edit on Escape.
+        if (!targetIsPage && target.closest && target.closest('.proj-col-title-input, .proj-checklist-edit-input, .proj-quick-add-input')) return;
+        e.preventDefault();
+        closeTopLayer();
+    }
+
+    // ── DELEGATED EVENTS ──────────────────────────────────────────
+    // Every control in the board carries data-action / data-change /
+    // data-keydown / data-dblclick and is handled here, so no server value
+    // ever ends up inside an inline handler string.
+    function currentTaskIndex(el) {
+        const i = parseInt(el.dataset.index, 10);
+        return Number.isInteger(i) && i >= 0 ? i : -1;
+    }
+
+    const CLICK_ACTIONS = {
+        'none': () => {},
+        'new-project': () => newProjectDialog(),
+        'show-templates': () => showTemplatesView(),
+        'open-project': el => el.dataset.id && openProject(el.dataset.id),
+        'show-report': el => el.dataset.id && showReport(el.dataset.id),
+        'archive-project': el => el.dataset.id && archiveProject(el.dataset.id),
+        'delete-project': el => el.dataset.id && deleteProject(el.dataset.id),
+        'back-to-list': () => backToList(),
+        'workflow-start': () => workflowStartAction(),
+        'workflow-stop': () => workflowStopAction(),
+        'edit-project': el => editProjectDialog(el.dataset.id),
+        'save-template': el => saveAsTemplateDialog(el.dataset.id),
+        'toggle-desc': el => {
+            const desc = el.nextElementSibling;
+            if (!desc) return;
+            const expanded = desc.classList.toggle('expanded');
+            el.textContent = expanded ? '▲ Hide description' : '▼ Show description';
+            el.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        },
+        'show-quick-add': el => showQuickAdd(el.dataset.colId),
+        'submit-quick-add': el => submitQuickAdd(el.dataset.colId),
+        'hide-quick-add': el => hideQuickAdd(el.dataset.colId),
+        'open-task': el => {
+            if (Date.now() < (state.suppressClickUntil || 0)) return;
+            openTaskDetail(el.dataset.taskId);
+        },
+        'delete-current-task': () => deleteCurrentTask(),
+        'duplicate-task': el => duplicateTask(el.dataset.taskId),
+        'close-detail': () => closeDetailPanel(),
+        'focus-tag-input': () => focusById('detail-tag-in'),
+        'remove-tag': el => {
+            const task = state.currentTask;
+            const tag = task && tagList(task.tags)[currentTaskIndex(el)];
+            if (tag !== undefined) removeTag(tag);
+        },
+        'desc-tab': el => switchDescTab(el.dataset.tab === 'preview' ? 'preview' : 'edit'),
+        'save-description': () => {
+            clearTimeout(state._descAutoSaveTimer);
+            state._descAutoSaveTimer = null;
+            saveDescription();
+        },
+        'edit-checklist': el => editChecklistItem(currentTaskIndex(el)),
+        'delete-checklist': el => deleteChecklistItem(currentTaskIndex(el)),
+        'add-checklist': () => addChecklistItem(),
+        'save-review': () => saveReviewCheckAction(),
+        'submit-comment': () => submitComment(),
+        'hide-form': () => hideFormModal(),
+        'use-template': el => el.dataset.id && newProjectDialog(el.dataset.id),
+        'delete-template': el => el.dataset.id && deleteTemplate(el.dataset.id),
+        'export-report': () => exportReport(),
+    };
+
+    const CHANGE_ACTIONS = {
+        'filter': el => filterChange(el.dataset.filter, el.value),
+        'auto-mode': el => toggleAutoModeAction(!!el.checked),
+        'task-field': el => {
+            const field = el.dataset.field;
+            if (field === 'dueDate') updateTaskField('dueDate', dateInputToIso(el.value));
+            else if (field === 'assignee') updateTaskField('assignee', el.value || null);
+            else if (field === 'priority') updateTaskField('priority', safePriority(el.value));
+            else if (field === 'columnId') updateTaskField('columnId', el.value);
+        },
+        'checklist-toggle': el => toggleChecklistItem(currentTaskIndex(el), !!el.checked),
+        'review-status': el => updateReviewItemStatusAction(currentTaskIndex(el), safeReviewStatus(el.value)),
+    };
+
+    const KEYDOWN_ACTIONS = {
+        'tag-input': (el, e) => handleTagKey(e),
+        'checklist-input': (el, e) => { if (e.key === 'Enter') { e.preventDefault(); addChecklistItem(); } },
+        'quick-add': (el, e) => {
+            if (e.key === 'Enter') { e.preventDefault(); submitQuickAdd(el.dataset.colId); }
+            else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); hideQuickAdd(el.dataset.colId); }
+        },
+    };
+
+    const DBLCLICK_ACTIONS = {
+        'rename-column': el => renameColumn(el.dataset.colId),
+        'edit-checklist': el => editChecklistItem(currentTaskIndex(el)),
+    };
+
+    const FORM_ACTIONS = {
+        'new-project': () => submitNewProject(),
+        'edit-project': () => submitEditProject(),
+        'save-template': () => submitSaveTemplate(),
+    };
+
+    function actionTarget(e, attr, root) {
+        const el = e.target && e.target.closest ? e.target.closest(`[${attr}]`) : null;
+        return el && root.contains(el) ? el : null;
+    }
+
+    function ensureBound() {
+        const root = getModal();
+        if (!root || root.dataset.projBound) return;
+        root.dataset.projBound = '1';
+
+        root.addEventListener('click', e => {
+            const el = actionTarget(e, 'data-action', root);
+            if (!el) return;
+            const fn = CLICK_ACTIONS[el.dataset.action];
+            if (!fn) return;
+            if (el.tagName === 'BUTTON' || el.tagName === 'A') e.preventDefault();
+            fn(el, e);
+        });
+        root.addEventListener('change', e => {
+            const el = actionTarget(e, 'data-change', root);
+            const fn = el && CHANGE_ACTIONS[el.dataset.change];
+            if (fn) fn(el, e);
+        });
+        root.addEventListener('input', e => {
+            const el = actionTarget(e, 'data-input', root);
+            if (el && el.dataset.input === 'search') filterChange('search', el.value);
+        });
+        root.addEventListener('keydown', e => {
+            const keyEl = actionTarget(e, 'data-keydown', root);
+            const keyFn = keyEl && KEYDOWN_ACTIONS[keyEl.dataset.keydown];
+            if (keyFn) { keyFn(keyEl, e); return; }
+            // Enter / Space on card-like elements that act as buttons.
+            if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[role="button"][data-action]')) {
+                e.preventDefault();
+                const fn = CLICK_ACTIONS[e.target.dataset.action];
+                if (fn) fn(e.target, e);
+            }
+        });
+        root.addEventListener('dblclick', e => {
+            const el = actionTarget(e, 'data-dblclick', root);
+            const fn = el && DBLCLICK_ACTIONS[el.dataset.dblclick];
+            if (fn) fn(el, e);
+        });
+        root.addEventListener('submit', e => {
+            const form = e.target && e.target.closest ? e.target.closest('form[data-form]') : null;
+            if (!form) return;
+            e.preventDefault();
+            const fn = FORM_ACTIONS[form.dataset.form];
+            if (fn) fn();
+        });
+
+        // Drag and drop between columns (HTML5) and long-press drag on touch.
+        root.addEventListener('dragstart', e => {
+            const card = e.target.closest && e.target.closest('.proj-task-card[data-task-id]');
+            if (card && root.contains(card)) onDragStart(e, card.dataset.taskId);
+        });
+        root.addEventListener('dragend', e => {
+            if (_dragTaskId) onDragEnd(e);
+        });
+        root.addEventListener('dragover', e => {
+            if (!_dragTaskId) return;
+            const col = e.target.closest && e.target.closest('.proj-col[data-col-id]');
+            if (col) onDragOver(e, col.dataset.colId);
+        });
+        root.addEventListener('dragleave', e => {
+            if (!_dragTaskId) return;
+            const col = e.target.closest && e.target.closest('.proj-col[data-col-id]');
+            if (col) onDragLeave(e, col.dataset.colId);
+        });
+        root.addEventListener('drop', e => {
+            const col = e.target.closest && e.target.closest('.proj-col[data-col-id]');
+            if (col && _dragTaskId) onDrop(e, col.dataset.colId);
+        });
+        root.addEventListener('touchstart', e => {
+            const card = e.target.closest && e.target.closest('.proj-task-card[data-task-id]');
+            if (card && root.contains(card)) onTouchStart(e, card.dataset.taskId);
+        }, { passive: true });
+
+        document.addEventListener('keydown', handleGlobalKeys, true);
     }
 
     // ── WORKFLOW CONTROLS ──────────────────────────────────────────
@@ -2036,12 +2788,9 @@
                             renderDetailPanel(liveTask);
                         }
                     }
-                    const mc = getMainContent();
-                    if (mc && state.view === 'board') {
-                        mc.innerHTML = renderBoardView();
-                        bindBoardEvents();
+                    if (state.view === 'board') {
+                        rerenderBoard();
                         populateBoardScoreboard();
-                        updateActiveColumnIndicator();
                     }
                 }
             }
@@ -2059,10 +2808,8 @@
                 const fresh = await api.getProject(p.id);
                 if (fresh.project) {
                     state.currentProject = fresh.project;
-                    const mc = getMainContent();
-                    if (mc && state.view === 'board') {
-                        mc.innerHTML = renderBoardView();
-                        bindBoardEvents();
+                    if (state.view === 'board') {
+                        rerenderBoard();
                         populateBoardScoreboard();
                     }
                 }
@@ -2085,8 +2832,8 @@
         const liveDot = document.getElementById('proj-chat-live-dot');
         if (!container) return;
 
-        const msgs = data.messages || [];
-        const isActive = data.phase && data.phase !== 'idle' && data.phase !== 'stopped';
+        const msgs = (Array.isArray(data && data.messages) ? data.messages : []).filter(m => m && typeof m === 'object');
+        const isActive = !!(data && data.phase && data.phase !== 'idle' && data.phase !== 'stopped');
 
         if (liveDot) {
             liveDot.className = 'proj-wf-chat-live' + (isActive ? ' live' : '');
@@ -2108,7 +2855,7 @@
             else if (isUser) cls += ' msg-user';
             else if (isTool) cls += ' msg-tool';
 
-            let text = m.text || '';
+            let text = m.text == null ? '' : String(m.text);
             // Truncate very long messages
             if (text.length > 500) text = text.substring(0, 500) + '…';
             text = escHtml(text);
@@ -2121,12 +2868,13 @@
                     timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 }
             }
-            const timeHtml = timeStr ? `<span class="proj-chat-msg-time">${timeStr}</span>` : '';
+            const timeHtml = timeStr ? `<span class="proj-chat-msg-time">${escHtml(timeStr)}</span>` : '';
 
             // Show tool calls as activity indicators
             let toolHtml = '';
-            if (m.tools && m.tools.length > 0) {
-                const toolNames = m.tools.map(t => '🔧 ' + escHtml(t.name)).join(', ');
+            const tools = Array.isArray(m.tools) ? m.tools.filter(t => t && t.name) : [];
+            if (tools.length > 0) {
+                const toolNames = tools.map(t => '🔧 ' + escHtml(t.name)).join(', ');
                 toolHtml = `<div class="proj-chat-msg-tools">${toolNames}</div>`;
             }
 
@@ -2152,7 +2900,7 @@
         // Find which column the current task is in
         const task = state.currentProject.tasks.find(t => t.id === state.workflow.currentTaskId);
         if (!task) return;
-        const colEl = document.getElementById(`col-${task.columnId}`);
+        const colEl = findCol(task.columnId);
         if (colEl) {
             const header = colEl.querySelector('.proj-col-header');
             if (header) header.classList.add('col-active-work');
@@ -2207,7 +2955,7 @@
     async function updateReviewItemStatusAction(index, newStatus) {
         const task = state.currentTask;
         const p = state.currentProject;
-        if (!task || !p || !task.reviewCheck) return;
+        if (!task || !p || !Array.isArray(task.reviewCheck) || !task.reviewCheck[index]) return;
         task.reviewCheck[index].status = newStatus;
         renderDetailPanel(task);
     }

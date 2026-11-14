@@ -18,13 +18,23 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from .file_safety import backup_files
+from .file_safety import backup_files, directory_has_content, remove_agent_folder
+from .cli_runner import CliRun, argv_message, safe_session_id
+from .process_env import agent_env
+import data_owner   # (folders and files made as root keep the data folder's owner)
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 
-_ACTIVE_RUNS: dict[str, subprocess.Popen] = {}
+_ACTIVE_RUNS: dict[str, "CliRun"] = {}
 _ACTIVE_RUNS_LOCK = threading.Lock()
+
+def _flag(value, env_key, default=True):
+    """An on/off setting: the value given (the office's settings), else the environment's, else default."""
+    if value is None:
+        value = os.environ.get(env_key, default)
+    return str(value).lower() not in ("0", "false", "no", "off")
+
 
 
 @dataclass
@@ -39,9 +49,9 @@ class ClaudeCodeProvider:
     model: str = ""
     permission_mode: str = "acceptEdits"
     main_workspace: str | None = None
-    include_main: bool = True
-    include_native_agents: bool = True
-    register_native_agents: bool = True
+    include_main: bool | None = None
+    include_native_agents: bool | None = None
+    register_native_agents: bool | None = None
 
     provider_kind: str = "claude-code"
     provider_type: str = "harness"
@@ -71,9 +81,9 @@ class ClaudeCodeProvider:
             or os.environ.get("VO_CLAUDE_CODE_PERMISSION_MODE")
             or "acceptEdits"
         )
-        self.include_main = str(os.environ.get("VO_CLAUDE_CODE_INCLUDE_MAIN", str(self.include_main))).lower() not in ("0", "false", "no", "off")
-        self.include_native_agents = str(os.environ.get("VO_CLAUDE_CODE_INCLUDE_NATIVE_AGENTS", str(self.include_native_agents))).lower() not in ("0", "false", "no", "off")
-        self.register_native_agents = str(os.environ.get("VO_CLAUDE_CODE_REGISTER_NATIVE_AGENTS", str(self.register_native_agents))).lower() not in ("0", "false", "no", "off")
+        self.include_main = _flag(self.include_main, "VO_CLAUDE_CODE_INCLUDE_MAIN")
+        self.include_native_agents = _flag(self.include_native_agents, "VO_CLAUDE_CODE_INCLUDE_NATIVE_AGENTS")
+        self.register_native_agents = _flag(self.register_native_agents, "VO_CLAUDE_CODE_REGISTER_NATIVE_AGENTS")
 
     def is_available(self) -> bool:
         return bool(
@@ -85,7 +95,8 @@ class ClaudeCodeProvider:
 
     def test(self) -> dict[str, Any]:
         if not self.binary or not os.path.isfile(self.binary):
-            return {"ok": False, "installed": False, "error": "Claude Code CLI not found. Set VO_CLAUDE_CODE_BIN or install claude on PATH.", "agents": []}
+            where = f" at {self.binary}" if self.binary and os.path.basename(self.binary) != self.binary else ""
+            return {"ok": False, "installed": False, "error": f"Claude Code CLI not found{where}. Set its Executable in More tools > Providers > Claude Code (or VO_CLAUDE_CODE_BIN), or install claude on PATH.", "agents": []}
         if not os.access(self.binary, os.X_OK):
             return {"ok": False, "installed": True, "error": f"Claude Code CLI is not executable at {self.binary}", "agents": []}
         try:
@@ -170,7 +181,7 @@ class ClaudeCodeProvider:
         custom_directory: str | None = None,
     ) -> dict[str, Any]:
         if not self.is_available():
-            return {"ok": False, "error": "Claude Code CLI is not available. Set VO_CLAUDE_CODE_BIN or install claude on PATH."}
+            return {"ok": False, "error": "Claude Code CLI is not available. Set its Executable in More tools > Providers > Claude Code (or VO_CLAUDE_CODE_BIN), or install claude on PATH."}
 
         safe_profile = self._safe_profile_name(profile or name)
         if safe_profile == "main":
@@ -195,14 +206,17 @@ class ClaudeCodeProvider:
         meta_path = os.path.join(agent_dir, "office-agent.json")
         if os.path.exists(meta_path):
             return {"ok": False, "error": f"Claude Code agent '{safe_profile}' already exists"}
+        if directory_has_content(agent_dir):
+            # Never adopt (and later delete) an existing folder such as a real project (BE-06).
+            return {"ok": False, "error": f"The folder {agent_dir} already exists and is not empty. Choose another agent ID or parent folder."}
 
         native_agent_path = self._native_agent_file_path(safe_profile) if mode == "standard" else ""
         should_register_native = mode == "standard" and self.register_native_agents and native_agent_path
         if should_register_native and os.path.exists(native_agent_path):
             return {"ok": False, "error": f"Native Claude Code agent '{safe_profile}' already exists in {native_agent_path}"}
 
-        os.makedirs(os.path.join(agent_dir, ".claude", "agents"), exist_ok=True)
-        os.makedirs(os.path.join(agent_dir, ".claude", "skills"), exist_ok=True)
+        data_owner.makedirs(os.path.join(agent_dir, ".claude", "agents"), exist_ok=True)
+        data_owner.makedirs(os.path.join(agent_dir, ".claude", "skills"), exist_ok=True)
         model_value = (model or self.model or "").strip()
         instructions = (prompt or role or "Claude Code Agent").strip()
         project_agent_path = os.path.join(agent_dir, ".claude", "agents", f"{safe_profile}.md")
@@ -220,6 +234,7 @@ class ClaudeCodeProvider:
             "nativeAgentPath": native_agent_path if should_register_native else "",
             "projectAgentPath": project_agent_path,
             "createdAt": int(time.time()),
+            "writtenFiles": self._written_files(safe_profile),
         }
         self._write_json(meta_path, meta)
         self._write_text(os.path.join(agent_dir, "IDENTITY.md"), self._identity_md(name, role, emoji))
@@ -252,12 +267,17 @@ class ClaudeCodeProvider:
         agent_dir = os.path.join(self.workspace_root or "", safe_profile)
         meta = self._load_meta(agent_dir)
         if os.path.isdir(agent_dir):
-            shutil.rmtree(agent_dir)
+            remove_agent_folder(agent_dir, meta.get("writtenFiles") or self._written_files(safe_profile),
+                                managed_root=self.workspace_root or "", marker="office-agent.json")
             self._remove_external_agent(safe_profile)
         else:
             external_dir = self._external_agent_dir(safe_profile)
             if external_dir and os.path.isdir(external_dir):
-                shutil.rmtree(external_dir)
+                external_meta = self._load_meta(external_dir)
+                meta = external_meta or meta
+                # Custom parent folders may be a real project: remove only what the office wrote.
+                remove_agent_folder(external_dir, external_meta.get("writtenFiles") or self._written_files(safe_profile),
+                                    marker="office-agent.json")
                 self._remove_external_agent(safe_profile)
 
         native_path = str(meta.get("nativeAgentPath") or self._native_agent_file_path(safe_profile) or "")
@@ -312,8 +332,19 @@ class ClaudeCodeProvider:
             return {"ok": False, "error": "message is required", "reply": "", "sessionId": session_id or ""}
 
         safe_profile = self._safe_profile_name(profile or "main")
+        try:
+            session_id = safe_session_id(session_id)
+            prompt = argv_message(message)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "reply": "", "sessionId": ""}
+        with _ACTIVE_RUNS_LOCK:
+            running = _ACTIVE_RUNS.get(safe_profile)
+            if running is not None and running.proc.poll() is None:
+                # BE-30: one turn per agent, so Stop and approvals reach the right run.
+                return {"ok": False, "error": "This Claude Code agent is already working on a message.", "code": "run_active",
+                        "reply": "", "sessionId": session_id or ""}
         workspace = self._workspace_for_profile(safe_profile)
-        os.makedirs(workspace, exist_ok=True)
+        data_owner.makedirs(workspace, exist_ok=True)
 
         cmd = [
             self.binary or "claude",
@@ -334,44 +365,17 @@ class ClaudeCodeProvider:
             cmd.append("--dangerously-skip-permissions")
         elif permission_mode:
             cmd.extend(["--permission-mode", permission_mode])
-        cmd.append(message)
+        cmd.append(prompt)
 
-        deadline = time.time() + int(timeout_sec or self.timeout_sec or 900)
         state = _ClaudeStreamState(profile=safe_profile, session_id=session_id or "")
-        stderr_lines: list[str] = []
-        proc: subprocess.Popen | None = None
+        run: CliRun | None = None
         try:
-            proc = subprocess.Popen(
-                cmd,
-                cwd=workspace,
-                env=self._subprocess_env(),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-            )
+            run = CliRun(cmd, cwd=workspace, env=self._subprocess_env(),
+                         timeout_sec=int(timeout_sec or self.timeout_sec or 900))
             with _ACTIVE_RUNS_LOCK:
-                _ACTIVE_RUNS[safe_profile] = proc
+                _ACTIVE_RUNS[safe_profile] = run
 
-            def read_stderr() -> None:
-                if not proc or not proc.stderr:
-                    return
-                try:
-                    for raw in proc.stderr:
-                        if raw:
-                            stderr_lines.append(raw.rstrip("\n"))
-                except Exception:
-                    pass
-
-            threading.Thread(target=read_stderr, daemon=True).start()
-
-            if not proc.stdout:
-                return {"ok": False, "error": "Claude Code stdout pipe was not available", "reply": "", "sessionId": session_id or ""}
-            for raw in proc.stdout:
-                if time.time() > deadline:
-                    proc.kill()
-                    return {"ok": False, "error": "Claude Code call timed out", "reply": state.reply, "sessionId": state.session_id or session_id or ""}
+            for raw in run.lines():
                 line = raw.strip()
                 if not line:
                     continue
@@ -386,16 +390,23 @@ class ClaudeCodeProvider:
                 if on_progress:
                     on_progress(state.as_progress())
 
-            exit_code = proc.wait(timeout=5)
+            exit_code = run.finish()
+            stderr_text = run.stderr_text
+            if run.timed_out:
+                return {"ok": False, "error": "Claude Code call timed out", "reply": state.reply,
+                        "sessionId": state.session_id or session_id or "", "stderr": stderr_text[-4000:]}
             reply = state.final_result or state.reply
             token_usage = self._usage_to_token_usage(state.usage)
             error = state.error
+            if run.stopped and not error:
+                error = "Stopped"
             if exit_code != 0 and not error:
-                error = reply or "\n".join(stderr_lines)[-1000:] or "Claude Code command failed"
+                error = reply or stderr_text[-1000:] or "Claude Code command failed"
             return {
-                "ok": exit_code == 0 and not state.is_error,
+                "ok": exit_code == 0 and not state.is_error and not run.stopped,
+                "interrupted": bool(run.stopped),
                 "reply": reply,
-                "stderr": "\n".join(stderr_lines)[-4000:],
+                "stderr": stderr_text[-4000:],
                 "exitCode": exit_code,
                 "sessionId": state.session_id or session_id or "",
                 "runId": state.session_id or "",
@@ -407,31 +418,30 @@ class ClaudeCodeProvider:
                 "model": state.model,
                 "error": error,
             }
-        except subprocess.TimeoutExpired:
-            if proc:
-                proc.kill()
-            return {"ok": False, "error": "Claude Code call timed out", "reply": state.reply, "sessionId": state.session_id or session_id or ""}
         except Exception as exc:
             return {"ok": False, "error": str(exc), "reply": state.reply, "sessionId": state.session_id or session_id or ""}
         finally:
+            if run is not None and run.proc.poll() is None:
+                run.terminate()
+                run.finish(wait_sec=5)
             with _ACTIVE_RUNS_LOCK:
-                if _ACTIVE_RUNS.get(safe_profile) is proc:
+                if _ACTIVE_RUNS.get(safe_profile) is run:
                     _ACTIVE_RUNS.pop(safe_profile, None)
 
     def interrupt(self, profile: str) -> dict[str, Any]:
         safe_profile = self._safe_profile_name(profile or "main")
         with _ACTIVE_RUNS_LOCK:
-            proc = _ACTIVE_RUNS.get(safe_profile)
-        if not proc:
+            run = _ACTIVE_RUNS.get(safe_profile)
+        if not run:
             return {"ok": False, "error": "No active Claude Code turn is running for this agent."}
         try:
-            proc.terminate()
+            run.stop()
             return {"ok": True, "interrupted": True, "profile": safe_profile}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
     def _subprocess_env(self) -> dict[str, str]:
-        env = os.environ.copy()
+        env = agent_env()
         if self.home_path:
             env["VO_CLAUDE_CODE_HOME"] = self.home_path
             env.setdefault("CLAUDE_CONFIG_DIR", self.home_path)
@@ -569,6 +579,14 @@ class ClaudeCodeProvider:
         except Exception:
             return {}
 
+    @staticmethod
+    def _written_files(profile: str) -> list[str]:
+        """Files and folders the office creates inside a Claude Code agent folder."""
+        return [
+            "IDENTITY.md", "AGENTS.md", "CLAUDE.md",
+            f".claude/agents/{profile}.md", ".claude/agents", ".claude/skills", ".claude",
+        ]
+
     def _save_external_agent(self, profile: str, agent_dir: str) -> None:
         data = {"schema": "my-virtual-office.claude-code-agent-registry.v1", "agents": self._load_external_agents()}
         data["agents"][self._safe_profile_name(profile)] = os.path.abspath(agent_dir)
@@ -587,7 +605,7 @@ class ClaudeCodeProvider:
         path = os.path.expanduser(str(value or "").strip())
         if not path:
             return ""
-        os.makedirs(path, exist_ok=True)
+        data_owner.makedirs(path, exist_ok=True)
         return os.path.abspath(path)
 
     def _is_native_agent_path(self, path: str) -> bool:
@@ -603,6 +621,12 @@ class ClaudeCodeProvider:
 
     @staticmethod
     def _resolve_binary(value: str | None) -> str:
+        # A path that names a folder (set in Settings, the setup wizard or VO_CLAUDE_CODE_BIN) is that file and only that
+        # one: a missing one is reported as missing, by its path, never swapped for another claude found on PATH or
+        # through the environment (Docker's compose always sets VO_CLAUDE_CODE_BIN=claude). A bare name is looked up.
+        chosen = os.path.expanduser(str(value or "").strip())
+        if chosen and os.path.basename(chosen) != chosen:
+            return chosen
         candidates = [
             value,
             os.environ.get("VO_CLAUDE_CODE_BIN"),
@@ -687,14 +711,14 @@ class ClaudeCodeProvider:
 
     @staticmethod
     def _write_text(path: str, content: str) -> None:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        data_owner.makedirs(os.path.dirname(path), exist_ok=True)
+        with data_owner.open_new(path, "w", encoding="utf-8") as f:
             f.write(content)
 
     @staticmethod
     def _write_json(path: str, data: dict[str, Any]) -> None:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        data_owner.makedirs(os.path.dirname(path), exist_ok=True)
+        with data_owner.open_new(path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
 
     @staticmethod

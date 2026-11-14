@@ -20,6 +20,7 @@ from .file_safety import backup_files
 from .hermes import HermesProvider, discover_api_connections
 from .path_mapping import is_windows_absolute, map_host_path_to_container, normalize_host_path
 from .registry import ProviderManifest, ProviderRegistry
+import data_owner   # (folders and files made as root keep the data folder's owner)
 
 try:
     from .opencode import OpenCodeProvider
@@ -69,6 +70,15 @@ SAFE_DOCUMENT_RESOURCE = {
 }
 
 
+def _model_ref_primary(value: Any) -> str:
+    """Primary model id from an OpenClaw model reference (string or {primary})."""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict) and isinstance(value.get("primary"), str):
+        return value["primary"].strip()
+    return ""
+
+
 def _skill_root(
     path: str,
     label: str,
@@ -86,6 +96,21 @@ def _skill_root(
         "format": "agentskills",
         "sharedRoots": list(shared_roots or []),
     }]
+
+
+def _chat_only_resources(connection_id: str, access: str) -> str:
+    """A legacy Hermes connection set to Chat only in Agent Providers reads its profile files but never
+    writes them (design 2.7)."""
+    if access != "read-write":
+        return access
+    try:
+        import agent_providers
+    except ImportError:
+        return access
+    try:
+        return "read-only" if agent_providers.legacy_access(connection_id) == "chat" else access
+    except Exception:  # noqa: BLE001 - no Agent Providers store: as before the port
+        return access
 
 
 def _bool(value: Any, default: bool = False) -> bool:
@@ -322,9 +347,10 @@ def _cli_settings_schema(
 
 
 def _atomic_text(path: str, content: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    data_owner.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = f"{path}.tmp-{os.getpid()}"
     Path(tmp).write_text(content, encoding="utf-8")
+    data_owner.adopt(tmp)
     os.replace(tmp, path)
 
 
@@ -341,10 +367,11 @@ def _update_identity_file(path: str, patch: dict[str, Any]) -> bool:
         if key not in patch:
             continue
         value = str(patch.get(key) or "").strip()
+        value = re.sub(r"[\r\n]+", " ", value)
         pattern = re.compile(rf"(?im)^(\s*-\s*\*\*{re.escape(label)}:\*\*\s*).*$")
-        replacement = rf"\g<1>{value}"
         if pattern.search(text):
-            updated = pattern.sub(replacement, text, count=1)
+            # A callable replacement keeps backslashes in values literal.
+            updated = pattern.sub(lambda m, v=value: m.group(1) + v, text, count=1)
         else:
             updated = text.rstrip() + f"\n- **{label}:** {value}\n"
         changed = changed or updated != text
@@ -374,7 +401,7 @@ class OpenClawOfficeProvider:
                 "interrupt": True, "approvals": True, "agentCreate": True, "agentDelete": True,
                 "profileEdit": True, "resourcesRead": True, "resourcesWrite": True, "skills": True,
                 "models": True, "projects": True, "meetings": True, "agentToAgent": True,
-                "attachments": True, "tools": True,
+                "attachments": True, "tools": True, "taskProgress": True,
             },
             connection_schema=_connection_schema(OPENCLAW_GATEWAY_TRANSPORT),
             # OpenClaw's Gateway derives the native agent id from the name.
@@ -443,7 +470,14 @@ class OpenClawOfficeProvider:
         configured: list[dict[str, Any]] = []
         try:
             with open(config_path, "r", encoding="utf-8") as handle:
-                configured = (json.load(handle).get("agents") or {}).get("list") or []
+                agents_cfg = json.load(handle).get("agents") or {}
+            entries = agents_cfg.get("entries") if isinstance(agents_cfg, dict) else None
+            if isinstance(entries, dict):
+                # OpenClaw 2026.9 keyed entries: the key is the id.
+                configured = [dict(entry, id=str(key)) for key, entry in entries.items()
+                              if isinstance(entry, dict)]
+            else:
+                configured = agents_cfg.get("list") or [] if isinstance(agents_cfg, dict) else []
         except Exception:
             configured = []
         if not configured and os.path.isdir(agents_dir):
@@ -467,7 +501,7 @@ class OpenClawOfficeProvider:
                 "name": identity.get("name") or ("Main Agent" if agent_id == "main" else agent_id.replace("-", " ").title()),
                 "emoji": identity.get("emoji") or "🤖",
                 "role": identity.get("role") or "",
-                "model": raw.get("model") or "",
+                "model": _model_ref_primary(raw.get("model")),
                 "workspace": workspace,
                 "lastActiveAt": self._last_active(os.path.join(agents_dir, agent_id, "sessions")),
             })
@@ -834,6 +868,7 @@ class HermesOfficeProvider(NativeOfficeProvider):
             access = global_access if requested_access == "inherit" else requested_access
             if access not in {"disabled", "read-only", "read-write"}:
                 access = global_access
+            access = _chat_only_resources(connection_id or key, access)
             local_item = local_by_profile.get(local_profile) or {}
             discovered_path = str(local_item.get("workspace") or local_item.get("home") or "")
             mounted = self.native.inspect_mounted_profile(
@@ -869,6 +904,7 @@ class HermesOfficeProvider(NativeOfficeProvider):
                 "agentCreate": cli_available,
                 "agentDelete": cli_available,
             })
+            overrides["taskProgress"] = bool(item.get("apiAvailable") and overrides.get("sessionSwitch"))
             if not item.get("apiAvailable"):
                 # The legacy CLI is a buffered compatibility transport. It can
                 # chat and manage sessions, but it cannot truthfully provide

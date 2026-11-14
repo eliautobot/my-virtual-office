@@ -1,4 +1,4 @@
-# My Virtual Office v0.7.3 — Hermes Reload Restoration
+# My Virtual Office v0.7.3: Hermes Reload Restoration
 
 ## Highlights
 

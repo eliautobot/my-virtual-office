@@ -1,0 +1,445 @@
+/* v0.10 "Polish": one house style for the shell. Loaded after every other stylesheet so it can
+   settle the older layers onto the tokens. Components still reference --vo-* only. */
+
+/* ---------- shared backdrop (UI-03, UI-06, UI-24) ---------- */
+@keyframes vo-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes vo-sheet-up { from { transform: translateY(24px); opacity: .4; } to { transform: none; opacity: 1; } }
+
+@media (max-width: 640px) {
+  /* A phone sheet (agent menu) gets the one dim backdrop: it covers an open chat
+     sheet, so only one header shows, and a tap on it closes the sheet. */
+  body.vo-agent-sheet-open::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--vo-z-popover) - 1);
+    background: var(--vo-scrim);
+    -webkit-backdrop-filter: blur(var(--vo-scrim-blur));
+    backdrop-filter: blur(var(--vo-scrim-blur));
+    animation: vo-fade-in var(--vo-dur-open) var(--vo-ease-out);
+  }
+  .vo-agent-menu.is-sheet { box-shadow: var(--vo-shadow-3); }
+}
+
+@media (max-width: 900px) {
+  /* The More menu is a real bottom sheet in the compact layout (phones and tablets, v0.13 mobileui),
+     over the dashboard sheet, with the same dim backdrop. The dock is a zero-height flex item here:
+     no z-index, so it does not trap the sheet under the dashboard sheet or the backdrop. */
+  body.vo-menu-open::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--vo-z-popover) - 1);
+    background: var(--vo-scrim);
+    -webkit-backdrop-filter: blur(var(--vo-scrim-blur));
+    backdrop-filter: blur(var(--vo-scrim-blur));
+    animation: vo-fade-in var(--vo-dur-open) var(--vo-ease-out);
+  }
+  .toolbar.vo-dock { z-index: auto; }
+  .vo-menu {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: min(80dvh, 640px);
+    padding: 0 var(--vo-space-3) calc(var(--vo-space-3) + var(--vo-safe-bottom, 0px));
+    border-bottom: 0;
+    border-radius: var(--vo-radius-lg) var(--vo-radius-lg) 0 0;
+    overscroll-behavior: contain;
+    animation: vo-sheet-up var(--vo-dur-open) var(--vo-ease-out);
+    transition: height var(--vo-dur) var(--vo-ease), max-height var(--vo-dur) var(--vo-ease);
+  }
+  /* Its handle (the dashboard sheet's grab): drag to resize, swipe down to close, tap for full height. */
+  .vo-menu.is-full { height: calc(100dvh - var(--vo-topbar-h) - var(--vo-safe-top, 0px)); max-height: none; }
+  .vo-menu.is-dragging { transition: none; animation: none; }
+  .vo-menu > .vo-more-grab {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: calc(100% + 2 * var(--vo-space-3));
+    min-height: 22px;
+    margin: 0 calc(-1 * var(--vo-space-3)) var(--vo-space-1);
+    padding: 9px 0;
+    border-radius: var(--vo-radius-lg) var(--vo-radius-lg) 0 0;
+    background: var(--vo-surface-1);
+    cursor: grab;
+  }
+  .vo-menu > .vo-more-grab span { flex: none; width: 40px; height: 4px; margin: 0; }
+  .vo-menu > .vo-more-grab::after { inset: -2px 25% -14px; }
+  .vo-menu > .vo-more-grab:focus-visible { outline: 2px solid var(--vo-accent); outline-offset: -2px; }
+}
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  .vo-menu { animation: none; transition: none; }
+}
+
+/* ---------- pixel icons instead of emoji (UI-07) ---------- */
+.chat-panel .chat-input-row :is(.chat-attach-btn, .chat-mic-btn, .chat-stop-btn) .vo-icon,
+.chat-panel .chat-header .chat-sessions-toggle .vo-icon { width: 16px; height: 16px; }
+.chat-panel .chat-stop-btn .vo-icon { color: var(--vo-danger); }
+.chat-panel .chat-mic-btn.recording .vo-icon { color: var(--vo-danger); }
+.sms-panel .sms-toggle-manual .vo-icon, .sms-panel .vo-icon { width: 14px; height: 14px; }
+.browser-panel .browser-title .vo-icon, .browser-ctrl-btn .vo-icon { width: 14px; height: 14px; margin-right: 4px; vertical-align: -2px; }
+.agent-preview-title-icon { width: 16px; height: 16px; color: var(--vo-accent); margin-right: 6px; }
+[data-agent-pc-section] .vo-icon { width: 14px; height: 14px; margin-right: 6px; vertical-align: -2px; }
+.agent-pc-resource-icon .vo-icon { width: 18px; height: 18px; color: var(--vo-text-2); }
+.agent-preview-tab .vo-icon, #previewBubbleContainer strong .vo-icon { width: 12px; height: 12px; vertical-align: -1px; }
+[data-preview-action] .vo-icon, #agent-workspace-refresh .vo-icon { width: 14px; height: 14px; }
+.vo-status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--vo-text-3); vertical-align: 1px; }
+.vo-status-dot.is-on { background: var(--vo-success); }
+.vo-sidebar .branch-actions button { display: inline-grid; place-items: center; }
+.vo-sidebar .branch-actions button .vo-icon { width: 12px; height: 12px; }
+.vo-sidebar .branch-actions button.is-danger:hover { background: var(--vo-danger-soft); color: var(--vo-danger); }
+
+/* ---------- one empty-state block (UI-17) ----------
+   The sidebar's one-line li.vo-empty keeps its compact look. */
+.vo-empty:not(li) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--vo-space-2);
+  min-height: 160px;
+  padding: var(--vo-space-6) var(--vo-space-4);
+  color: var(--vo-text-2);
+  font: var(--vo-text-sm)/1.45 var(--vo-font-ui);
+  text-align: center;
+}
+.vo-empty-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: var(--vo-space-1);
+  border: 1px solid var(--vo-border-subtle);
+  border-radius: var(--vo-radius-md);
+  background: var(--vo-surface-2);
+  color: var(--vo-accent);
+  box-shadow: var(--vo-shadow-pixel);
+}
+.vo-empty-icon .vo-icon { width: 24px; height: 24px; }
+.vo-empty-title { color: var(--vo-text-1); font: var(--vo-weight-bold) var(--vo-text-md)/1.35 var(--vo-font-ui); }
+.vo-empty-text { max-width: 380px; color: var(--vo-text-2); }
+.vo-empty-action { margin-top: var(--vo-space-2); display: inline-flex; align-items: center; gap: var(--vo-space-2); min-height: var(--vo-control-h); padding: 0 var(--vo-space-4); }
+.vo-empty-action .vo-icon { width: 14px; height: 14px; }
+.vo-empty--error .vo-empty-icon { color: var(--vo-danger); }
+/* The Agent PC keeps its full-panel placement. */
+.agent-preview-empty.vo-empty { position: absolute; inset: 0; min-height: 0; }
+.agent-preview-empty.vo-empty > strong { max-width: 440px; font: var(--vo-text-sm)/1.45 var(--vo-font-ui); }
+.agent-preview-empty.vo-empty > .vo-empty-icon { font-size: inherit; filter: none; }
+
+/* ---------- type scale (UI-08): 11 px pixel caps, 12 px meta, 13-14 px body, 16 px titles ---------- */
+.vo-meta { color: var(--vo-text-3); font-size: var(--vo-text-xs); font-weight: var(--vo-weight-regular); }
+
+/* ---------- one window shell (UI-06) ----------
+   Every window shares one frame: 12 px radius (hard corners on the pixel presets), 1 px border,
+   1 px inner highlight, a 2 px offset pixel shadow, the same header height and title, the one
+   backdrop (55% dim + 6 px blur) behind modal windows, and a 140 ms ease-out open.
+   Widths: S 480, M 760, L 1120. */
+:root, html[data-ui-preset] {
+  --vo-window-radius: var(--vo-radius-md);
+  --vo-window-head-h: 56px;
+  --vo-window-s: 480px; --vo-window-m: 760px; --vo-window-l: 1120px;
+  --vo-window-highlight: inset 0 1px 0 color-mix(in srgb, var(--vo-text-1) 7%, transparent);
+  --vo-window-shadow: var(--vo-window-highlight), var(--vo-shadow-pixel), 0 18px 48px rgba(0, 0, 0, .32);
+}
+html[data-ui-theme="light"] { --vo-window-shadow: var(--vo-window-highlight), var(--vo-shadow-pixel), 0 18px 48px rgba(15, 23, 42, .14); }
+html[data-ui-preset="retro"], html[data-ui-preset="gameboy"] { --vo-window-shadow: var(--vo-shadow-2); }
+html[data-ui-preset="cyberpunk"] { --vo-window-shadow: var(--vo-window-highlight), var(--vo-shadow-pixel), var(--vo-shadow-3); }
+
+@keyframes vo-window-in { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes vo-dialog-in { from { opacity: 0; transform: translate(-50%, -48%) scale(.985); } to { opacity: 1; transform: translate(-50%, -50%); } }
+
+/* The backdrop. */
+.modal, .ui-panel-scrim {
+  background: var(--vo-scrim) !important;
+  -webkit-backdrop-filter: blur(var(--vo-scrim-blur)) !important;
+  backdrop-filter: blur(var(--vo-scrim-blur)) !important;
+}
+.vo-dialog { box-shadow: 0 0 0 100vmax var(--vo-scrim), var(--vo-window-shadow); animation: vo-dialog-in var(--vo-dur-open) var(--vo-ease-out); }
+
+/* The frame. */
+.modal .modal-content, .projects-modal-content, .vo-window:not(.vo-dialog), .main-menu-panel,
+.agent-preview-panel, .agent-workspace-panel, .browser-panel, .sms-panel {
+  border-radius: var(--vo-window-radius) !important;
+  box-shadow: var(--vo-window-shadow) !important;
+}
+.vo-dialog { border-radius: var(--vo-window-radius); }
+.modal:not(.hidden) > .modal-content { animation: vo-window-in var(--vo-dur-open) var(--vo-ease-out); }
+
+/* The header: one height, icon + pixel title + close. */
+.modal .modal-header, .vo-window-head, .agent-preview-panel-header, .main-menu-header {
+  min-height: var(--vo-window-head-h);
+}
+.modal .modal-header, .vo-window-head {
+  flex: none;
+  height: var(--vo-window-head-h);
+  padding: 0 var(--vo-space-3) 0 var(--vo-space-5) !important;
+  margin: 0 !important;
+  align-items: center;
+}
+.vo-window-title, .modal .modal-header h2 { font-size: var(--vo-pixel-md) !important; }
+
+/* S / M / L. */
+@media (min-width: 641px) {
+  .vo-window--sm, .modal .modal-content.vo-window--sm, .end-meeting-modal-content, #skillEditorModal .modal-content { width: min(var(--vo-window-s), calc(100vw - 48px)) !important; max-width: none !important; }
+  .vo-window--md, .modal .modal-content.vo-window--md, .meetings-modal-content, .skills-library-modal { width: min(var(--vo-window-m), calc(100vw - 48px)) !important; max-width: none !important; }
+  .meetings-modal-content, .skills-library-modal { height: auto; min-height: min(420px, calc(100dvh - 48px)); max-height: min(760px, calc(100dvh - 48px)) !important; display: flex; flex-direction: column; }
+  .projects-modal-content { width: min(var(--vo-window-l), calc(100vw - 48px)) !important; max-width: none !important; height: min(860px, calc(100dvh - 48px)) !important; max-height: calc(100dvh - 48px) !important; }
+  .meetings-modal-content .mtg-cards, .skills-library-modal .skl-cards { flex: 1; min-height: 0; overflow: auto; }
+}
+
+/* The empty block fills its window body instead of floating in a corner; nothing to expand when empty. */
+.meetings-modal-content:has(#mtg-cards > .vo-empty) .mtg-bulk-actions { display: none; }
+.mtg-cards > .vo-empty, .skl-cards > .vo-empty { min-height: 280px; }
+.proj-grid > .proj-empty.vo-empty { grid-column: 1 / -1; min-height: 320px; }
+
+/* Projects: the closing "new project" tile. */
+.proj-card-new {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--vo-space-2);
+  min-height: 160px;
+  border: 1px dashed var(--vo-border-strong);
+  border-radius: var(--vo-radius-md);
+  background: transparent;
+  color: var(--vo-text-2);
+  font: var(--vo-weight-medium) var(--vo-text-sm)/1.3 var(--vo-font-ui);
+  cursor: pointer;
+}
+.proj-card-new .vo-icon { width: 20px; height: 20px; color: var(--vo-accent); }
+.proj-card-new:hover { border-color: var(--vo-accent); background: var(--vo-accent-soft); color: var(--vo-text-1); }
+
+/* ---------- tournament window (UI-06, UI-10) ---------- */
+.vo-life-bracket { display: grid; gap: var(--vo-space-2); margin: 0; padding: 0; list-style: none; }
+.vo-life-bracket-row {
+  display: grid;
+  grid-template-columns: minmax(64px, auto) 1fr auto;
+  align-items: center;
+  gap: var(--vo-space-3);
+  min-height: 48px;
+  padding: var(--vo-space-2) var(--vo-space-3);
+  border: 1px solid var(--vo-border-subtle);
+  border-radius: var(--vo-radius-sm);
+  background: var(--vo-surface-2);
+}
+.vo-life-bracket-row.is-live { border-color: var(--vo-info); background: var(--vo-info-soft); }
+.vo-life-bracket-row.is-won { border-color: var(--vo-accent); background: var(--vo-accent-soft); }
+.vo-life-bracket-round { color: var(--vo-accent); font: var(--vo-pixel-sm)/1.4 var(--vo-font-pixel); text-transform: uppercase; }
+.vo-life-bracket-players { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vo-space-2); min-width: 0; color: var(--vo-text-1); font-size: var(--vo-text-md); }
+.vo-life-bracket-vs { color: var(--vo-text-3); font-size: var(--vo-text-xs); }
+.vo-life-player { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.vo-life-player-av {
+  display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none;
+  border: 1px solid var(--vo-border-subtle); border-radius: 50%; background: var(--vo-surface-1);
+  font-size: 14px; line-height: 1;
+}
+.vo-life-player-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--vo-weight-medium); }
+.vo-life-player.is-winner .vo-life-player-name { color: var(--vo-accent); font-weight: var(--vo-weight-bold); }
+.vo-life-bracket-state { color: var(--vo-text-2); font-size: var(--vo-text-sm); white-space: nowrap; }
+.vo-life-bracket-tip { margin: var(--vo-space-3) 0 0; color: var(--vo-text-2); font-size: var(--vo-text-sm); }
+@media (max-width: 640px) {
+  .vo-life-bracket-row { grid-template-columns: 1fr auto; }
+  .vo-life-bracket-players { grid-column: 1 / -1; grid-row: 2; }
+}
+
+/* Small form parts used by the older popups now on the window frame. */
+.vo-check-list { max-height: 200px; overflow-y: auto; padding: var(--vo-space-1); border: 1px solid var(--vo-border-subtle); border-radius: var(--vo-radius-sm); background: var(--vo-surface-2); }
+.vo-check-row { display: flex; align-items: center; gap: var(--vo-space-2); min-height: 36px; padding: 0 var(--vo-space-2); border-radius: var(--vo-radius-xs); color: var(--vo-text-1); font-size: var(--vo-text-sm); cursor: pointer; }
+.vo-check-row:hover { background: var(--vo-surface-3); }
+.vo-check-row input { accent-color: var(--vo-accent); }
+.vo-color-input { width: 44px; height: 36px; padding: 2px; border: 1px solid var(--vo-border-strong); border-radius: var(--vo-radius-sm); background: var(--vo-surface-2); cursor: pointer; }
+
+/* Small office editors (text label, weather window, Q-12): the shared window frame
+   (.vo-dialog.vo-window) plus these few layout rules; no inline colours, no overrides. */
+.vo-mini-editor .vo-window-body { display: flex; flex-direction: column; gap: var(--vo-space-2); }
+.vo-mini-editor .vo-field:first-child { margin-top: 0; }
+.vo-mini-row { display: flex; align-items: center; gap: var(--vo-space-2); min-height: var(--vo-control-h); }
+.vo-mini-range { flex: 1; accent-color: var(--vo-accent); }
+.vo-mini-row .vo-meta { min-width: 48px; }
+.vo-mini-check { align-items: flex-start; padding: var(--vo-space-2); border: 1px solid var(--vo-border-subtle); border-radius: var(--vo-radius-sm); background: var(--vo-surface-2); }
+.vo-mini-check input { margin-top: 2px; width: 18px; height: 18px; }
+.vo-mini-check > span { display: flex; flex-direction: column; gap: 2px; }
+.vo-mini-check-title { color: var(--vo-text-1); font-weight: var(--vo-weight-medium); }
+.vo-mini-preview { display: flex; align-items: center; justify-content: center; min-height: 72px; margin-top: var(--vo-space-2); padding: var(--vo-space-3); overflow: hidden; border: 1px solid var(--vo-border-subtle); border-radius: var(--vo-radius-sm); background: var(--vo-surface-0); }
+.vo-mini-preview canvas { max-width: 100%; height: auto; image-rendering: pixelated; }
+
+/* ---------- Settings: one save model + fade at the fold (UI-12, UI-13) ---------- */
+#voLifeSettings:not(.vo-ls-bar-on) .vo-ls-bar { display: none; }
+.settings-footer, #voLifeSettings .vo-ls-bar { box-shadow: 0 -12px 20px -14px rgba(0, 0, 0, .5); animation: vo-fade-in var(--vo-dur-open) var(--vo-ease-out); }
+html[data-ui-theme="light"] :is(.settings-footer, #voLifeSettings .vo-ls-bar) { box-shadow: 0 -12px 20px -14px rgba(15, 23, 42, .22); }
+#voLifeSettings .vo-ls-bar [data-life-save] { min-width: 150px; border-color: var(--vo-accent); background: var(--vo-accent-fill); color: var(--vo-accent-fill-ink); }
+#voLifeSettings .vo-ls-bar [data-life-save]:disabled { opacity: .55; }
+#voLifeSettings .vo-ls-bar .vo-ls-status { margin-right: auto; }
+.settings-content { position: relative; }
+.settings-content::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 40px;
+  background: linear-gradient(to bottom, transparent, var(--vo-surface-1));
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--vo-dur-fast) var(--vo-ease-out);
+}
+.settings-content.vo-has-more::after { opacity: 1; }
+@media (max-width: 640px) {
+  #main-menu-panel .settings-nav { scroll-snap-type: x proximity; scroll-padding-inline: var(--vo-space-3); }
+  #main-menu-panel .settings-nav button { scroll-snap-align: start; }
+  #main-menu-panel .settings-nav.vo-fade-end { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 36px), transparent); }
+  #main-menu-panel .settings-nav.vo-fade-start { -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to left, #000 calc(100% - 36px), transparent); }
+  #main-menu-panel .settings-nav.vo-fade-start.vo-fade-end { -webkit-mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(to right, transparent, #000 36px, #000 calc(100% - 36px), transparent); }
+}
+
+/* ---------- chat window header + sessions (UI-14) ---------- */
+.chat-panel .chat-header .chat-more-tools { display: none; }
+.chat-panel.chat-narrow .chat-header :is(.chat-new-window, .hp-side-btn, .chat-new-session, .chat-put-away) { display: none !important; }
+.chat-panel.chat-narrow .chat-header .chat-more-tools {
+  display: inline-grid; place-items: center; width: 32px; min-width: 32px; height: 36px; padding: 0;
+  border: 1px solid transparent; border-radius: var(--vo-radius-sm); background: transparent; color: var(--vo-text-2); cursor: pointer;
+}
+.chat-panel .chat-header .chat-more-tools:hover, .chat-panel .chat-header .chat-more-tools[aria-expanded="true"] { background: var(--vo-surface-3); color: var(--vo-text-1); }
+.chat-panel .chat-header :is(.chat-more-tools, .chat-close) .vo-icon { width: 14px; height: 14px; }
+.chat-panel .chat-header .chat-close { display: inline-grid; place-items: center; }
+.chat-more-menu {
+  position: absolute; z-index: 20; min-width: 200px; padding: var(--vo-space-1);
+  border: var(--vo-border-w) solid var(--vo-border-strong); border-radius: var(--vo-radius-md);
+  background: var(--vo-surface-1); box-shadow: var(--vo-window-shadow); animation: vo-fade-in var(--vo-dur-open) var(--vo-ease-out);
+}
+.chat-more-item {
+  display: flex; align-items: center; gap: var(--vo-space-2); width: 100%; min-height: 40px; padding: 0 var(--vo-space-3);
+  border: 0; border-radius: var(--vo-radius-sm); background: transparent; color: var(--vo-text-1);
+  font: var(--vo-weight-medium) var(--vo-text-sm)/1.2 var(--vo-font-ui); text-align: left; cursor: pointer;
+}
+.chat-more-item:hover, .chat-more-item:focus-visible { background: var(--vo-surface-3); }
+.chat-more-item .vo-icon { width: 14px; height: 14px; color: var(--vo-text-2); }
+.hp-side-btn-icon .vo-icon { width: 14px; height: 14px; }
+/* Model and effort pickers: a real control height. */
+.chat-panel .hp-pickers .hp-picker-btn { min-height: 32px; font-size: var(--vo-text-xs); }
+/* Sessions: beside the messages only in a wide window; otherwise an overlay so messages keep their width. */
+@media (min-width: 641px) {
+  .chat-panel:not(.chat-wide) .chat-sessions-panel.open {
+    position: absolute !important; top: 0; bottom: 0; left: 0; z-index: 7;
+    width: min(260px, 82%) !important; min-width: 0 !important; max-width: none !important;
+    border-right: 1px solid var(--vo-border-strong) !important; box-shadow: 12px 0 28px -12px rgba(0, 0, 0, .55);
+  }
+  .chat-panel .chat-messages { min-width: min(240px, 100%); }
+}
+
+/* ---------- focus rings for keyboard users only (UI-19) ---------- */
+html[data-vo-input="pointer"] { --vo-focus: 0 0 0 0 transparent; }
+html[data-vo-input="pointer"] :is(input, textarea, select, [contenteditable="true"]) { --vo-focus: 0 0 0 2px var(--vo-surface-1), 0 0 0 4px var(--vo-accent); }
+html[data-vo-input="pointer"] :is(button, a, summary, [role="button"], [role="menuitem"], [role="tab"], [role="option"], [tabindex]):not(input, textarea, select):focus-visible { outline-color: transparent !important; }
+html[data-vo-input="pointer"] .vo-agent-menu .vo-agent-menu-card:focus-visible:not(:hover) { border-color: var(--vo-border-subtle); }
+html[data-vo-input="pointer"] .vo-agent-menu :is(.vo-agent-menu-row, .vo-agent-menu-close):focus-visible:not(:hover) { border-color: transparent; }
+
+/* ---------- hit areas (UI-21): same look, 40 px targets ---------- */
+.vo-link { min-height: 40px; margin-top: -2px; margin-bottom: -8px; }
+@media (max-width: 640px) {
+  /* The 40 px grab shows a 10 px band (its bar 3 px from the top) and overlaps the header's top 30 px, so the peek row is
+     a thin 40 px (the selector must beat `.sidebar.vo-sidebar > *`); the header's buttons stay on top of it. */
+  .sidebar.vo-sidebar > .vo-sheet-grab { padding-top: 3px; padding-bottom: 33px; margin-bottom: -30px; }
+  .sidebar.vo-sidebar > .vo-sidebar-head :is(button, a) { position: relative; z-index: 1; }
+}
+@media (max-width: 900px) {
+  /* Only the grip drags the sheet: a 40 px strip (the sheet's height math reads the grip's box). */
+  .chat-panel .chat-sheet-grip { height: 40px; }
+}
+
+/* Loading skeletons (v0.10): rows in the house style instead of a "Loading..." box. */
+.vo-visually-hidden { position: absolute !important; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.vo-skeleton { display: flex; flex-direction: column; gap: var(--vo-space-2); padding: var(--vo-space-4) !important; border-style: solid !important; }
+.vo-skeleton-row { display: block; height: 52px; border-radius: var(--vo-radius-md); background: linear-gradient(90deg, var(--vo-surface-2) 0%, var(--vo-surface-3) 45%, var(--vo-surface-2) 90%); background-size: 220% 100%; animation: vo-skeleton 1.3s ease-in-out infinite; }
+.vo-skeleton-row:nth-child(3n) { width: 82%; }
+@keyframes vo-skeleton { from { background-position: 100% 0; } to { background-position: -120% 0; } }
+@media (prefers-reduced-motion: reduce) { .vo-skeleton-row { animation: none; } }
+
+/* More menu theme switch: a real target (was 26 px). */
+.vo-seg button { min-height: 32px; }
+@media (pointer: coarse), (max-width: 640px) { .vo-seg button { min-height: 40px; } }
+
+/* Q-08 (UI-07): pixel chevrons instead of the ▶ ▼ ◀ text glyphs. i-chev points down;
+   a collapsed row points right, the dashboard edge points left (open) or right (hidden). */
+.vo-chev { transition: transform 140ms ease; }
+.bio-toggle .vo-chev, .section-arrow .vo-chev, .cat-arrow .vo-chev { width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; }
+.chat-tool-toggle .vo-chev { width: 10px; height: 10px; }
+.bio-toggle[aria-expanded="false"] .vo-chev,
+.section-arrow.is-collapsed .vo-chev,
+.cat-arrow.is-collapsed .vo-chev,
+.vo-legacy-arrow.is-collapsed .vo-chev,
+.vo-chev-r { transform: rotate(-90deg); }
+#sidebar-edge-arrow .vo-chev { width: 10px; height: 10px; transform: rotate(90deg); }
+#sidebar-edge-arrow.is-collapsed .vo-chev { transform: rotate(-90deg); }
+.vo-life-rglyph .vo-icon, .chat-references-rail .vo-icon { width: 12px; height: 12px; }
+@media (prefers-reduced-motion: reduce) { .vo-chev { transition: none; } }
+
+/* v0.10.1 (N8): pixel icons where emoji and text glyphs were (New Agent, Create Agent, window controls). */
+.agent-add-btn { display: flex; align-items: center; justify-content: center; gap: var(--vo-space-2); }
+.agent-add-btn .vo-icon { width: 12px; height: 12px; }
+.modal-emoji .vo-icon { width: 20px; height: 20px; }
+:is(.agent-preview-panel-controls, .agent-workspace-controls, .browser-header) button .vo-icon,
+.chat-session-delete .vo-icon { width: 12px; height: 12px; }
+
+/* v0.10.1 (I2): 44 px touch targets on touch screens. Compact controls keep their look: a transparent hit
+   box centred on the control (::after, or ::before where ::after draws a glyph) reaches at least 44 x 44. */
+@media (pointer: coarse) {
+  :is(.vo-topbar .vo-btn--icon, .chat-panel .chat-header :is(.chat-more-tools, .chat-close, .chat-sessions-toggle, .vo-btn--icon),
+      .chat-panel .hp-pickers .hp-picker-btn, .ui-edit-toolbar button,
+      .chat-panel .chat-input-row :is(.chat-attach-btn, .chat-mic-btn, .chat-send-btn, .chat-stop-btn),
+      body.ui-office-editing .furniture-catalog .catalog-tabs button) { position: relative; }
+  :is(.vo-topbar .vo-btn--icon, .chat-panel .chat-header :is(.chat-more-tools, .chat-close, .chat-sessions-toggle, .vo-btn--icon),
+      .ui-edit-toolbar button,
+      .chat-panel .chat-input-row :is(.chat-attach-btn, .chat-mic-btn, .chat-send-btn, .chat-stop-btn),
+      body.ui-office-editing .furniture-catalog .catalog-tabs button)::after,
+  .chat-panel .hp-pickers .hp-picker-btn::before {
+    content: ""; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+  body.ui-office-editing .furniture-catalog .catalog-tabs { overflow: visible; }
+  /* Clipping rows let the hit boxes out by a few px (overflow-clip-margin needs overflow: clip). */
+  .chat-panel .chat-header, .chat-panel .chat-model-bar .hp-pickers,
+  .chat-panel .hp-pickers .hp-picker-btn { overflow: clip; overflow-clip-margin: 7px; }
+  /* Map controls stay 38 px; a 6 px gap gives each a 44 px pitch for its hit box. */
+  :root { --vo-mapctl-h: 229px; }
+  .vo-mapctl { gap: 6px; }
+  .vo-mapctl .vo-btn::after { inset: -4px; } /* from the padding box: 1 px border + 3 px */
+  /* Favourite star: the button fills the card's top-right 44 px corner, the star stays small in it. */
+  .furniture-catalog .catalog-fav { top: 0; right: 0; width: 44px; height: 44px; padding: 3px 5px 0 0; text-align: right; line-height: 22px; vertical-align: top; }
+  body.ui-office-editing .furniture-catalog .catalog-search { min-height: 44px; margin-bottom: 2px; }
+  /* Settings checkboxes: the row is the target; it reaches 12 px left of the box too. */
+  .mm-check { padding-left: 12px; margin-left: -12px; }
+}
+@media (pointer: coarse) and (max-width: 900px) {
+  /* Phone chat sheet: the grip, the header and the model row are each 44 px tall, so the hit boxes of
+     neighbouring rows do not overlap (was 40 + 45 + 38). */
+  .chat-panel .chat-sheet-grip { height: 44px; }
+  .chat-panel .chat-header { padding-top: 2px !important; padding-bottom: 2px !important; }
+  .chat-panel .chat-model-bar { padding-top: 6px !important; padding-bottom: 6px !important; }
+  .chat-panel.chat-narrow .chat-header .chat-more-tools { width: 38px; min-width: 38px; }
+}
+
+/* v0.10.1 (I10): narrow chat windows (380 px). The model chip drops its provider (the tooltip keeps the whole
+   name) and the chips row wraps rather than cutting a chip to "Effort: D..."; session rows are compact, with the
+   rename pencil beside the delete button instead of on a line of its own. */
+.chat-panel.chat-narrow .hp-chip-provider { display: none; }
+.chat-panel.chat-narrow .chat-model-bar { flex-wrap: wrap !important; row-gap: 4px; }
+.chat-panel.chat-narrow .chat-model-bar .hp-pickers { flex-wrap: wrap; row-gap: 4px; overflow: visible; }
+.chat-session-item:has(.chat-session-rename) { padding-right: 64px; }
+.chat-session-item .chat-session-rename { position: absolute; top: 2px; right: 30px; min-width: 28px; min-height: 28px; padding: 0; }
+@media (max-width: 600px) {
+  .chat-panel .chat-sessions-panel.open .chat-session-item:has(.chat-session-rename) { padding-right: 92px; min-height: 48px; }
+  .chat-panel .chat-sessions-panel.open .chat-session-item .chat-session-rename { top: 0; right: 44px; }
+}
+.chat-session-item:has(.chat-session-rename):not(:has(.chat-session-delete)) { padding-right: 36px; }
+.chat-session-item:not(:has(.chat-session-delete)) .chat-session-rename { right: 4px; }
+
+/* v0.10.1 (I11): narrow phones: the top bar's demo pill is just DEMO (its label keeps "Get a license"), so the
+   office name fits beside it (ui-modern.js fitTopbarTitle shortens the default name only if it still does not). */
+@media (max-width: 400px) {
+  .vo-topbar .vo-demo-pill .vo-demo-pill-text { display: none; }
+}

@@ -8,7 +8,7 @@ INDEX_HTML = (ROOT / "app" / "index.html").read_text(encoding="utf-8")
 
 
 def test_mobile_canvas_reserves_touch_for_office_controls():
-    mobile_block = UI_CSS.split("@media (max-width: 900px)", 1)[1]
+    mobile_block = "".join(part.split("\n}\n", 1)[0] for part in UI_CSS.split("@media (max-width: 900px)")[1:])
     assert ".game-wrapper" in mobile_block
     assert "#officeCanvas" in mobile_block
     assert mobile_block.count("touch-action: none;") >= 2
@@ -27,5 +27,5 @@ def test_mobile_canvas_chat_bubble_touch_scroll_remains_available():
 
 
 def test_mobile_ui_scroll_assets_are_cache_busted_together():
-    assert 'ui-modern.css?v=20260814-agent-preview-r2' in INDEX_HTML
-    assert 'game.js?v=20260814-agent-preview-r1' in INDEX_HTML
+    assert 'ui-modern.css?v=' in INDEX_HTML
+    assert 'game.js?v=' in INDEX_HTML

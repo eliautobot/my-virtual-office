@@ -3,11 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Your Virtual Office — A Visual Workspace for AI Agents</title>
+    <title>My Virtual Office — A Visual Workspace for AI Agents</title>
     <meta name="description" content="Turn your AI agents into a living, breathing office. 2D AI workspace with live presence, chat, browser control, and more. Self-hosted with Docker.">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Press+Start+2P&display=swap" rel="stylesheet">
+    <link rel="preload" href="fonts/Inter-latin.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="fonts/PressStart2P-latin.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -17,9 +16,9 @@
     <div class="nav-inner">
         <a href="#" class="logo">
             <span class="logo-mark">⚡</span>
-            <span class="logo-text">Your Virtual Office</span>
+            <span class="logo-text">My Virtual Office</span>
         </a>
-        <nav class="nav-links">
+        <nav class="nav-links" aria-label="Sections">
             <a href="#features">Features</a>
             <a href="#demo">Demo</a>
             <a href="#pricing">Pricing</a>
@@ -51,7 +50,7 @@
         <div class="preview-window">
             <div class="preview-titlebar">
                 <div class="titlebar-dots"><span></span><span></span><span></span></div>
-                <div class="titlebar-text">Your Virtual Office — localhost:8090</div>
+                <div class="titlebar-text">My Virtual Office — localhost:8090</div>
             </div>
             <div class="preview-canvas">
                 <div class="floor"></div>
@@ -63,35 +62,35 @@
                 <!-- Agents -->
                 <div class="p-agent a1" style="left:14%;top:42%">
                     <div class="agent-body" style="background:#ffd700"></div>
-                    <div class="agent-label">Elix ⚡</div>
+                    <div class="agent-label">Ada ⚡</div>
                     <div class="agent-status working">Working</div>
                 </div>
                 <div class="p-agent a2" style="left:39%;top:57%">
                     <div class="agent-body" style="background:#4ecdc4"></div>
-                    <div class="agent-label">Moe 🔧</div>
+                    <div class="agent-label">Max 🔧</div>
                     <div class="agent-status idle">Idle</div>
                 </div>
                 <div class="p-agent a3" style="right:19%;top:47%">
                     <div class="agent-body" style="background:#ff6b6b"></div>
-                    <div class="agent-label">Flo 📐</div>
+                    <div class="agent-label">Kai 📐</div>
                     <div class="agent-status working">Delegating</div>
                 </div>
                 <div class="p-agent a4" style="left:64%;top:72%">
                     <div class="agent-body" style="background:#a29bfe"></div>
-                    <div class="agent-label">Ana 📊</div>
+                    <div class="agent-label">Lin 📊</div>
                     <div class="agent-status idle">Idle</div>
                 </div>
                 <!-- Chat bubble -->
                 <div class="p-chat" style="left:32%;top:20%">
-                    <strong>Moe:</strong> Mike, check the inbox for the SR 985 submittal...
+                    <strong>Max:</strong> Kai, the weekly report draft is ready for your review...
                 </div>
                 <!-- Sidebar mockup -->
                 <div class="p-sidebar">
                     <div class="sb-title">💬 Chat</div>
-                    <div class="sb-agent"><span style="color:#ffd700">⚡</span> Elix</div>
-                    <div class="sb-agent active"><span style="color:#4ecdc4">🔧</span> Moe</div>
-                    <div class="sb-agent"><span style="color:#ff6b6b">📐</span> Flo</div>
-                    <div class="sb-agent"><span style="color:#a29bfe">📊</span> Ana</div>
+                    <div class="sb-agent"><span style="color:#ffd700">⚡</span> Ada</div>
+                    <div class="sb-agent active"><span style="color:#4ecdc4">🔧</span> Max</div>
+                    <div class="sb-agent"><span style="color:#ff6b6b">📐</span> Kai</div>
+                    <div class="sb-agent"><span style="color:#a29bfe">📊</span> Lin</div>
                 </div>
             </div>
         </div>
@@ -320,7 +319,7 @@
                     <div class="term-line"><span class="term-out">→</span> Container started</div>
                     <div class="term-line">&nbsp;</div>
                     <div class="term-line"><span class="term-prompt">$</span> open http://localhost:8090</div>
-                    <div class="term-line"><span class="term-out">🏢</span> Your Virtual Office is ready!</div>
+                    <div class="term-line"><span class="term-out">🏢</span> My Virtual Office is ready!</div>
                     <div class="term-line"><span class="term-out">⚡</span> 12 agents detected</div>
                     <div class="term-line"><span class="term-out">✅</span> Setup wizard loaded</div>
                 </div>
@@ -369,14 +368,14 @@
     <div class="footer-inner">
         <div class="footer-brand">
             <span class="logo-mark">⚡</span>
-            <span>Your Virtual Office</span>
+            <span>My Virtual Office</span>
         </div>
         <div class="footer-links">
             <a href="https://github.com/eliautobot/my-virtual-office" target="_blank">Source</a>
             <a href="https://discord.com/invite/clawd" target="_blank">Discord</a>
             <a href="mailto:support@yourvirtualoffice.com">Support</a>
         </div>
-        <div class="footer-copy">© 2026 Your Virtual Office. Open source under AGPL-3.0-or-later.</div>
+        <div class="footer-copy">© 2026 My Virtual Office. Open source under AGPL-3.0-or-later.</div>
     </div>
 </footer>
 

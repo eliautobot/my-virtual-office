@@ -1,0 +1,316 @@
+/* Projects, widgets and separate pages styles added in v0.8 (owner: pages builder). */
+
+/* ---------- Shared state card: loading / empty / error / locked ----------
+   One sentence of what happened, one action. Used by cron, models, providers,
+   setup and the dashboard widgets. */
+.vo-state-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--vo-space-3, 12px);
+  width: min(560px, 100%);
+  margin: var(--vo-space-6, 24px) auto;
+  padding: var(--vo-space-6, 24px) var(--vo-space-5, 20px);
+  text-align: center;
+  color: var(--vo-text-2, var(--page-text-2, #c3cddc));
+  border: var(--vo-border-w, 1px) solid var(--vo-border-subtle, var(--page-border, #243247));
+  border-radius: var(--vo-radius-lg, 16px);
+  background: var(--vo-surface-1, var(--page-surface, #0d1422));
+  box-shadow: var(--vo-shadow-2, 0 8px 24px rgba(0,0,0,.35));
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+}
+.vo-state-card.is-error { border-color: color-mix(in srgb, var(--vo-danger, #fb7185) 55%, var(--vo-border-subtle, #243247)); }
+.vo-state-card.is-locked { border-color: color-mix(in srgb, var(--vo-accent, #f5c84c) 45%, var(--vo-border-subtle, #243247)); }
+.vo-state-card.is-compact { margin: var(--vo-space-2, 8px) 0; padding: var(--vo-space-4, 16px); box-shadow: none; width: 100%; }
+.vo-state-icon { font-size: 28px; line-height: 1; }
+.vo-state-title {
+  margin: 0;
+  color: var(--vo-text-1, var(--page-text, #f3f6fb));
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: var(--vo-text-lg, 1rem);
+  font-weight: var(--vo-weight-bold, 700);
+  line-height: var(--vo-leading-tight, 1.25);
+}
+.vo-state-body { margin: 0; max-width: 46ch; font-size: var(--vo-text-md, .875rem); line-height: var(--vo-leading, 1.5); }
+.vo-state-list { margin: 0; padding: 0 0 0 1.2em; text-align: left; font-size: var(--vo-text-sm, .8125rem); line-height: 1.6; }
+.vo-state-details { width: 100%; text-align: left; font-size: var(--vo-text-xs, .75rem); color: var(--vo-text-3, #8d9ab0); }
+.vo-state-details summary { cursor: pointer; }
+.vo-state-details code {
+  display: block;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: var(--vo-radius-sm, 8px);
+  background: var(--vo-surface-3, #1b2638);
+  color: var(--vo-text-2, #c3cddc);
+  font-family: var(--vo-font-mono, monospace);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.vo-state-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--vo-space-2, 8px); }
+.vo-state-btn,
+.ui-standalone .vo-state-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--vo-control-h, 36px);
+  padding: 8px 14px;
+  border: var(--vo-border-w, 1px) solid var(--vo-border-strong, #5b6f8c);
+  border-radius: var(--vo-radius-sm, 8px);
+  color: var(--vo-text-1, #f3f6fb);
+  background: var(--vo-surface-3, #1b2638);
+  font: var(--vo-weight-bold, 700) var(--vo-text-sm, .8125rem)/1.2 var(--vo-font-ui, system-ui, sans-serif);
+  text-decoration: none;
+  cursor: pointer;
+}
+.vo-state-btn:hover { text-decoration: none; border-color: var(--vo-accent, #f5c84c); }
+.vo-state-btn.is-primary,
+.ui-standalone .vo-state-btn.is-primary {
+  color: var(--vo-accent-fill-ink);
+  border-color: var(--vo-accent, #f5c84c);
+  background: var(--vo-accent-fill);
+}
+.vo-state-btn:focus-visible { outline: none; box-shadow: var(--vo-focus, 0 0 0 2px #0d1422, 0 0 0 4px #f5c84c); }
+
+/* ---------- Cron Manager ---------- */
+.cron-page .cron-secondary-btn {
+  color: var(--vo-text-1, var(--text)) !important;
+  background: var(--vo-surface-3, var(--surface2)) !important;
+  border: 1px solid var(--vo-border-strong, var(--border)) !important;
+}
+.cron-page .cron-filter-label { font-size: 12px; color: var(--vo-text-2, var(--dim)); }
+.cron-page .cron-filter-check { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; cursor: pointer; }
+.cron-page .header .status.locked { color: var(--vo-text-2, #c3cddc); background: var(--vo-surface-3, #1b2638); }
+.cron-page .cron-form { border: 0; margin: 0; padding: 0; min-width: 0; }
+.cron-page .cron-form:disabled { opacity: .78; }
+.cron-page .cron-field-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--vo-text-2, var(--page-text-2, var(--dim)));
+  font-size: 12px;
+  font-weight: 600;
+}
+.cron-page .cron-time-input { max-width: 180px; }
+.cron-page .cron-timeout-input { max-width: 160px; }
+.cron-page .cron-day-presets { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.cron-page .day-preset {
+  min-height: 34px;
+  padding: 4px 12px;
+  border: 1px solid var(--vo-border-strong, var(--border));
+  border-radius: var(--vo-radius-sm, 6px);
+  color: var(--vo-accent, var(--accent));
+  background: var(--vo-surface-3, var(--surface2));
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.cron-page .cron-day-chips {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+.cron-page .day-chip { position: relative; display: block; margin: 0; cursor: pointer; }
+.cron-page .day-chip input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.cron-page .day-chip span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  border: 1px solid var(--vo-border-strong, var(--border));
+  border-radius: var(--vo-radius-sm, 8px);
+  color: var(--vo-text-2, var(--text));
+  background: var(--vo-surface-2, var(--surface2));
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: none;
+  user-select: none;
+}
+.cron-page .day-chip input:checked + span {
+  color: var(--vo-accent-fill-ink);
+  border-color: var(--vo-accent, var(--accent));
+  background: var(--vo-accent-fill);
+}
+.cron-page .day-chip input:focus-visible + span { box-shadow: var(--vo-focus, 0 0 0 2px #0d1422, 0 0 0 4px #f5c84c); }
+.cron-page .cron-picker-note,
+.cron-page .cron-readonly-note {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--vo-info, #60a5fa) 45%, transparent);
+  border-radius: var(--vo-radius-sm, 8px);
+  color: var(--vo-text-2, var(--text));
+  background: var(--vo-info-soft, rgba(96,165,250,.12));
+  font-size: 13px;
+  line-height: 1.45;
+}
+.cron-page .cron-readonly-note { border-color: color-mix(in srgb, var(--vo-warning, #fbbf24) 50%, transparent); background: var(--vo-warning-soft, rgba(251,191,36,.12)); }
+.cron-page .cron-expr-input { font-family: var(--vo-font-mono, monospace) !important; letter-spacing: .02em; }
+.cron-page .cron-delivery {
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--vo-border-subtle, var(--border));
+  border-radius: var(--vo-radius-md, 8px);
+  background: var(--vo-surface-2, var(--surface2));
+}
+.cron-page .cron-delivery.is-muted { opacity: .65; }
+.cron-page .cron-delivery-title {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--vo-accent, var(--accent));
+  font-size: 12px;
+  font-weight: 700;
+}
+.cron-page .cron-check-label { display: inline-flex !important; align-items: center; gap: 8px; cursor: pointer; }
+.cron-page .cron-check-label input { width: auto !important; }
+.cron-page .cron-raw { margin-top: 6px; font-size: 12px; color: var(--vo-text-2, var(--dim)); }
+.cron-page .cron-raw summary { cursor: pointer; font-weight: 700; }
+.cron-page .cron-raw pre {
+  max-height: 260px;
+  overflow: auto;
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: var(--vo-radius-sm, 8px);
+  background: var(--vo-surface-3, var(--surface2));
+  color: var(--vo-text-2, var(--text));
+  font-family: var(--vo-font-mono, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.cron-page .cron-msg-preview { margin-top: 6px; font-size: 12px; color: var(--vo-text-3, var(--dim)); font-style: italic; word-break: break-word; }
+.cron-page .cron-error-tag { color: var(--vo-danger, var(--red)); }
+.cron-page .cron-delivery-tag { color: var(--vo-info, var(--blue)); }
+.cron-page [hidden] { display: none !important; }
+@media (max-width: 640px) {
+  .cron-page .cron-day-chips { gap: 4px; }
+  .cron-page .day-chip span { min-height: 44px; font-size: 12px; }
+  .cron-page .modal-overlay { padding: 8px; align-items: stretch; }
+  .cron-page .modal { max-height: none; height: 100%; border-radius: var(--vo-radius-md, 12px); }
+  .cron-page .cron-time-input, .cron-page .cron-timeout-input { max-width: none; }
+}
+
+/* "<- Office" links: >= 44 px touch targets on phones and touch screens (P3-15). */
+@media (max-width: 760px), (pointer: coarse) {
+  .provider-settings-page .ps-back,
+  .cron-page .header .back {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+    min-width: 44px;
+    padding: 0 12px;
+    box-sizing: border-box;
+  }
+}
+
+/* Loading spinner inside a state card. */
+.vo-state-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid var(--vo-border-subtle, #243247);
+  border-top-color: var(--vo-accent, #f5c84c);
+  border-radius: 50%;
+  animation: vo-state-spin .8s linear infinite;
+}
+@keyframes vo-state-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .vo-state-spinner { animation: none; } }
+
+/* ---------- Models page ---------- */
+.models-page .tabs .tab { cursor: pointer; }
+.models-page .tabs .tab:focus-visible { outline: none; box-shadow: var(--vo-focus, 0 0 0 2px #0d1422, 0 0 0 4px #f5c84c); }
+.models-page .row .row-label { min-width: 102px; flex-shrink: 0; color: var(--vo-text-3, var(--page-text-3, #8d9ab0)); }
+.models-page .btn:disabled,
+.models-page .btn[aria-busy="true"] { opacity: .6; cursor: progress; }
+.models-page input[readonly] { opacity: .75; cursor: default; }
+.models-page .status-msg { font-size: var(--vo-text-sm, .8125rem); }
+.models-page .status-msg.ok { color: var(--vo-success, #4ade80); }
+.models-page .status-msg.err { color: var(--vo-danger, #fb7185); }
+
+/* Standalone pages: the page background covers the whole window, also below short content. */
+body.ui-standalone:where(.cron-page, .models-page, .providers-page, .setup-page) {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-attachment: fixed;
+}
+
+/* ---------- Provider SDK page ---------- */
+.provider-settings-page .ps-unsaved {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--vo-warning, #fbbf24) 50%, transparent);
+  border-radius: var(--vo-radius-sm, 8px);
+  color: var(--vo-text-1, #f3f6fb);
+  background: var(--vo-warning-soft, rgba(251,191,36,.12));
+  font-size: var(--vo-text-sm, .8125rem);
+}
+.provider-settings-page .ps-unsaved[hidden] { display: none; }
+.provider-settings-page .ps-unsaved-dot[hidden] { display: none; }
+.provider-settings-page .ps-unsaved-dot { color: var(--vo-warning, #fbbf24); font-weight: 700; margin-left: 2px; }
+.provider-settings-page .ps-provider-tab .dot.checking { background: var(--vo-text-3, #8d9ab0); animation: vo-ps-pulse 1.2s ease-in-out infinite; }
+.provider-settings-page .ps-health.checking { color: var(--vo-text-2, #c3cddc); }
+@keyframes vo-ps-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .provider-settings-page .ps-provider-tab .dot.checking { animation: none; } }
+.provider-settings-page .ps-capabilities-details,
+.provider-settings-page .ps-integration-details { width: 100%; }
+.provider-settings-page .ps-capabilities-details > summary,
+.provider-settings-page .ps-integration-details > summary {
+  cursor: pointer;
+  color: var(--vo-text-2, #c3cddc);
+  font-size: var(--vo-text-sm, .8125rem);
+  font-weight: var(--vo-weight-bold, 700);
+}
+.provider-settings-page .ps-integration-details > summary { font-size: var(--vo-text-lg, 1rem); color: var(--vo-text-1, #f3f6fb); }
+.provider-settings-page .ps-capability-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.provider-settings-page .ps-save.has-changes,
+.provider-settings-page #ps-save.has-changes { box-shadow: 0 0 0 2px color-mix(in srgb, var(--vo-warning, #fbbf24) 60%, transparent); }
+.provider-settings-page .ps-load-state { padding: 0; border: 0; background: none; }
+
+/* ---------- Dashboard widgets: PC performance and API usage ---------- */
+.pc-bar.is-warn, .vo-sidebar .pc-bar.is-warn { background: var(--vo-warning, #ff9800) !important; }
+.pc-bar.is-danger, .vo-sidebar .pc-bar.is-danger { background: var(--vo-danger, #f44336) !important; }
+.vo-sidebar .pc-bar.api-bar { background: var(--api-c, var(--vo-info, #60a5fa)); }
+.pc-value.is-warn { color: var(--vo-warning, #ff9800) !important; }
+.pc-value.is-danger { color: var(--vo-danger, #f44336) !important; }
+.api-provider .api-provider-name { color: var(--api-c, var(--vo-text-1, #f3f6fb)); text-transform: uppercase; }
+html[data-ui-theme="light"] .api-provider .api-provider-name { color: var(--vo-text-1, #0f172a); }
+.api-provider .api-auth-tag {
+  border: 1px solid color-mix(in srgb, var(--api-c, var(--vo-border-strong, #5b6f8c)) 55%, transparent);
+  color: var(--vo-text-2, #c3cddc);
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: var(--vo-text-xs, .75rem);
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.api-provider .pc-metric-header { min-width: 0; gap: 6px; }
+.api-provider .api-provider-name { min-width: 0; overflow-wrap: anywhere; }
+.api-provider + .api-provider { margin-top: var(--vo-space-3, 12px); }
+.api-provider .api-window { margin-top: 4px; }
+.api-provider .api-message,
+.api-usage-empty,
+/* Total GPU power line: style.css paints it #ffd700, which is about 1.4:1 on light themes. */
+.pc-power-summary {
+  color: var(--vo-text-2, #c3cddc);
+  border-top-color: var(--vo-border-subtle, rgba(255,255,255,0.08));
+}
+
+.pc-live-note,
+.pc-fallback-note {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-family: var(--vo-font-ui, system-ui, sans-serif);
+  font-size: var(--vo-text-xs, .75rem);
+  line-height: 1.45;
+  color: var(--vo-text-2, #c3cddc);
+}
+.api-provider .api-warning { white-space: normal; overflow-wrap: anywhere; font-family: var(--vo-font-ui, system-ui, sans-serif); font-size: var(--vo-text-xs, .75rem); }
+.api-usage-empty { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 0; }
+.api-usage-empty.is-error { color: var(--vo-danger, #fb7185); }
+.api-fresh { text-align: right; margin-top: 6px; color: var(--vo-text-3, #8d9ab0) !important; }
+.pc-live-note { margin-bottom: 6px; color: var(--vo-warning, #fbbf24); }

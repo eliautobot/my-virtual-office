@@ -1,0 +1,62 @@
+{
+ "_comment": "v0.12 body save/reload fixture (tests/test_v12_body_save.py): alpha = top + neckwear + colour, beta = new costume over a top, gamma = an old look without the new fields, delta = values a later build may add",
+ "canvasWidth": 1040,
+ "canvasHeight": 740,
+ "furniture": [],
+ "agents": [
+  {
+   "id": "alpha",
+   "statusKey": "alpha",
+   "color": "#1e88e5",
+   "gender": "F",
+   "appearance": {
+    "skinTone": "#d4a574",
+    "hairStyle": "bob",
+    "shirtStyle": "labcoat",
+    "neckwear": "bowtie",
+    "neckwearColor": "#2e7d32",
+    "costume": null,
+    "pantsColor": "#455a64",
+    "headwear": "sunhat"
+   }
+  },
+  {
+   "id": "beta",
+   "statusKey": "beta",
+   "color": "#e53935",
+   "appearance": {
+    "skinTone": "#8d5524",
+    "hairStyle": "long",
+    "costume": "dino",
+    "shirtStyle": "hoodie"
+   }
+  },
+  {
+   "id": "gamma",
+   "statusKey": "gamma",
+   "color": "#43a047",
+   "appearance": {
+    "skinTone": "#ffcc80",
+    "hairStyle": "spiky",
+    "hairColor": "#1a1a1a",
+    "headwear": "crown",
+    "headwearColor": "#ffd700",
+    "glasses": null,
+    "costume": "lobster",
+    "heldItem": null,
+    "deskItem": "trophy"
+   }
+  },
+  {
+   "id": "delta",
+   "statusKey": "delta",
+   "color": "#8e24aa",
+   "appearance": {
+    "skinTone": "#ffcc80",
+    "shirtStyle": "toga",
+    "neckwear": "cravat",
+    "costume": "yeti"
+   }
+  }
+ ]
+}

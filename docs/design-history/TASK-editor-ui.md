@@ -1,4 +1,4 @@
-# Task: Phase 4 — Furniture Editor UI
+# Task: Phase 4: Furniture Editor UI
 
 > Archive note: this completed implementation brief is retained for design history.
 
@@ -8,7 +8,7 @@ game.js already has a data-driven furniture system (officeConfig with 48 furnitu
 ## What to Build
 
 ### 1. Furniture Catalog Panel (HTML/CSS)
-When edit mode is active, show a panel on the left side of the screen (or bottom, your call — left is probably better since bottom has toolbar).
+When edit mode is active, show a panel on the left side of the screen (or bottom, your call, left is probably better since bottom has toolbar).
 
 **Panel structure:**
 - Fixed position, ~220px wide, full height minus toolbar
@@ -32,7 +32,7 @@ When edit mode is active, show a panel on the left side of the screen (or bottom
 6. Right-click or press Escape → exit placement mode
 7. Call saveOfficeConfig() after each placement
 
-**Ghost preview:** Draw the item with ctx.globalAlpha = 0.5 at the cursor position (snapped to TILE grid). Use drawFurnitureItem() to draw it. Show green tint if valid position, red if overlapping another item (optional — can skip overlap detection for v1).
+**Ghost preview:** Draw the item with ctx.globalAlpha = 0.5 at the cursor position (snapped to TILE grid). Use drawFurnitureItem() to draw it. Show green tint if valid position, red if overlapping another item (optional, can skip overlap detection for v1).
 
 ### 3. Selection & Manipulation
 When in edit mode but NOT in placement mode:
@@ -121,9 +121,9 @@ Add to style.css. Match the existing dark theme:
 - Smooth slide-in transition
 
 ### 7. Files to Modify
-- **game.js** — placement logic, selection, dragging, ghost preview, edit click handling
-- **index.html** — add the catalog panel HTML (or create dynamically in JS)
-- **style.css** — catalog panel styles
+- **game.js**: placement logic, selection, dragging, ghost preview, edit click handling
+- **index.html**: add the catalog panel HTML (or create dynamically in JS)
+- **style.css**: catalog panel styles
 
 ### 8. Testing
 Load the local product app and verify:

@@ -1,0 +1,61 @@
+/* Office life (v0.9): shared DOM pieces over the office canvas.
+   The layer sits inside .game-wrapper above the canvas and under the map
+   controls; it lets clicks through except on its own controls. Features put
+   their edge badges, caption bar and replay bar in it (#voLifeLayer). */
+
+.vo-life-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: var(--vo-z-canvas-ui, 10);
+  overflow: hidden;
+  contain: layout style;
+}
+.vo-life-layer > * { pointer-events: auto; }
+.vo-life-layer [hidden] { display: none !important; }
+
+/* Office life switched off (or the server has none): nothing of it shows. */
+html.vo-life-off .vo-life-layer,
+html.vo-life-off [data-vo-life] { display: none !important; }
+
+/* A small pixel-styled pill button (edge badges, caption bar actions). */
+.vo-life-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  max-width: min(320px, 70vw);
+  padding: 4px 10px;
+  border: var(--vo-border-w, 1px) solid rgba(62, 39, 35, 0.9);
+  border-radius: var(--vo-radius-xs, 3px);
+  background: var(--vo-warning, #fbbf24);
+  color: #1b1300;
+  font: 700 var(--vo-text-sm, 12px)/1.2 var(--vo-font-ui, system-ui, sans-serif);
+  box-shadow: var(--vo-shadow-1, 0 1px 2px rgba(0, 0, 0, 0.3));
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.vo-life-pill:focus-visible { outline: 2px solid var(--vo-accent); outline-offset: 2px; }
+.vo-life-pill--info { background: var(--vo-info, #60a5fa); color: #06121f; border-color: #0d2440; }
+.vo-life-pill--neutral { background: var(--vo-surface-0, #0e131f); color: var(--vo-text-1, #fff); border-color: var(--vo-border-subtle, rgba(255, 255, 255, 0.2)); }
+@media (pointer: coarse) {
+  .vo-life-pill { min-height: 44px; font-size: var(--vo-text-md, 13px); }
+}
+
+/* Screen-reader only live region (one polite announcement per event). */
+.vo-life-sr {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vo-life-layer * { transition: none !important; animation: none !important; }
+}
+html.vo-life-calm .vo-life-layer * { animation: none !important; }

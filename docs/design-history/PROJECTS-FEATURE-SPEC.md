@@ -1,21 +1,21 @@
-# Projects Feature — Full Specification
+# Projects Feature: Full Specification
 
 > Archive note: this implementation spec is retained for design history. Use
 > current code and current product docs as the source of truth.
 
 ## Overview
-A comprehensive project management suite built into the Virtual Office. Users can create, edit, track, document, organize, and report on projects — all through an intuitive, drag-and-drop interface. This is THE power tool for the Virtual Office.
+A comprehensive project management suite built into the Virtual Office. Users can create, edit, track, document, organize, and report on projects, all through an intuitive, drag-and-drop interface. This is THE power tool for the Virtual Office.
 
 ## Architecture
 
 ### Files to Create
-1. **`app/projects.js`** — All frontend logic (modal, board, drag-and-drop, templates, reports)
-2. **`app/projects.css`** — All project-specific styles (import from index.html)
+1. **`app/projects.js`**: All frontend logic (modal, board, drag-and-drop, templates, reports)
+2. **`app/projects.css`**: All project-specific styles (import from index.html)
 
 ### Files to Modify
-3. **`app/server.py`** — Add REST API endpoints for CRUD operations
-4. **`app/index.html`** — Add Projects button to toolbar, include JS/CSS, add modal HTML
-5. **`app/style.css`** — Minimal additions only (toolbar button highlight)
+3. **`app/server.py`**: Add REST API endpoints for CRUD operations
+4. **`app/index.html`**: Add Projects button to toolbar, include JS/CSS, add modal HTML
+5. **`app/style.css`**: Minimal additions only (toolbar button highlight)
 
 ### Data Storage
 - **File:** `{STATUS_DIR}/projects.json` (same pattern as office-config.json, meetings, etc.)
@@ -96,7 +96,7 @@ A comprehensive project management suite built into the Virtual Office. Users ca
 ## UI Design
 
 ### Entry Point
-- **Toolbar button:** `📋 Projects` — added between `⏰ Cron` and `🔍 Reset` in the toolbar
+- **Toolbar button:** `📋 Projects`: added between `⏰ Cron` and `🔍 Reset` in the toolbar
 - **Sidebar section:** `📋 PROJECTS` collapsible section showing active project count + quick list
 - Opens a full-screen modal (like Meetings modal but bigger)
 
@@ -137,7 +137,7 @@ A comprehensive project management suite built into the Virtual Office. Users ca
 
 ### Task Detail Panel (Slide-in from right)
 - **Title** (editable inline)
-- **Description** (Markdown editor — textarea with preview toggle)
+- **Description** (Markdown editor, textarea with preview toggle)
 - **Status** column selector
 - **Priority** dropdown
 - **Assignee** dropdown (populated from agent roster + branches)
@@ -178,28 +178,28 @@ A comprehensive project management suite built into the Virtual Office. Users ca
 ## API Endpoints (server.py)
 
 ### GET Endpoints
-- `GET /api/projects` — List all projects (with optional ?status=active filter)
-- `GET /api/projects/{id}` — Get single project with all tasks
-- `GET /api/projects/templates` — List templates
-- `GET /api/projects/{id}/report` — Generate project report
+- `GET /api/projects`: List all projects (with optional ?status=active filter)
+- `GET /api/projects/{id}`: Get single project with all tasks
+- `GET /api/projects/templates`: List templates
+- `GET /api/projects/{id}/report`: Generate project report
 
 ### POST Endpoints
-- `POST /api/projects` — Create new project (body: {title, description, template?, columns?})
-- `POST /api/projects/{id}/tasks` — Create task in project
-- `POST /api/projects/{id}/tasks/{taskId}/comments` — Add comment
-- `POST /api/projects/from-template` — Create project from template
-- `POST /api/projects/templates` — Save project as template
+- `POST /api/projects`: Create new project (body: {title, description, template?, columns?})
+- `POST /api/projects/{id}/tasks`: Create task in project
+- `POST /api/projects/{id}/tasks/{taskId}/comments`: Add comment
+- `POST /api/projects/from-template`: Create project from template
+- `POST /api/projects/templates`: Save project as template
 
 ### PUT Endpoints
-- `PUT /api/projects/{id}` — Update project metadata
-- `PUT /api/projects/{id}/tasks/{taskId}` — Update task (move, edit, assign, etc.)
-- `PUT /api/projects/{id}/columns` — Reorder/add/edit columns
-- `PUT /api/projects/{id}/tasks/reorder` — Batch reorder tasks (after drag-drop)
+- `PUT /api/projects/{id}`: Update project metadata
+- `PUT /api/projects/{id}/tasks/{taskId}`: Update task (move, edit, assign, etc.)
+- `PUT /api/projects/{id}/columns`: Reorder/add/edit columns
+- `PUT /api/projects/{id}/tasks/reorder`: Batch reorder tasks (after drag-drop)
 
 ### DELETE Endpoints
-- `DELETE /api/projects/{id}` — Delete/archive project
-- `DELETE /api/projects/{id}/tasks/{taskId}` — Delete task
-- `DELETE /api/projects/templates/{id}` — Delete template
+- `DELETE /api/projects/{id}`: Delete/archive project
+- `DELETE /api/projects/{id}/tasks/{taskId}`: Delete task
+- `DELETE /api/projects/templates/{id}`: Delete template
 
 ---
 
@@ -242,7 +242,7 @@ A comprehensive project management suite built into the Virtual Office. Users ca
 ## Implementation Notes
 
 ### File Organization
-- `projects.js` should be self-contained — all modal logic, board rendering, drag-drop, API calls
+- `projects.js` should be self-contained, all modal logic, board rendering, drag-drop, API calls
 - `projects.css` should be a separate file (loaded in index.html like other CSS)
 - Follow existing patterns in `chat.js` and `game.js` for code style
 - Use `fetch()` for all API calls (same as existing code)

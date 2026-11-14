@@ -1,0 +1,136 @@
+[
+ {
+  "type": "run.status",
+  "phase": "Thinking"
+ },
+ {
+  "type": "native",
+  "ev": {
+   "op": "title",
+   "text": "[[tool:clarify {\"questions\":[{\"question\":\"Which…"
+  }
+ },
+ {
+  "type": "run.status",
+  "phase": "Waiting for your answer"
+ },
+ {
+  "type": "question.requested",
+  "questionId": "srq-c2b9a7e26823",
+  "questions": [
+   {
+    "questionId": "q0",
+    "header": "Question 1",
+    "question": "Which colour?",
+    "options": [
+     {
+      "label": "Red (Recommended)"
+     },
+     {
+      "label": "Blue"
+     }
+    ],
+    "multiSelect": false,
+    "other": true
+   },
+   {
+    "questionId": "q1",
+    "header": "Question 2",
+    "question": "Anything else?",
+    "options": [],
+    "multiSelect": false,
+    "other": true
+   }
+  ]
+ },
+ {
+  "type": "run.delta",
+  "text": "\n\nThe tool ans",
+  "at": 0
+ },
+ {
+  "type": "run.delta",
+  "text": "wered: {\"res",
+  "at": 14
+ },
+ {
+  "type": "run.delta",
+  "text": "ponses\": [{\"",
+  "at": 26
+ },
+ {
+  "type": "run.delta",
+  "text": "question\": \"",
+  "at": 38
+ },
+ {
+  "type": "run.delta",
+  "text": "Which colour",
+  "at": 50
+ },
+ {
+  "type": "run.delta",
+  "text": "?\", \"choices",
+  "at": 62
+ },
+ {
+  "type": "run.delta",
+  "text": "_offered\": [",
+  "at": 74
+ },
+ {
+  "type": "run.delta",
+  "text": "\"Red\", \"Blue",
+  "at": 86
+ },
+ {
+  "type": "run.delta",
+  "text": "\"], \"status\"",
+  "at": 98
+ },
+ {
+  "type": "run.delta",
+  "text": ": \"answered\"",
+  "at": 110
+ },
+ {
+  "type": "run.delta",
+  "text": ", \"user_resp",
+  "at": 122
+ },
+ {
+  "type": "run.delta",
+  "text": "onse\": \"Blue",
+  "at": 134
+ },
+ {
+  "type": "run.delta",
+  "text": "\"}, {\"questi",
+  "at": 146
+ },
+ {
+  "type": "run.delta",
+  "text": "on\": \"Anythi",
+  "at": 158
+ },
+ {
+  "type": "run.delta",
+  "text": "ng else?\", ",
+  "at": 170
+ },
+ {
+  "type": "usage.update",
+  "used": 14621,
+  "size": 256000
+ },
+ {
+  "type": "run.end",
+  "status": "ok",
+  "text": "The tool answered: {\"responses\": [{\"question\": \"Which colour?\", \"choices_offered\": [\"Red\", \"Blue\"], \"status\": \"answered\", \"user_response\": \"Blue\"}, {\"question\": \"Anything else?\",",
+  "ms": 0,
+  "model": "custom:stub-1",
+  "tokensIn": 29089,
+  "tokensOut": 79,
+  "title": "[[tool:clarify {\"questions\":[{\"question\":\"Which…"
+ }
+]

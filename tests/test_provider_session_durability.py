@@ -34,7 +34,7 @@ class ProviderSessionDurabilityTests(unittest.TestCase):
 
     def test_native_history_loaders_read_requested_window_without_changing_active_session(self):
         fixtures = [
-            ("hermes", "aster", server._save_hermes_state, server._load_hermes_state, server._load_hermes_session_history),
+            ("hermes", "astra", server._save_hermes_state, server._load_hermes_state, server._load_hermes_session_history),
             ("codex", "main", server._save_codex_state, server._load_codex_state, server._load_codex_session_history),
             ("claude-code", "main", server._save_claude_code_state, server._load_claude_code_state, server._load_claude_code_session_history),
         ]

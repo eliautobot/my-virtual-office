@@ -32,8 +32,22 @@ Meeting types: 1on1, group (auto-detected if omitted)
 
 Agent keys are now dynamic — any agent ID is accepted.
 """
-import json, sys, time, uuid, os
+import json, os, shutil, sys, time, uuid
 from datetime import datetime, timezone, timedelta
+
+try:   # (as root in a data folder someone else owns, what this writes keeps that owner: app/data_owner.py)
+    import data_owner
+except ImportError:   # (a copy of this script outside the office's app folder)
+    data_owner = None
+
+
+def _makedirs(path):
+    (data_owner.makedirs if data_owner else os.makedirs)(path, exist_ok=True)
+
+
+def _adopt(path):
+    if data_owner:
+        data_owner.adopt(path)
 
 # Load status dir from vo-config.json or env, with fallback
 def _get_status_file():
@@ -45,7 +59,7 @@ def _get_status_file():
         status_dir = cfg.get("presence", {}).get("statusDir", status_dir)
     except (FileNotFoundError, json.JSONDecodeError):
         pass
-    os.makedirs(status_dir, exist_ok=True)
+    _makedirs(status_dir)
     return os.path.join(status_dir, "virtual-office-status.json")
 
 STATUS_FILE = _get_status_file()
@@ -61,9 +75,28 @@ def load():
     except FileNotFoundError:
         return {}
 
-def save(data):
-    with open(STATUS_FILE, "w") as f:
+def _atomic_dump(path, data):
+    """Write JSON atomically (temp file + rename, keeping a .bak) so a crash or a
+    concurrent writer never leaves a half-written file (BE-19)."""
+    directory = os.path.dirname(path) or "."
+    _makedirs(directory)
+    tmp = f"{path}.tmp-{os.getpid()}"
+    with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    _adopt(tmp)
+    if os.path.isfile(path):
+        try:
+            shutil.copy2(path, path + ".bak")
+            _adopt(path + ".bak")
+        except OSError:
+            pass
+    os.replace(tmp, path)
+
+
+def save(data):
+    _atomic_dump(STATUS_FILE, data)
 
 def ensure_entry(data, key):
     if key not in data:
@@ -125,25 +158,21 @@ def _load_proj():
         if not isinstance(d.get("projects"), list):
             d["projects"] = []
         return d
-    except (FileNotFoundError, json.JSONDecodeError):
+    except FileNotFoundError:
         return {"projects": [], "templates": []}
 
 def _save_proj(d):
-    os.makedirs(os.path.dirname(_proj_file()), exist_ok=True)
-    with open(_proj_file(), "w") as f:
-        json.dump(d, f, indent=2)
+    _atomic_dump(_proj_file(), d)
 
 def _load_scores():
     try:
         with open(_scores_file(), "r") as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    except FileNotFoundError:
         return {"agents": {}}
 
 def _save_scores(d):
-    os.makedirs(os.path.dirname(_scores_file()), exist_ok=True)
-    with open(_scores_file(), "w") as f:
-        json.dump(d, f, indent=2)
+    _atomic_dump(_scores_file(), d)
 
 def _uid():
     return str(uuid.uuid4())

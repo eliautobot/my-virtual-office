@@ -7,6 +7,7 @@ import {
   normalizePreviewTarget,
   normalizePreviewBubbleSettings,
   normalizePreviewClientState,
+  previewTargetEvictionIndex,
   previewTargetsForAgent,
   previewTargetKey,
   resolveAgentPreviewTarget,
@@ -75,6 +76,9 @@ const targets = [image, browser, text];
 assert.deepEqual(previewTargetsForAgent(targets, 'coder'), [image, text]);
 assert.equal(resolveAgentPreviewTarget(targets, 'coder', previewTargetKey(image)), image);
 assert.equal(resolveAgentPreviewTarget(targets, 'coder', 'missing'), text);
+assert.equal(previewTargetEvictionIndex([image, browser, text], 'coder', 1, 80), 0);
+assert.equal(previewTargetEvictionIndex([image, browser, text], 'writer', 20, 2), 0);
+assert.equal(previewTargetEvictionIndex([image, browser], 'writer', 20, 2), -1);
 
 const collisionLayout = resolvePreviewBubbleCollisionLayout([
   { id: 'coder', width: 240, height: 190, anchorX: 500, anchorY: 420, controlX: 500, controlY: 440 },
@@ -114,13 +118,16 @@ const game = readFileSync(new URL('../app/game.js', import.meta.url), 'utf8');
 const css = readFileSync(new URL('../app/ui-modern.css', import.meta.url), 'utf8');
 const html = readFileSync(new URL('../app/index.html', import.meta.url), 'utf8');
 for (const token of ['vo-agent-preview-state-v1', 'vo:agent-tool-preview', 'vo:open-agent-preview',
-  'getVisibleBubbleRects', 'agent-preview-pdf-frame', "item.kind === 'browser' && item.agentId !== normalized.agentId"]) {
+  'getVisibleBubbleRects', 'agent-preview-pdf-frame', 'agent-pc-saved-remove', 'agent-preview-bubble-open', "state.section === 'preview'", 'delete target.workspaceOnly',
+  "item.kind === 'browser' && item.agentId !== normalized.agentId", 'visibleBubbleKeys', 'visibleInPC']) {
   assert.ok(hub.includes(token), `hub missing ${token}`);
 }
 for (const token of ['registerRunOwner(runId', 'previewOwnerForRun(runId)', 'agentId: previewOwner.agentId',
   "new CustomEvent('vo:agent-tool-preview'"]) assert.ok(chat.includes(token), `chat missing ${token}`);
-for (const token of ['__voResolveAgentPreviewAnchor', '_getAgentPreviewScreenHit', 'toggleBubble(previewTarget.agentId)',
+for (const token of ['__voResolveAgentPreviewAnchor', '_getAgentPreviewScreenHit', 'previewHub.openPC(previewAgent.statusKey',
+  '_runAgentCharacterAction', '_placeAgentMenu', "action === 'chat'", "action === 'pc'", "action === 'settings'",
   '_resolveChatPreviewObstacleCollisions', 'getVisibleBubbleRects']) assert.ok(game.includes(token), `game missing ${token}`);
+for (const token of ['openChatForAgent', 'chatWindowHasAgentSelected', 'VirtualOfficeChat', 'vo:open-agent-chat']) assert.ok(chat.includes(token), `chat missing ${token}`);
 for (const token of ['#previewBubbleContainer', '.agent-preview-panel', '.agent-preview-bubble-tab-close',
   '.agent-preview-pdf-frame', '--agent-preview-frame-scale']) assert.ok(css.includes(token), `CSS missing ${token}`);
 for (const token of ['mm-preview-display', 'mm-preview-size', 'mm-preview-zoom', 'agentPreviewPanel',

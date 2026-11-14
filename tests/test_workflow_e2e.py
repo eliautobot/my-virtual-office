@@ -18,7 +18,11 @@ import unittest
 if __name__ != "__main__":
     raise unittest.SkipTest("standalone live-server workflow verification; run this file directly")
 
-BASE = os.environ.get("VO_TEST_URL", "http://127.0.0.1:8090")
+# This test creates and deletes projects on a running office. Never guess which
+# one: the target must be named explicitly (BE-36).
+BASE = os.environ.get("VO_TEST_URL", "").rstrip("/")
+if not BASE:
+    raise SystemExit("Set VO_TEST_URL to a disposable test office, e.g. VO_TEST_URL=http://127.0.0.1:18090")
 API = f"{BASE}/api/projects"
 
 PASS = "✅"

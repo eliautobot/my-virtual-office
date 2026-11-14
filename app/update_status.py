@@ -16,7 +16,21 @@ Agent keys are auto-discovered from the OpenClaw installation.
 States: working, idle, meeting, break, lounge
 Meeting types: 1on1, group (auto-detected if omitted)
 """
-import json, sys, time, uuid, os
+import json, os, shutil, sys, time, uuid
+
+try:   # (as root in a data folder someone else owns, what this writes keeps that owner: app/data_owner.py)
+    import data_owner
+except ImportError:   # (a copy of this script outside the office's app folder)
+    data_owner = None
+
+
+def _makedirs(path):
+    (data_owner.makedirs if data_owner else os.makedirs)(path, exist_ok=True)
+
+
+def _adopt(path):
+    if data_owner:
+        data_owner.adopt(path)
 
 STATUS_DIR = os.environ.get("VO_STATUS_DIR", "/data")
 STATUS_FILE = os.path.join(STATUS_DIR, "virtual-office-status.json")
@@ -39,10 +53,28 @@ def load():
     except FileNotFoundError:
         return {}
 
-def save(data):
-    os.makedirs(os.path.dirname(STATUS_FILE), exist_ok=True)
-    with open(STATUS_FILE, "w") as f:
+def _atomic_dump(path, data):
+    """Write JSON atomically (temp file + rename, keeping a .bak) so a crash or a
+    concurrent writer never leaves a half-written file (BE-19)."""
+    directory = os.path.dirname(path) or "."
+    _makedirs(directory)
+    tmp = f"{path}.tmp-{os.getpid()}"
+    with open(tmp, "w") as f:
         json.dump(data, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    _adopt(tmp)
+    if os.path.isfile(path):
+        try:
+            shutil.copy2(path, path + ".bak")
+            _adopt(path + ".bak")
+        except OSError:
+            pass
+    os.replace(tmp, path)
+
+
+def save(data):
+    _atomic_dump(STATUS_FILE, data)
 
 def ensure_entry(data, key):
     if key not in data:

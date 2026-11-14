@@ -1,0 +1,110 @@
+/* Models & providers page in the Agent Providers style (v0.10 UI-16): readable type on the tokens,
+   cards, quiet secondary and danger buttons, label-above-field rows on phones, an Advanced fold for
+   the auth stores. Loaded after the page's own styles. */
+.models-page {
+  --bg: var(--vo-surface-0); --surface: var(--vo-surface-1); --border: var(--vo-border-subtle); --gold: var(--vo-accent);
+  --text: var(--vo-text-1); --text-dim: var(--vo-text-3); --green: var(--vo-success); --red: var(--vo-danger); --blue: var(--vo-info); --purple: var(--vo-accent-2);
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: var(--vo-space-6) var(--vo-space-5) var(--vo-space-8);
+  background: var(--vo-surface-0);
+  color: var(--vo-text-1);
+  font: var(--vo-text-md)/1.5 var(--vo-font-ui);
+}
+html:has(.models-page) { background: var(--vo-surface-0); }
+.models-page :is(p, span, div, small, label, li, td, th, summary) { font-family: var(--vo-font-ui); }
+.models-page h1 { margin: 0; color: var(--vo-accent); font: var(--vo-pixel-lg)/1.5 var(--vo-font-pixel); text-transform: uppercase; }
+.models-page h2 { margin: var(--vo-space-5) 0 var(--vo-space-2); color: var(--vo-text-1); font: var(--vo-weight-bold) var(--vo-text-lg)/1.3 var(--vo-font-ui); }
+.models-page h3 { margin: var(--vo-space-4) 0 var(--vo-space-2); color: var(--vo-text-2); font: var(--vo-weight-bold) var(--vo-text-sm)/1.3 var(--vo-font-ui); text-transform: none; }
+.models-page .muted, .models-page small { color: var(--vo-text-3); font-size: var(--vo-text-xs); }
+.models-page code { color: var(--vo-accent); font: var(--vo-text-xs) var(--vo-font-mono); }
+
+/* Header: back links, title, theme switch on one line. */
+.models-page .models-header { display: flex; flex-wrap: wrap; align-items: center; gap: var(--vo-space-3); margin-bottom: var(--vo-space-5); }
+.models-page .models-header h1 { order: -1; flex: 1 1 100%; margin-bottom: var(--vo-space-1); }
+.models-page .back-btn, .models-page .ui-theme-toggle {
+  display: inline-flex; align-items: center; gap: var(--vo-space-1); min-height: 40px; padding: 0 var(--vo-space-4);
+  border: 1px solid var(--vo-border-strong); border-radius: var(--vo-radius-sm); background: var(--vo-surface-1);
+  color: var(--vo-text-1); font: var(--vo-weight-medium) var(--vo-text-sm)/1 var(--vo-font-ui); text-decoration: none; cursor: pointer;
+}
+.models-page .back-btn:hover, .models-page .ui-theme-toggle:hover { background: var(--vo-surface-3); }
+.models-page .ui-theme-toggle { margin-left: auto; }
+
+/* Tabs: the Agent Providers segmented look. */
+.models-page .tabs { display: flex; gap: var(--vo-space-1); margin-bottom: var(--vo-space-4); padding: var(--vo-space-1); overflow-x: auto;
+  border: 1px solid var(--vo-border-subtle); border-radius: var(--vo-radius-md); background: var(--vo-surface-1); scrollbar-width: none; }
+.models-page .tab { flex: none; min-height: 40px; padding: 0 var(--vo-space-4); border: 0; border-radius: var(--vo-radius-sm); background: transparent;
+  color: var(--vo-text-2); font: var(--vo-weight-medium) var(--vo-text-sm)/1 var(--vo-font-ui); cursor: pointer; }
+.models-page .tab:hover { background: var(--vo-surface-3); color: var(--vo-text-1); }
+.models-page .tab.active { background: var(--vo-accent-soft); color: var(--vo-text-1); box-shadow: inset 0 -2px 0 var(--vo-accent); }
+
+/* Cards. */
+.models-page .grid { gap: var(--vo-space-4); grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.models-page .card { margin-bottom: var(--vo-space-4); padding: var(--vo-space-5); border: 1px solid var(--vo-border-subtle); border-radius: var(--vo-radius-md);
+  background: var(--vo-surface-1); box-shadow: var(--vo-shadow-pixel); }
+.models-page .card .card { box-shadow: none; background: var(--vo-surface-2); }
+.models-page .provider-header { gap: var(--vo-space-3); margin-bottom: var(--vo-space-3); }
+.models-page .provider-name { color: var(--vo-text-1); font: var(--vo-weight-bold) var(--vo-text-lg)/1.3 var(--vo-font-ui); }
+.models-page .provider-current { color: var(--vo-text-3); font-size: var(--vo-text-xs); }
+.models-page .tag { padding: 2px 8px; border-radius: var(--vo-radius-pill); color: var(--vo-text-2); font-size: var(--vo-text-xs); }
+
+/* Lists of key / value rows. */
+.models-page .model-list { max-height: 360px; border-color: var(--vo-border-subtle); border-radius: var(--vo-radius-sm); background: var(--vo-surface-2); }
+.models-page .model-item { min-height: 44px; padding: var(--vo-space-2) var(--vo-space-3); border-color: var(--vo-border-subtle); font-size: var(--vo-text-sm); }
+.models-page .auth-help .model-item span:first-child { flex: 0 0 34%; color: var(--vo-text-1); font-weight: var(--vo-weight-medium); }
+.models-page .auth-help .model-item span:last-child { color: var(--vo-text-2); }
+
+/* Form rows and controls. */
+.models-page .row { gap: var(--vo-space-2) var(--vo-space-3); margin: var(--vo-space-2) 0; }
+.models-page .row label, .models-page .checkbox-row { min-width: 140px; color: var(--vo-text-2); font-size: var(--vo-text-sm); }
+.models-page :is(input, select, textarea) { min-height: 40px; padding: 0 var(--vo-space-3); border: 1px solid var(--vo-border-strong); border-radius: var(--vo-radius-sm);
+  background: var(--vo-surface-2); color: var(--vo-text-1); font: var(--vo-text-md) var(--vo-font-ui); }
+.models-page textarea { padding: var(--vo-space-2) var(--vo-space-3); }
+.models-page .model-editor { font: var(--vo-text-sm)/1.45 var(--vo-font-mono); }
+.models-page input[type="checkbox"] { min-height: 0; width: 18px; height: 18px; accent-color: var(--vo-accent); }
+
+/* Buttons: one primary, quiet secondaries, quiet danger that fills on hover. */
+.models-page .btn { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 0 var(--vo-space-4); border: 1px solid var(--vo-border-strong);
+  border-radius: var(--vo-radius-sm); background: var(--vo-surface-2); color: var(--vo-text-1); font: var(--vo-weight-medium) var(--vo-text-sm)/1 var(--vo-font-ui); }
+.models-page .btn:hover { background: var(--vo-surface-3); }
+.models-page .btn-gold { border-color: var(--vo-accent-fill); background: var(--vo-accent-fill); color: var(--vo-accent-fill-ink); font-weight: var(--vo-weight-bold); }
+.models-page .btn-gold:hover { background: var(--vo-accent-fill); filter: brightness(1.06); }
+.models-page :is(.btn-green, .btn-blue, .btn-purple) { background: transparent; color: var(--vo-text-1); }
+.models-page .btn-green { border-color: color-mix(in srgb, var(--vo-success) 60%, var(--vo-border-strong)); }
+.models-page .btn-blue { border-color: color-mix(in srgb, var(--vo-info) 60%, var(--vo-border-strong)); }
+.models-page :is(.btn-red, .btn-danger-quiet) { border-color: color-mix(in srgb, var(--vo-danger) 55%, var(--vo-border-strong)); background: transparent; color: var(--vo-danger); }
+.models-page :is(.btn-red, .btn-danger-quiet):hover { border-color: var(--vo-danger); background: var(--vo-danger); color: #fff; }
+.models-page .status-msg { font-size: var(--vo-text-sm); }
+
+/* Advanced fold for the auth stores. */
+.models-page details.advanced { margin-top: var(--vo-space-3); border: 1px solid var(--vo-border-subtle); border-radius: var(--vo-radius-sm); background: var(--vo-surface-1); }
+.models-page details.advanced > summary { display: flex; align-items: center; gap: var(--vo-space-2); min-height: 44px; padding: 0 var(--vo-space-3);
+  color: var(--vo-text-2); font: var(--vo-weight-medium) var(--vo-text-sm)/1 var(--vo-font-ui); cursor: pointer; list-style: none; }
+.models-page details.advanced > summary::-webkit-details-marker { display: none; }
+.models-page details.advanced > summary::before { content: "▸"; color: var(--vo-text-3); transition: transform var(--vo-dur-fast) var(--vo-ease-out); }
+.models-page details.advanced[open] > summary::before { transform: rotate(90deg); }
+.models-page details.advanced > :not(summary) { margin-left: var(--vo-space-3); margin-right: var(--vo-space-3); }
+.models-page details.advanced[open] { padding-bottom: var(--vo-space-3); }
+.models-page .advanced-badge { padding: 2px 8px; border-radius: var(--vo-radius-pill); background: var(--vo-warning-soft); color: var(--vo-warning); font-size: var(--vo-text-xs); }
+
+/* Confirm dialog on the shared window frame. */
+.models-page .mvw-confirm-overlay { background: var(--vo-scrim); -webkit-backdrop-filter: blur(var(--vo-scrim-blur)); backdrop-filter: blur(var(--vo-scrim-blur)); }
+.models-page .mvw-confirm-dialog { padding: var(--vo-space-5); border: 1px solid var(--vo-border-strong); border-radius: var(--vo-radius-md); background: var(--vo-surface-1);
+  box-shadow: var(--vo-shadow-pixel), var(--vo-shadow-3); }
+.models-page .mvw-confirm-title { color: var(--vo-accent); font: var(--vo-pixel-md)/1.5 var(--vo-font-pixel); text-transform: uppercase; }
+.models-page .mvw-confirm-message { font-size: var(--vo-text-md); }
+
+/* Phones: one column, labels above fields, key/value rows stack instead of one word per line. */
+@media (max-width: 700px) {
+  .models-page { padding: var(--vo-space-4) var(--vo-space-3) var(--vo-space-8); }
+  .models-page .grid { grid-template-columns: 1fr; }
+  .models-page .card { padding: var(--vo-space-4); }
+  .models-page .row { flex-direction: column; align-items: stretch; }
+  .models-page .row label { min-width: 0; }
+  .models-page .row :is(input, select, textarea) { min-width: 0; width: 100%; }
+  .models-page .model-item { flex-direction: column; align-items: flex-start; }
+  .models-page .auth-help .model-item span:first-child { flex: none; }
+  .models-page .provider-tools { justify-content: flex-start; }
+  .models-page .btn, .models-page .tab { min-height: 44px; }
+}
+.models-page { margin-left: auto !important; margin-right: auto !important; }

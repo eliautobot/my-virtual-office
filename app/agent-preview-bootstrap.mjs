@@ -1,4 +1,4 @@
-import { createAgentPreviewHub } from './agent-preview-hub.mjs?v=20260814-agent-preview-r1';
+import { createAgentPreviewHub } from './agent-preview-hub.mjs?v=20260817-agent-pc-r10';
 
 let previewHub = null;
 

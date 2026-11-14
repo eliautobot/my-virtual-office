@@ -1,0 +1,460 @@
+/* Office canvas overlays and agent UI added in v0.8 (owner: office builder). */
+
+/* Office editor save state (Saving / All changes saved / Save failed), floats
+   at the top of the office canvas while editing. */
+.vo-office-save-status {
+  position: absolute;
+  top: 42px; /* just below the canvas EDIT MODE banner */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: calc(var(--vo-z-canvas-ui, 300) + 10);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--vo-space-2, 8px);
+  max-width: calc(100% - 24px);
+  padding: 4px 12px;
+  border-radius: var(--vo-radius-pill, 999px);
+  border: var(--vo-border-w, 1px) solid var(--vo-border-subtle, rgba(255, 255, 255, 0.14));
+  background: var(--vo-glass, rgba(14, 19, 31, 0.86));
+  color: var(--vo-text-2, #c8d0de);
+  font: var(--vo-weight-medium, 500) var(--vo-text-sm, 12px) / 1.4 var(--vo-font-ui, system-ui, sans-serif);
+  box-shadow: var(--vo-shadow-1, 0 2px 8px rgba(0, 0, 0, 0.3));
+  pointer-events: auto;
+  white-space: nowrap;
+}
+.vo-office-save-status[hidden] { display: none; }
+.vo-office-save-status.is-saved { color: var(--vo-success, #66bb6a); }
+.vo-office-save-status.is-saving { color: var(--vo-text-2, #c8d0de); }
+.vo-office-save-status.is-failed {
+  color: var(--vo-danger, #ef5350);
+  border-color: var(--vo-danger, #ef5350);
+  white-space: normal;
+}
+.vo-office-save-status button {
+  min-height: 28px;
+  padding: 2px 10px;
+  border-radius: var(--vo-radius-sm, 6px);
+  border: var(--vo-border-w, 1px) solid currentColor;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Settings form: shown next to Save when the current settings did not load. */
+.mm-save-status {
+  margin-top: var(--vo-space-2, 8px);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--vo-space-2, 8px);
+  font-size: var(--vo-text-sm, 12px);
+  color: var(--vo-text-2, #c8d0de);
+}
+.mm-save-status:empty { display: none; }
+.mm-save-status.is-error { color: var(--vo-warning, #ffb300); }
+.mm-save-all[disabled] { opacity: 0.5; cursor: not-allowed; }
+
+/* Phone editing: the item toolbar docks above the catalog sheet and the edit
+   action bar instead of floating under them. */
+.furniture-floating-toolbar.is-docked {
+  position: fixed;
+  z-index: calc(var(--vo-z-sheet, 700) + 20);
+  max-width: calc(100vw - 16px);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.furniture-floating-toolbar.is-docked button {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+/* Agent PC on phones: an opaque full-screen window (the top bar no longer shows
+   through the header), section buttons stacked icon over label with the count
+   as a corner badge (no overlap, hidden at 0), 44 px targets everywhere, and
+   no empty preview tab strip. */
+@media (max-width: 640px) {
+  .agent-preview-panel { background-color: var(--vo-surface-1, #0d1424); }
+  .agent-preview-panel-header { background-color: var(--vo-surface-2, #121a2c); }
+  .agent-pc-nav { gap: 4px; padding: 6px 8px; overflow-x: auto; }
+  .agent-pc-nav button {
+    position: relative;
+    display: flex;
+    flex: 1 1 0;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    min-width: 56px;
+    min-height: 48px;
+    padding: 4px 2px;
+    overflow: hidden;
+    font-size: 10px;
+    line-height: 1.15;
+    text-align: center;
+    white-space: nowrap;
+  }
+  .agent-pc-nav button > span { font-size: 15px; line-height: 1; }
+  .agent-pc-nav button b {
+    position: absolute;
+    top: 2px;
+    right: 3px;
+    min-width: 16px;
+    padding: 0 4px;
+    font-size: 9px;
+    line-height: 14px;
+  }
+  .agent-pc-nav button b[data-zero="true"] { display: none; }
+  .agent-pc-connect {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+  }
+  .agent-pc-sidebar { max-height: none; }
+  .agent-preview-tabs:empty { display: none; }
+  .agent-preview-tab { height: 44px; min-height: 44px; }
+  .agent-preview-tab-close { flex-basis: 36px; width: 36px; height: 36px; margin-right: -2px; font-size: 18px; }
+}
+
+/* Agent PC on a phone held sideways (short touch screen): fill the screen like
+   in portrait, let the sidebar scroll so Connect Folder stays reachable. */
+@media (max-height: 520px) and (pointer: coarse) {
+  .agent-preview-panel { inset: 6px !important; width: auto !important; height: auto !important; min-width: 0; min-height: 0; }
+  .agent-preview-panel .browser-resize-handle,
+  .agent-preview-snap-control,
+  .agent-preview-panel [data-preview-action="maximize"] { display: none !important; }
+  .agent-preview-panel-header { background-color: var(--vo-surface-2, #121a2c); cursor: default; touch-action: auto; }
+  .agent-pc-sidebar { overflow-y: auto; overscroll-behavior: contain; }
+  .agent-pc-identity { display: none; }
+  .agent-pc-nav button, .agent-pc-connect { min-height: 44px; }
+  .agent-preview-tabs:empty { display: none; }
+  .agent-preview-tab { height: 44px; min-height: 44px; }
+  .agent-preview-tab-close { flex-basis: 36px; width: 36px; height: 36px; font-size: 18px; }
+}
+
+/* Agent menu (v0.8 agent-menu): the card that opens from an agent's •••, name
+   tag or body. Styled after MVW's object menu (header + action cards + list),
+   on the office tokens so light/dark and every preset stay readable. Phones in
+   portrait get a bottom sheet with 44 px+ targets. */
+.vo-agent-menu {
+  --vo-am-agent: var(--vo-accent);
+  --vo-am-line: color-mix(in srgb, var(--vo-accent) 34%, var(--vo-border-subtle));
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: var(--vo-z-popover, 700);
+  display: flex;
+  flex-direction: column;
+  width: min(328px, calc(100vw - 16px));
+  max-height: var(--vo-am-max-h, 80vh);
+  border: var(--vo-border-w, 1px) solid var(--vo-am-line);
+  border-radius: var(--vo-radius-lg, 16px);
+  background: linear-gradient(180deg, var(--vo-surface-2), var(--vo-surface-1));
+  color: var(--vo-text-1);
+  font: var(--vo-weight-regular, 400) var(--vo-text-sm, 12px) / 1.35 var(--vo-font-ui, system-ui, sans-serif);
+  box-shadow: var(--vo-shadow-3), inset 0 1px 0 color-mix(in srgb, var(--vo-text-1) 6%, transparent);
+  text-align: left;
+}
+.vo-agent-menu[hidden] { display: none; }
+.vo-agent-menu:focus { outline: none; }
+.vo-agent-menu.is-in { animation: vo-agent-menu-in var(--vo-dur, 180ms) var(--vo-ease, ease-out); }
+@keyframes vo-agent-menu-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Tail pointing at the character. */
+.vo-agent-menu.has-tail::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: var(--vo-surface-2);
+  border: var(--vo-border-w, 1px) solid var(--vo-am-line);
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+.vo-agent-menu.has-tail[data-side="above"]::after { left: calc(var(--vo-am-tail) - 6px); bottom: -6px; background: var(--vo-surface-1); border-top: 0; border-left: 0; }
+.vo-agent-menu.has-tail[data-side="below"]::after { left: calc(var(--vo-am-tail) - 6px); top: -6px; border-bottom: 0; border-right: 0; }
+.vo-agent-menu.has-tail[data-side="right"]::after { top: calc(var(--vo-am-tail) - 6px); left: -6px; border-top: 0; border-right: 0; }
+.vo-agent-menu.has-tail[data-side="left"]::after { top: calc(var(--vo-am-tail) - 6px); right: -6px; border-bottom: 0; border-left: 0; }
+
+.vo-agent-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 9px;
+  border-bottom: var(--vo-border-w, 1px) solid color-mix(in srgb, var(--vo-accent) 22%, var(--vo-border-subtle));
+  border-radius: var(--vo-radius-lg, 16px) var(--vo-radius-lg, 16px) 0 0;
+  background: color-mix(in srgb, var(--vo-surface-0) 38%, transparent);
+}
+.vo-agent-menu-avatar {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid var(--vo-am-agent);
+  background: color-mix(in srgb, var(--vo-am-agent) 16%, var(--vo-surface-3));
+  font-size: 19px;
+  line-height: 1;
+}
+.vo-agent-menu-titles { flex: 1 1 auto; min-width: 0; }
+.vo-agent-menu-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--vo-font-pixel, var(--vo-font-ui));
+  font-size: 11px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--vo-accent) 72%, var(--vo-text-1));
+}
+.vo-agent-menu-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  margin-top: 2px;
+  color: var(--vo-text-2);
+  font-size: 11px;
+}
+.vo-agent-menu-provider { white-space: nowrap; }
+.vo-agent-menu-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.vo-agent-menu-status::before {
+  content: "";
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--vo-text-3);
+}
+.vo-agent-menu-status[data-tone="working"] { color: color-mix(in srgb, var(--vo-success) 70%, var(--vo-text-1)); }
+.vo-agent-menu-status[data-tone="working"]::before { background: var(--vo-success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vo-success) 22%, transparent); }
+.vo-agent-menu-status[data-tone="needs"] { color: color-mix(in srgb, var(--vo-warning) 70%, var(--vo-text-1)); font-weight: var(--vo-weight-semibold, 600); }
+.vo-agent-menu-status[data-tone="needs"]::before { background: var(--vo-warning); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vo-warning) 24%, transparent); }
+.vo-agent-menu-status[data-tone="error"] { color: color-mix(in srgb, var(--vo-danger) 70%, var(--vo-text-1)); }
+.vo-agent-menu-status[data-tone="error"]::before { background: var(--vo-danger); }
+.vo-agent-menu-status[data-tone="offline"] { color: var(--vo-text-3); }
+.vo-agent-menu-status[data-tone="offline"]::before { background: transparent; border: 1px solid var(--vo-text-3); }
+.vo-agent-menu-chip {
+  padding: 0 6px;
+  border-radius: var(--vo-radius-pill, 999px);
+  border: var(--vo-border-w, 1px) solid var(--vo-border-strong);
+  color: var(--vo-text-2);
+  font-size: 10px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.vo-agent-menu-close {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: var(--vo-border-w, 1px) solid var(--vo-border-subtle);
+  border-radius: var(--vo-radius-sm, 8px);
+  background: color-mix(in srgb, var(--vo-surface-3) 70%, transparent);
+  color: var(--vo-text-2);
+  cursor: pointer;
+}
+.vo-agent-menu-close .vo-icon { width: 12px; height: 12px; }
+.vo-agent-menu-close:hover { border-color: var(--vo-accent); color: var(--vo-text-1); background: var(--vo-accent-soft); }
+
+.vo-agent-menu-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 10px;
+}
+.vo-agent-menu-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.vo-agent-menu-card,
+.vo-agent-menu-row {
+  position: relative;
+  display: grid;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  border: var(--vo-border-w, 1px) solid var(--vo-border-subtle);
+  color: var(--vo-text-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--vo-dur-fast, 120ms), background-color var(--vo-dur-fast, 120ms), transform var(--vo-dur-fast, 120ms);
+}
+.vo-agent-menu-card {
+  grid-template-columns: 24px minmax(0, 1fr);
+  grid-template-areas: "ico label" "hint hint";
+  gap: 6px 8px;
+  min-height: 58px;
+  padding: 8px 10px 7px;
+  border-radius: var(--vo-radius-md, 12px);
+  background: color-mix(in srgb, var(--vo-surface-3) 72%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--vo-text-1) 5%, transparent);
+}
+.vo-agent-menu-row {
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 8px;
+  border-color: transparent;
+  border-radius: var(--vo-radius-sm, 8px);
+  background: transparent;
+}
+.vo-agent-menu-ico {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--vo-radius-sm, 8px);
+  background: color-mix(in srgb, var(--vo-accent) 15%, var(--vo-surface-2));
+  color: color-mix(in srgb, var(--vo-accent) 82%, var(--vo-text-1));
+}
+.vo-agent-menu-ico .vo-icon { width: 14px; height: 14px; }
+.vo-agent-menu-card .vo-agent-menu-ico { grid-area: ico; width: 24px; height: 24px; }
+.vo-agent-menu-card .vo-agent-menu-text { display: contents; }
+.vo-agent-menu-card .vo-agent-menu-text strong { grid-area: label; }
+.vo-agent-menu-card.is-locked .vo-agent-menu-text strong { padding-right: 12px; }
+.vo-agent-menu-card .vo-agent-menu-text small { grid-area: hint; }
+.vo-agent-menu-row .vo-agent-menu-ico { width: 24px; height: 24px; background: transparent; color: var(--vo-text-2); }
+.vo-agent-menu-text { display: grid; gap: 1px; min-width: 0; }
+.vo-agent-menu-row .vo-agent-menu-text { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 8px; grid-column: 2; }
+.vo-agent-menu-text strong {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  font-weight: var(--vo-weight-semibold, 600);
+  color: var(--vo-text-1);
+}
+.vo-agent-menu-text small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--vo-text-2);
+}
+.vo-agent-menu-row .vo-agent-menu-text strong { font-size: 12px; font-weight: var(--vo-weight-medium, 500); }
+.vo-agent-menu-row .vo-agent-menu-text small { color: var(--vo-text-3); text-align: right; }
+.vo-agent-menu-more {
+  display: grid;
+  gap: 2px;
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: var(--vo-border-w, 1px) solid var(--vo-border-subtle);
+}
+.vo-agent-menu-card:hover,
+.vo-agent-menu-row:hover {
+  border-color: var(--vo-accent);
+  background: var(--vo-accent-soft);
+}
+.vo-agent-menu-card:active { transform: translateY(1px); }
+.vo-agent-menu-card:focus-visible,
+.vo-agent-menu-row:focus-visible,
+.vo-agent-menu-close:focus-visible {
+  outline: none;
+  border-color: var(--vo-accent);
+  box-shadow: var(--vo-focus, 0 0 0 2px var(--vo-accent));
+}
+.vo-agent-menu .is-locked { cursor: help; }
+.vo-agent-menu .is-locked .vo-agent-menu-ico { color: var(--vo-text-3); }
+.vo-agent-menu-card.is-locked .vo-agent-menu-ico { background: color-mix(in srgb, var(--vo-text-3) 14%, var(--vo-surface-2)); }
+.vo-agent-menu .is-locked .vo-agent-menu-text strong { color: var(--vo-text-2); }
+.vo-agent-menu .is-locked .vo-agent-menu-text small { color: var(--vo-text-3); }
+.vo-agent-menu .is-locked:hover { border-color: var(--vo-border-strong); background: color-mix(in srgb, var(--vo-surface-3) 72%, transparent); }
+.vo-agent-menu-lock { width: 10px; height: 10px; color: var(--vo-text-3); }
+.vo-agent-menu-card .vo-agent-menu-lock { position: absolute; top: 10px; right: 10px; }
+.vo-agent-menu-row .vo-agent-menu-lock { grid-column: 3; }
+
+/* Phones in portrait: a bottom sheet. */
+.vo-agent-menu.is-sheet {
+  left: 0 !important;
+  right: 0;
+  top: auto !important;
+  bottom: 0;
+  width: auto;
+  max-height: min(80vh, 600px);
+  border-bottom: 0;
+  border-radius: var(--vo-radius-lg, 16px) var(--vo-radius-lg, 16px) 0 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.35);
+}
+.vo-agent-menu.is-sheet::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  width: 36px;
+  height: 4px;
+  margin-left: -18px;
+  border-radius: 2px;
+  background: var(--vo-border-strong);
+  opacity: 0.6;
+}
+.vo-agent-menu.is-sheet.is-in { animation-name: vo-agent-menu-sheet-in; }
+@keyframes vo-agent-menu-sheet-in {
+  from { transform: translateY(24px); opacity: 0.4; }
+  to { transform: none; opacity: 1; }
+}
+.vo-agent-menu.is-sheet .vo-agent-menu-head { padding: 16px 12px 10px; gap: 12px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-avatar { flex-basis: 44px; width: 44px; height: 44px; font-size: 23px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-name { font-size: 12px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-sub { font-size: 12px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-close { flex-basis: 44px; width: 44px; height: 44px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-close .vo-icon { width: 14px; height: 14px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-body { padding: 12px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-grid { gap: 10px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-card { grid-template-columns: 28px minmax(0, 1fr); min-height: 68px; padding: 10px 12px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-card .vo-agent-menu-ico { width: 28px; height: 28px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-text strong { font-size: 14px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-text small { font-size: 12px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-row { min-height: 44px; padding: 6px 8px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-row .vo-agent-menu-text strong { font-size: 14px; }
+.vo-agent-menu.is-sheet .vo-agent-menu-row .vo-agent-menu-ico { width: 28px; height: 28px; }
+
+/* Short screens (phone landscape): one row of four cards and the list as a
+   row, so the card stays short and clear of the map controls. Hints stay in
+   the accessible description. */
+@media (max-height: 480px) and (min-width: 641px) {
+  .vo-agent-menu { width: min(480px, calc(100vw - 16px)); }
+  .vo-agent-menu-head { padding: 7px 8px 6px; }
+  .vo-agent-menu-avatar { flex-basis: 32px; width: 32px; height: 32px; font-size: 17px; }
+  .vo-agent-menu-body { padding: 8px; }
+  .vo-agent-menu-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .vo-agent-menu-card { grid-template-columns: minmax(0, 1fr); grid-template-areas: "ico" "label"; justify-items: center; gap: 4px; min-height: 60px; padding: 7px 6px; text-align: center; }
+  .vo-agent-menu-card .vo-agent-menu-text small { display: none; }
+  .vo-agent-menu-card .vo-agent-menu-text strong { max-width: 100%; font-size: 12px; }
+  .vo-agent-menu-card .vo-agent-menu-lock { top: 6px; right: 6px; }
+  .vo-agent-menu-more { grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); gap: 4px; margin-top: 6px; }
+  .vo-agent-menu-row { grid-template-columns: 18px minmax(0, 1fr) auto; gap: 5px; padding: 4px 6px; }
+  .vo-agent-menu-row .vo-agent-menu-text small { display: none; }
+  .vo-agent-menu-row .vo-agent-menu-text strong { font-size: 11.5px; }
+  .vo-agent-menu-row .vo-agent-menu-ico { width: 18px; height: 18px; }
+}
+
+/* Touch screens get 44 px rows in the floating card too. */
+@media (pointer: coarse) {
+  .vo-agent-menu-row { min-height: 44px; }
+  .vo-agent-menu-close { flex-basis: 44px; width: 44px; height: 44px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vo-agent-menu.is-in,
+  .vo-agent-menu.is-sheet.is-in { animation: none; }
+  .vo-agent-menu-card,
+  .vo-agent-menu-row { transition: none; }
+  .vo-agent-menu-card:active { transform: none; }
+}

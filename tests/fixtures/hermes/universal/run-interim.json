@@ -1,0 +1,82 @@
+[
+ {
+  "type": "run.status",
+  "phase": "Thinking"
+ },
+ {
+  "type": "native",
+  "ev": {
+   "op": "title",
+   "text": "Let me check. [[tool:terminal {\"command\":\"echo…"
+  }
+ },
+ {
+  "type": "run.status",
+  "phase": "Preparing Terminal"
+ },
+ {
+  "type": "tool.start",
+  "toolId": "call_1792222889284",
+  "name": "terminal",
+  "title": "Terminal",
+  "toolKind": "execute",
+  "input": "echo a",
+  "raw": "{\"command\":\"echo a\"}"
+ },
+ {
+  "type": "tool.end",
+  "toolId": "call_1792222889284",
+  "name": "terminal",
+  "title": "Terminal",
+  "ok": true,
+  "status": "completed",
+  "text": "a",
+  "exitCode": 0,
+  "ms": 110
+ },
+ {
+  "type": "run.delta",
+  "text": "\n\nThe tool ans",
+  "at": 0
+ },
+ {
+  "type": "run.delta",
+  "text": "wered: {\"out",
+  "at": 14
+ },
+ {
+  "type": "run.delta",
+  "text": "put\": \"a\", \"",
+  "at": 26
+ },
+ {
+  "type": "run.delta",
+  "text": "exit_code\": ",
+  "at": 38
+ },
+ {
+  "type": "run.delta",
+  "text": "0, \"error\": ",
+  "at": 50
+ },
+ {
+  "type": "run.delta",
+  "text": "null}",
+  "at": 62
+ },
+ {
+  "type": "usage.update",
+  "used": 14520,
+  "size": 256000
+ },
+ {
+  "type": "run.end",
+  "status": "ok",
+  "text": "The tool answered: {\"output\": \"a\", \"exit_code\": 0, \"error\": null}",
+  "ms": 0,
+  "model": "custom:stub-1",
+  "tokensIn": 28969,
+  "tokensOut": 25,
+  "title": "Let me check. [[tool:terminal {\"command\":\"echo…"
+ }
+]

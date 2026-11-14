@@ -7,6 +7,7 @@ import base64
 import copy
 import difflib
 import http.server
+import io
 import json
 import os
 import mimetypes
@@ -23,9 +24,11 @@ import websockets
 from datetime import datetime, timezone, timedelta
 from websockets.asyncio.client import connect as ws_connect
 import glob
+import gzip
 import hashlib
 import hmac
 import email.utils
+import posixpath
 import re
 import shutil
 import signal
@@ -34,10 +37,29 @@ import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.cookies import SimpleCookie
+from collections import OrderedDict
 from pathlib import Path
 import gateway_presence
+import vo_access
+import agent_providers
+import provider_hub
+import office_life
+import office_life.hooks
+import version_check
+import openclaw_leftovers
+import private_files
+import data_owner
+import provider_layer_proxy
+import provider_layer_ids
+import layer_bubbles
+import provider_layer_life
+import provider_layer_turns
+import provider_layer_gateway
+import office_life.routes as office_life_routes
+from agent_pc import AgentPCError, AgentPCStore
 from layout_library import LayoutLibrary, LayoutValidationError
-from openclaw_gateway_client import GatewayClientError, OpenClawGatewayClient
+from openclaw_device import OpenClawDevice, pairing_status
+from openclaw_gateway_client import GatewayClientError, OpenClawGatewayClient, scope_problem
 from providers.builtin import HERMES_API_TRANSPORT, OPENCLAW_GATEWAY_TRANSPORT, build_provider_registry
 from providers.endpoint_resolution import EndpointResolver, normalize_endpoint_url
 from providers.path_mapping import is_windows_absolute, map_host_path_to_container
@@ -49,6 +71,150 @@ except Exception:
     yaml = None
 
 GATEWAY_PROTOCOL_VERSION = 4
+VO_VERSION = "0.12.0"
+
+
+def _pl_owns():
+    """v0.11: the copied layer runs OpenClaw and Hermes (VO_PROVIDER_LAYER on). VO's own Python OpenClaw and Hermes
+    stack (gateway presence connection, Hermes serve links, their chat routes) then stays off;
+    VO_PROVIDER_LAYER=0 keeps 0.10's Python path (legacy, one release)."""
+    return provider_layer_proxy.enabled()
+
+
+def _pl_layer_chat(agent):
+    """v0.11: True when office agent ``agent``'s 0.10 chat routes (/api/agent-chat/*) belong to the layer (answered by
+    _pl_agent_chat_answer): an agent of the layer, or an OpenClaw / `hermes serve` agent the layer has not listed yet
+    (VO's Python OpenClaw and Hermes serve stack never starts beside it). Every other agent keeps VO's Python path as
+    in 0.10.1: Hermes API-server connections (the layer speaks only `hermes serve`) and VO's other providers.
+    Always False with VO_PROVIDER_LAYER=0."""
+    agent = str(agent or "").strip()
+    if not _pl_owns() or not agent:
+        return False
+    if provider_layer_turns.layer_agent(agent):
+        return True
+    try:
+        target = agent_providers.resolve_agent(agent)
+    except Exception:
+        return False   # (VO's own answer, as 0.10: gone / not found)
+    row = target.row if isinstance(target.row, dict) else {}
+    return target.transport in ("openclaw", "hermes-serve") or row.get("providerTransport") == "layer"
+
+
+def _pl_hidden_hermes():
+    """Office ids of migrated Hermes profiles 0.10 kept hidden: a profile an older, still enabled and not switched
+    API-server row reaches (that row is the agent in the office). Same rule, 0.10's own functions. (Defined here, above
+    the import-time roster: a first start with the layer on and no discovery cache reads it at once.)"""
+    ids = provider_layer_ids.ids()
+    rows = [r for r in (ids.all() if ids is not None else [])
+            if r.get("kind") == "hermes" and str(r.get("rule") or "").startswith("hermes:")]
+    if not rows:
+        return set()
+    try:
+        import discovery
+        data = agent_providers.load()
+        legacy_rows = agent_providers._legacy_rows(agent_providers._read_vo_config())
+        if not legacy_rows:
+            return set()
+        groups, hidden = {}, set()
+        for r in rows:
+            groups.setdefault(str(r["rule"]).split(":")[1], []).append(r)
+        for old, group in groups.items():
+            conn = agent_providers.find_connection(old, data)
+            if conn is None:
+                continue
+            profiles = [{"profile": str(r.get("nativeId")), "name": str(r.get("name") or r.get("nativeId")),
+                         "emoji": "", "role": "", "model": ""} for r in group]
+            _rows, listing = discovery.hermes_serve_rows(
+                conn, profiles, {str(r.get("nativeId")): r.get("officeId") for r in group}, legacy_rows,
+                data["legacy"], caps=agent_providers.MANIFESTS["hermes"]["caps"], status={"state": "connected"},
+                legacy_model_ids=agent_providers._legacy_model_ids(conn, legacy_rows, data["legacy"]))
+            hidden |= {item.get("id") for item in listing if item.get("hidden") and item.get("id")}
+        return hidden
+    except Exception as exc:  # (never stops the roster)
+        print(f"[pl] hidden Hermes profiles not read: {exc}")
+        return set()
+
+
+class _ReplayBody:
+    """A request body read once to see whose agent it names (the layer gate), then read again byte for byte by the
+    route; after it, the connection's own stream (the next keep-alive request)."""
+
+    def __init__(self, raw, stream):
+        self._raw, self._stream = io.BytesIO(raw), stream
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            return self._raw.read()   # (the whole body is buffered: never read the socket to its end)
+        data = self._raw.read(size)
+        return data + self._stream.read(size - len(data)) if len(data) < size else data
+
+    def readline(self, size=-1):
+        if self._raw.tell() < len(self._raw.getbuffer()):
+            return self._raw.readline(size)
+        return self._stream.readline(size)
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def _pl_body_agent(handler):
+    """The ``agent`` of a POST /api/agent-chat/* JSON body, the body handed on unchanged (``handler.rfile`` replays
+    it). A body the route would refuse anyway (too large, no length, not JSON) is left alone: ''."""
+    try:
+        length = handler._content_length()
+    except Exception:
+        return ""
+    if length <= 0 or length > max(agent_providers.BODY_MAX_BYTES, agent_providers.RUN_BODY_MAX_BYTES):
+        return ""
+    raw = handler.rfile.read(length)
+    handler.rfile = _ReplayBody(raw, handler.rfile)
+    try:
+        body = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return ""
+    return str(body.get("agent") or "") if isinstance(body, dict) else ""
+
+
+# Presence sources that stand for a provider's run/tool lifecycle (they stay quiet during long commands and are
+# ended by the coordinator, never by the clock here). Every source the office writes (v0.13 inventory):
+# - gateway_presence's OpenClaw observer: agent-lifecycle, agent-<stream> (agent-tool, agent-command_output, ...),
+#   session-tool; the generic ones age out: session-message, sessions-changed, chat, snapshot.
+# - gateway_presence.lifecycle_* (provider layer: OpenClaw and its Hermes; server.py: Hermes, Claude Code, Codex,
+#   extension providers): <kind>-lifecycle, <kind>-tool, <kind>-approval; provider-connected / provider-health.
+# - idle/terminal: gateway-idle, finish-grace-expired, event-idle-timeout, snapshot-session-ended; manual, legacy.
+_ACTIVE_WORK_SOURCE_PREFIXES = ("agent-lifecycle", "agent-tool", "session-tool", "gateway", "hermes-", "provider-")
+_ACTIVE_WORK_SOURCE_SUFFIXES = ("-lifecycle", "-tool", "-approval")
+_ACTIVE_WORK_COUNTS = ("activeRunCount", "activeToolCount", "waitingApprovalCount")
+
+
+def _start_presence_listeners(gw_url, gw_token):
+    """The presence coordinator's maintenance (finishing -> idle after its grace, expired manual states, the idle
+    timeout of a state no run/tool holds) runs whatever feeds presence: the provider layer's bus, the legacy gateway
+    listener, Hermes, Codex, Claude Code. (v0.13: it ran only with the legacy listener, so with the layer every
+    finishing state waited for /status to age it.)"""
+    gateway_presence.start_maintenance()
+    if _pl_owns():   # (OpenClaw and Hermes presence come from the layer's bus: provider_layer_life)
+        print("🔌 OpenClaw and Hermes run on the provider layer (VO_PROVIDER_LAYER=0 for the legacy Python path)")
+    elif gw_token:
+        _openclaw_device()  # (hands the device identity to presence; a paired office signs its connect)
+        gateway_presence.start(gw_url, gw_token, port=PORT, client_version=_get_openclaw_version())
+    else:
+        print("⚠️  No gateway token found — gateway presence disabled")
+
+
+def _is_active_work_source(source_lower):
+    return source_lower.startswith(_ACTIVE_WORK_SOURCE_PREFIXES) or source_lower.endswith(_ACTIVE_WORK_SOURCE_SUFFIXES)
+
+
+def _presence_holds_active_work(entry):
+    """Whether the coordinator's snapshot (gateway_presence._decorate_agent_snapshot) holds an open run/tool/approval."""
+    for name in _ACTIVE_WORK_COUNTS:
+        try:
+            if int(entry.get(name) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def _normalize_presence_entry(entry):
@@ -97,7 +263,11 @@ def _normalize_presence_entry(entry):
     # Active lifecycle/tool sources can be silent during long commands. Generic
     # chat/snapshot display states must still age out if maintenance missed the
     # terminal event, otherwise disconnected apps can show stale working status.
-    has_active_work_source = source_lower.startswith(("agent-lifecycle", "agent-tool", "session-tool", "gateway", "hermes-", "provider-"))
+    # An agent the coordinator holds an open run, tool, approval or helper for is working until that
+    # ends (the run's end, the provider disconnecting, or the coordinator's 6 h stale guard), whatever
+    # wrote the entry last; so is every provider lifecycle source ("openclaw-lifecycle", "codex-tool",
+    # "claude-code-approval", ... : gateway_presence.lifecycle_* with any provider kind).
+    has_active_work_source = _presence_holds_active_work(entry) or _is_active_work_source(source_lower)
     stale_limit_sec = 180 if (
         "tool" in source_lower or "command" in source_lower or
         any(token in task_lower for token in ("reading", "processing", "thinking", "running command", "editing", "writing", "searching", "fetching"))
@@ -149,9 +319,21 @@ def _get_normalized_presence_state():
 
 
 # ─── CONFIGURATION ───────────────────────────────────────────────
+# While _load_vo_config() builds the saved-file-only view of the settings (see there), this
+# thread reads no environment overrides.
+_ENV_OVERRIDES_OFF = threading.local()
+
+
+def _env_value(key):
+    """The environment's value for a setting ('' while the saved-only view is built)."""
+    if getattr(_ENV_OVERRIDES_OFF, "on", False):
+        return ""
+    return os.environ.get(key) or ""
+
+
 def _env_or(key, fallback):
     """Return env var value if set and non-empty, else fallback."""
-    val = os.environ.get(key)
+    val = _env_value(key)
     return val if val else fallback
 
 
@@ -181,10 +363,6 @@ def _running_in_docker():
 
 def _default_hermes_api_url():
     return "http://host.docker.internal:8642" if _running_in_docker() else "http://127.0.0.1:8642"
-
-def _default_hermes_desktop_url():
-    return ""
-
 
 def _normalize_hermes_connection_id(value, index=0):
     safe = re.sub(r"[^a-zA-Z0-9_.-]+", "-", str(value or "").strip()).strip("-.")
@@ -236,6 +414,8 @@ def _normalize_hermes_connections(hermes_cfg):
     for index, raw in enumerate(raw_connections):
         if not isinstance(raw, dict):
             continue
+        if agent_providers.is_serve_row(raw):
+            continue  # `hermes serve` connections live in agent-providers.json, never here
         connection_id = _normalize_hermes_connection_id(raw.get("id") or raw.get("name"), index)
         if connection_id in seen:
             suffix = 2
@@ -274,14 +454,21 @@ def _merge_hermes_connection_updates(existing_cfg, incoming_connections):
     saved_by_id = {str(item.get("id") or ""): item for item in saved_connections}
     merged_connections = []
     for index, raw_incoming in enumerate(incoming_connections or []):
-        if not isinstance(raw_incoming, dict):
+        if not isinstance(raw_incoming, dict) or agent_providers.is_serve_row(raw_incoming):
             continue
         incoming = dict(raw_incoming)
         connection_id = _normalize_hermes_connection_id(
             incoming.get("id") or incoming.get("name"),
             index,
         )
-        saved = saved_by_id.get(connection_id) or {}
+        original_id = str(incoming.pop("originalId", "") or "").strip()
+        incoming.pop("_originalId", None)
+        # A renamed row (CH-35) is the saved row it came from, even when its new
+        # id matches another saved row; only rows without originalId match by id.
+        if original_id and original_id in saved_by_id:
+            saved = saved_by_id[original_id]
+        else:
+            saved = saved_by_id.get(connection_id) or {}
         merged = {**saved, **incoming, "id": connection_id}
         if not incoming.get("apiKey") and saved.get("apiKey"):
             merged["apiKey"] = saved.get("apiKey")
@@ -304,9 +491,9 @@ def _resolve_config_path():
             with open(app_cfg, "r") as f:
                 app_data = json.load(f)
             if app_data.get("_setupComplete"):
-                os.makedirs(os.path.dirname(data_cfg), exist_ok=True)
-                with open(data_cfg, "w") as f:
-                    json.dump(app_data, f, indent=2)
+                data_owner.makedirs(os.path.dirname(data_cfg), exist_ok=True)
+                # (a secret file: private, the data folder's owner when made as root)
+                private_files.write_private(data_cfg, json.dumps(app_data, indent=2))
                 return data_cfg
         except (json.JSONDecodeError, OSError):
             pass
@@ -328,8 +515,41 @@ def _normalize_preview_bubble_settings(value):
     }
 
 
+# Settings changed in the office (Settings, the setup wizard): {section: [keys]} in vo-config.json.
+# The environment (docker-compose.yml gives most settings a value) is the starting value of a
+# setting; once the user changes it in the office, the saved value is used.
+SETTINGS_SAVED_IN_OFFICE = "_savedInOffice"
+# The container's wiring: always the environment's (a saved port would not be the published one).
+_ENV_ONLY_SETTINGS = {("office", "port"), ("office", "wsPort"), ("presence", "statusDir")}
+
+
+def _note_settings_changes(root, sections):
+    """Record in root (vo-config.json) the settings in sections ({section: {key: value}}) that differ
+    from what the office uses now, so _load_vo_config() keeps them over the environment."""
+    current = VO_CONFIG if isinstance(globals().get("VO_CONFIG"), dict) else {}
+    saved = root.get(SETTINGS_SAVED_IN_OFFICE)
+    saved = dict(saved) if isinstance(saved, dict) else {}
+    for section, values in (sections or {}).items():
+        if not isinstance(values, dict):
+            continue
+        now = current.get(section) if isinstance(current.get(section), dict) else {}
+        keys = set(saved.get(section) or []) if isinstance(saved.get(section), list) else set()
+        for key, value in values.items():
+            if (section, key) in _ENV_ONLY_SETTINGS or str(key).startswith("_"):
+                continue
+            if key not in now or now.get(key) != value:
+                keys.add(str(key))
+        if keys:
+            saved[section] = sorted(keys)
+    if saved:
+        root[SETTINGS_SAVED_IN_OFFICE] = saved
+
+
 def _load_vo_config():
-    """Load vo-config.json with env-var overrides. Returns merged dict."""
+    """Load vo-config.json with env-var overrides. Returns merged dict.
+
+    A setting the user changed in the office (SETTINGS_SAVED_IN_OFFICE) takes its saved value
+    over the environment's."""
     cfg_path = _resolve_config_path()
     cfg = {}
     try:
@@ -337,15 +557,38 @@ def _load_vo_config():
             cfg = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         pass
+    if not isinstance(cfg, dict):
+        cfg = {}
+    merged = _build_vo_config(cfg)
+    saved = cfg.get(SETTINGS_SAVED_IN_OFFICE)
+    if not isinstance(saved, dict) or not saved:
+        return merged
+    _ENV_OVERRIDES_OFF.on = True
+    try:
+        saved_only = _build_vo_config(cfg)
+    finally:
+        _ENV_OVERRIDES_OFF.on = False
+    for section, keys in saved.items():
+        target, source = merged.get(section), saved_only.get(section)
+        if not isinstance(target, dict) or not isinstance(source, dict) or not isinstance(keys, list):
+            continue
+        for key in keys:
+            if key in source and (section, key) not in _ENV_ONLY_SETTINGS:
+                target[key] = source[key]
+    return merged
+
+
+def _build_vo_config(cfg):
+    """The settings from the saved file cfg, with the environment's values over them."""
 
     env_gateway_token = (
-        os.environ.get("VO_GATEWAY_TOKEN")
-        or os.environ.get("OPENCLAW_GATEWAY_TOKEN")
+        _env_value("VO_GATEWAY_TOKEN")
+        or _env_value("OPENCLAW_GATEWAY_TOKEN")
     )
 
     # Auto-detect OpenClaw home — check env, config, then common paths
     oc_home = (
-        os.environ.get("VO_OPENCLAW_PATH")
+        _env_value("VO_OPENCLAW_PATH")
         or (cfg.get("openclaw") or {}).get("homePath")
     )
     if not oc_home:
@@ -399,6 +642,7 @@ def _load_vo_config():
     first_hermes_connection = hermes_connections[0] if hermes_connections else {}
 
     return {
+        "setupComplete": bool(cfg.get("_setupComplete")),
         "office": {
             "name": _env_or("VO_OFFICE_NAME", office.get("name", "Virtual Office")),
             "port": int(_env_or("VO_PORT", office.get("port", 8090))),
@@ -425,6 +669,8 @@ def _load_vo_config():
             "browserPanel": features.get("browserPanel", False),
             "whisper": features.get("whisper", False),
             "apiUsage": features.get("apiUsage", True),
+            # Settings > General > Version: "Tell me when a new version is out" (v0.10.1).
+            "updateCheck": features.get("updateCheck", True) is not False,
         },
         "pcMetrics": {
             "url": _env_or("VO_PC_METRICS_URL", pc_metrics.get("url")),
@@ -474,7 +720,7 @@ def _load_vo_config():
             "platformAgentId": _env_or("VO_HERMES_PLATFORM_AGENT_ID", hermes_cfg.get("platformAgentId", "hermes-gateway")),
             "platformPollLeaseSec": int(_env_or("VO_HERMES_PLATFORM_LEASE_SEC", hermes_cfg.get("platformPollLeaseSec", 120))),
             "followActiveSession": hermes_cfg.get("followActiveSession", True) is not False,
-            "sessionSyncIntervalSec": max(1, min(60, int(hermes_cfg.get("sessionSyncIntervalSec") or 3))),
+            "sessionSyncIntervalSec": max(1, min(60, int(hermes_cfg.get("sessionSyncIntervalSec") or 20))),
         },
         "codex": {
             "enabled": str(_env_or("VO_CODEX_ENABLED", codex_cfg.get("enabled", True))).lower() not in ("0", "false", "no", "off"),
@@ -491,7 +737,7 @@ def _load_vo_config():
             "includeNativeAgents": str(_env_or("VO_CODEX_INCLUDE_NATIVE_AGENTS", codex_cfg.get("includeNativeAgents", True))).lower() not in ("0", "false", "no", "off"),
             "registerNativeAgents": str(_env_or("VO_CODEX_REGISTER_NATIVE_AGENTS", codex_cfg.get("registerNativeAgents", True))).lower() not in ("0", "false", "no", "off"),
             "followActiveSession": codex_cfg.get("followActiveSession", True) is not False,
-            "sessionSyncIntervalSec": max(1, min(60, int(codex_cfg.get("sessionSyncIntervalSec") or 3))),
+            "sessionSyncIntervalSec": max(1, min(60, int(codex_cfg.get("sessionSyncIntervalSec") or 20))),
         },
         "claudeCode": {
             "enabled": str(_env_or("VO_CLAUDE_CODE_ENABLED", claude_code_cfg.get("enabled", True))).lower() not in ("0", "false", "no", "off"),
@@ -506,7 +752,7 @@ def _load_vo_config():
             "includeNativeAgents": str(_env_or("VO_CLAUDE_CODE_INCLUDE_NATIVE_AGENTS", claude_code_cfg.get("includeNativeAgents", True))).lower() not in ("0", "false", "no", "off"),
             "registerNativeAgents": str(_env_or("VO_CLAUDE_CODE_REGISTER_NATIVE_AGENTS", claude_code_cfg.get("registerNativeAgents", True))).lower() not in ("0", "false", "no", "off"),
             "followActiveSession": claude_code_cfg.get("followActiveSession", True) is not False,
-            "sessionSyncIntervalSec": max(1, min(60, int(claude_code_cfg.get("sessionSyncIntervalSec") or 3))),
+            "sessionSyncIntervalSec": max(1, min(60, int(claude_code_cfg.get("sessionSyncIntervalSec") or 20))),
         },
         "openCode": {
             "enabled": str(_env_or("VO_OPENCODE_ENABLED", opencode_cfg.get("enabled", False))).lower() not in ("0", "false", "no", "off"),
@@ -520,7 +766,7 @@ def _load_vo_config():
             "includeAgents": str(_env_or("VO_OPENCODE_INCLUDE_AGENTS", opencode_cfg.get("includeAgents", True))).lower() not in ("0", "false", "no", "off"),
             "registerAgents": str(_env_or("VO_OPENCODE_REGISTER_AGENTS", opencode_cfg.get("registerAgents", True))).lower() not in ("0", "false", "no", "off"),
             "followActiveSession": opencode_cfg.get("followActiveSession", True) is not False,
-            "sessionSyncIntervalSec": max(1, min(60, int(opencode_cfg.get("sessionSyncIntervalSec") or 3))),
+            "sessionSyncIntervalSec": max(1, min(60, int(opencode_cfg.get("sessionSyncIntervalSec") or 20))),
         },
         "antigravity": {
             "enabled": str(_env_or("VO_ANTIGRAVITY_ENABLED", antigravity_cfg.get("enabled", False))).lower() not in ("0", "false", "no", "off"),
@@ -549,8 +795,33 @@ OPENCLAW_BROWSER_TRANSPORT = str(_env_or("VO_OPENCLAW_BROWSER_TRANSPORT", "proxy
 if OPENCLAW_BROWSER_TRANSPORT not in {"proxy", "direct"}:
     OPENCLAW_BROWSER_TRANSPORT = "proxy"
 _OPENCLAW_PROXY_COOKIE_NAME = "vo_openclaw_proxy"
-_OPENCLAW_PROXY_SECRET = secrets.token_urlsafe(32)
-_OPENCLAW_PROXY_METHODS = {"sessions.describe", "chat.history", "chat.send", "chat.abort"}
+def _load_or_create_secret(path):
+    """A per-install secret kept across restarts (0600), so open tabs keep their
+    chat-proxy cookie when the server restarts."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            value = handle.read().strip()
+        if len(value) >= 32:
+            private_files.tighten(path)   # (one an older office opened to everyone becomes private again)
+            return value
+    except OSError:
+        pass
+    value = secrets.token_urlsafe(32)
+    try:
+        private_files.write_private(path, value)
+    except OSError:
+        pass
+    return value
+
+
+_OPENCLAW_PROXY_SECRET = _load_or_create_secret(os.path.join(STATUS_DIR, ".openclaw-proxy-secret"))
+_OPENCLAW_PROXY_METHODS = {
+    "sessions.describe", "chat.history", "chat.send", "chat.abort",
+    # C6 / DL-04: the Cron Manager uses the same cookie + same-origin proxy as chat
+    # instead of a raw WebSocket (which cannot authenticate in proxy mode).
+    "channels.status", "cron.status", "cron.list", "cron.get", "cron.add", "cron.update",
+    "cron.remove", "cron.run", "cron.runs",
+}
 _OPENCLAW_GATEWAY_RPC_MAX_BYTES = _env_int(
     "VO_OPENCLAW_GATEWAY_RPC_MAX_BYTES",
     8 * 1024 * 1024,
@@ -561,14 +832,19 @@ PROVIDER_ENDPOINT_RESOLVER = EndpointResolver(
     cache_ttl_sec=_env_int("VO_PROVIDER_ENDPOINT_CACHE_TTL_SEC", 30, minimum=0, maximum=300)
 )
 _openclaw_gateway_client = None
+_layer_gateway_client = None   # (v0.11, layer on: provider_layer_gateway.LayerGatewayClient)
 _openclaw_gateway_client_lock = threading.RLock()
 HERMES_STATE_LOCK = threading.RLock()
 CODEX_STATE_LOCK = threading.RLock()
 CLAUDE_CODE_STATE_LOCK = threading.RLock()
 PROVIDER_HISTORY_LOCK = threading.RLock()
 CHAT_SESSION_MIRROR_LOCK = threading.RLock()
-os.makedirs(STATUS_DIR, exist_ok=True)
+data_owner.makedirs(STATUS_DIR, exist_ok=True)
 STATUS_FILE = os.path.join(STATUS_DIR, "virtual-office-status.json")
+AGENT_PC_STORE = AgentPCStore(
+    os.path.join(STATUS_DIR, "agent-pc"),
+    recent_limit=_env_int("VO_AGENT_PC_RECENT_LIMIT", 100, minimum=10, maximum=1000),
+)
 
 _OPENCLAW_VERSION_CACHE = None
 
@@ -914,8 +1190,67 @@ def _mask_secret(value):
     return value[:4] + "••••••••" + value[-4:]
 
 
+def _safe_helper_url(url):
+    """Only plain http(s) URLs may be fetched for helper services (BE-11)."""
+    url = str(url or "").strip()
+    if not url:
+        return ""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return ""
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password:
+        return ""
+    return url
+
+
+def _pc_metrics_url():
+    return _safe_helper_url((VO_CONFIG.get("pcMetrics") or {}).get("url"))
+
+
+_SWR_CACHE = {}
+_SWR_LOCK = threading.Lock()
+
+
+def _swr_cached(key, ttl_sec, producer, default=None, first_wait_sec=2.0):
+    """Stale-while-revalidate cache: never runs ``producer`` on the caller's thread
+    after the first value exists; refreshes in a background thread when stale."""
+    now = time.time()
+    with _SWR_LOCK:
+        entry = _SWR_CACHE.get(key)
+        if entry is None:
+            entry = {"value": default, "at": 0.0, "has": False, "running": False, "event": threading.Event()}
+            _SWR_CACHE[key] = entry
+        fresh = entry["has"] and now - entry["at"] < ttl_sec
+        start = not fresh and not entry["running"]
+        if start:
+            entry["running"] = True
+            entry["event"] = threading.Event()
+        event = entry["event"]
+
+    def _refresh():
+        try:
+            value = producer()
+            with _SWR_LOCK:
+                entry["value"], entry["at"], entry["has"] = value, time.time(), True
+        except Exception:
+            with _SWR_LOCK:
+                entry["at"] = time.time() - max(0, ttl_sec - 10)  # retry soon, keep last value
+        finally:
+            with _SWR_LOCK:
+                entry["running"] = False
+            event.set()
+
+    if start:
+        threading.Thread(target=_refresh, name=f"swr-{key}", daemon=True).start()
+    if not entry["has"] and first_wait_sec:
+        event.wait(first_wait_sec)
+    with _SWR_LOCK:
+        return entry["value"] if entry["has"] else default
+
+
 def _atomic_write_text(path, content, mode=None):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    data_owner.makedirs(os.path.dirname(path), exist_ok=True)
     existing_stat = None
     try:
         existing_stat = os.stat(path)
@@ -931,7 +1266,18 @@ def _atomic_write_text(path, content, mode=None):
             except OSError:
                 parent = os.path.dirname(parent)
     tmp_path = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}"
-    with open(tmp_path, "w", encoding="utf-8") as f:
+    # Created with the final mode (umask applies, fchmod below sets it exactly), so a private file's
+    # content is never in a world-readable temp file, not even for a moment.
+    create_mode = 0o666
+    if existing_stat is not None:
+        create_mode = existing_stat.st_mode & 0o777
+    elif mode is not None:
+        try:
+            create_mode = int(mode) & 0o777
+        except (TypeError, ValueError):
+            pass
+    with os.fdopen(os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, create_mode), "w",
+                   encoding="utf-8") as f:
         f.write(content)
         f.flush()
         if existing_stat is not None:
@@ -954,7 +1300,68 @@ def _atomic_write_text(path, content, mode=None):
             except (OSError, TypeError, ValueError):
                 pass
         os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    try:
+        os.replace(tmp_path, path)
+    except OSError:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+_JSON_FILE_LOCKS = {}
+_JSON_FILE_LOCKS_GUARD = threading.Lock()
+
+
+def _json_file_lock(path):
+    """One re-entrant lock per state file, shared by every reader-modifier-writer."""
+    key = os.path.abspath(path)
+    with _JSON_FILE_LOCKS_GUARD:
+        lock = _JSON_FILE_LOCKS.get(key)
+        if lock is None:
+            lock = _JSON_FILE_LOCKS[key] = threading.RLock()
+        return lock
+
+
+class JsonStateError(Exception):
+    """A state file exists but cannot be read; callers must not overwrite it."""
+
+
+def _read_json_state(path, default=None, expect=dict):
+    """Read a JSON state file. Missing -> ``default``. Unreadable or the wrong
+    shape -> JsonStateError, so a later save never replaces real data with a
+    fallback (BE-18/BE-19)."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            raw = handle.read()
+    except FileNotFoundError:
+        return copy.deepcopy(default)
+    except OSError as exc:
+        raise JsonStateError(f"{os.path.basename(path)} cannot be read: {exc}")
+    if not raw.strip():
+        raise JsonStateError(f"{os.path.basename(path)} is empty")
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        raise JsonStateError(f"{os.path.basename(path)} is not valid JSON: {exc}")
+    if expect is not None and not isinstance(data, expect):
+        raise JsonStateError(f"{os.path.basename(path)} has an unexpected shape")
+    return data
+
+
+def _write_json_atomic(path, data, indent=2, backup=True, mode=None):
+    """Atomically replace a JSON state file under its lock, keeping ``.bak`` of the
+    previous version (one write path for every state file, BE-19)."""
+    payload = json.dumps(data, indent=indent, ensure_ascii=False) + "\n"
+    with _json_file_lock(path):
+        if backup and os.path.isfile(path):
+            try:
+                shutil.copy2(path, path + ".bak")
+                private_files.keep_owner(path, path + ".bak")  # copy2 keeps the mode, not the owner
+            except OSError:
+                pass
+        _atomic_write_text(path, payload, mode=mode)
 
 
 def _openclaw_config_path():
@@ -967,6 +1374,142 @@ def _load_openclaw_model_config():
             return json.load(f)
     except Exception:
         return {}
+
+
+def _parse_plain_json_object(raw, name="openclaw.json"):
+    """(dict, None) when ``raw`` is plain JSON this server can write back without
+    losing anything; (None, reason) otherwise (comments/JSON5, duplicate keys,
+    not an object, not UTF-8)."""
+    try:
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+    except UnicodeDecodeError:
+        return None, f"{name} is not UTF-8 text, so it was left untouched"
+
+    def _no_duplicates(pairs):
+        out = {}
+        for key, value in pairs:
+            if key in out:
+                raise ValueError(f"duplicate key {key!r}")
+            out[key] = value
+        return out
+
+    try:
+        data = json.loads(text, object_pairs_hook=_no_duplicates)
+    except ValueError as exc:
+        return None, (f"{name} is not plain JSON (it may use comments or JSON5), so it was left untouched "
+                      f"(detail: {str(exc)[:120]})")
+    if not isinstance(data, dict):
+        return None, f"{name} is not a JSON object, so it was left untouched"
+    return data, None
+
+
+def _read_openclaw_config_plain(path=None):
+    """openclaw.json as (cfg, raw_bytes, error). Missing -> ({}, None, None)."""
+    path = path or _openclaw_config_path()
+    try:
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except FileNotFoundError:
+        return {}, None, None
+    except OSError as exc:
+        return None, None, f"openclaw.json cannot be read, so it was left untouched ({exc})"
+    cfg, err = _parse_plain_json_object(raw)
+    return cfg, raw, err
+
+
+def _edit_openclaw_config(mutate, path=None, create=False, backup_path=None):
+    """Read-modify-write the user's openclaw.json safely (v0.10.1 saves, O1/O2).
+
+    ``mutate(cfg)`` changes the fresh config in place and returns True when there
+    is something to write. Nothing is written when the file cannot be read, is not
+    plain JSON (comments/JSON5), is not an object, or is missing (unless
+    ``create``). One writer at a time per file, atomic replace, and the file is
+    re-read just before the replace: a change made meanwhile by someone else
+    (OpenClaw itself) restarts the edit on the new content instead of being
+    overwritten. With ``backup_path`` the exact bytes being replaced are kept
+    there first (0600, it holds the gateway token); no backup, no edit.
+    Returns (changed, error)."""
+    path = path or _openclaw_config_path()
+    with _json_file_lock(path):
+        for _attempt in range(4):
+            cfg, raw, err = _read_openclaw_config_plain(path)
+            if err:
+                return False, err
+            if raw is None and not create:
+                return False, "openclaw.json was not found"
+            if not mutate(cfg):
+                return False, None
+            payload = json.dumps(cfg, indent=2) + "\n"
+            try:
+                with open(path, "rb") as handle:
+                    now = handle.read()
+            except FileNotFoundError:
+                now = None
+            except OSError as exc:
+                return False, f"openclaw.json cannot be read, so it was left untouched ({exc})"
+            if now != raw:
+                continue
+            if backup_path and raw is not None:
+                try:
+                    _atomic_write_text(backup_path, raw.decode("utf-8"), mode=0o600)
+                except (OSError, UnicodeDecodeError) as exc:
+                    return False, f"openclaw.json was left untouched because its backup could not be written ({exc})"
+            try:
+                _atomic_write_text(path, payload)
+            except OSError as exc:
+                if exc.errno in (30, 13):  # EROFS, EACCES
+                    return False, (
+                        "OpenClaw directory is mounted read-only. "
+                        "In docker-compose.yml, ensure the volume does NOT end with ':ro'. "
+                        "Example: '~/.openclaw:/openclaw' (not '~/.openclaw:/openclaw:ro')"
+                    )
+                return False, str(exc)
+            return True, None
+        return False, "openclaw.json kept changing while saving, so it was left untouched; try again"
+
+
+def _openclaw_leftovers_status(host=""):
+    """What an older office (v0.7.4) left in openclaw.json (v0.10.1 upgrade fix).
+    Read only; the start-up notice, GET /api/openclaw/leftovers and Agent Providers use it.
+    ``host`` is the Host header, so the address the browser used counts as this office."""
+    keep = OPENCLAW_BROWSER_TRANSPORT == "direct"  # the legacy direct transport still dials with an Origin
+    status = {"ok": True, "found": False, "keys": [], "origins": [], "keepOrigins": keep,
+              "command": openclaw_leftovers.DOCTOR_COMMAND, "canClean": False, "reason": ""}
+    cfg, raw, err = _read_openclaw_config_plain()
+    if raw is None:
+        return status  # no openclaw.json here (or it cannot be read: nothing to tell)
+    if err:
+        status.update(openclaw_leftovers.detect_text(raw.decode("utf-8", "replace")))
+        if status["found"]:
+            status["reason"] = f"{err}. Run {openclaw_leftovers.DOCTOR_COMMAND} on the OpenClaw machine instead."
+        return status
+    status.update(openclaw_leftovers.detect(cfg, (PORT,), (host,) if host else ()))
+    if status["found"]:
+        if agent_providers.agent_access("openclaw", None) == "full":
+            status["canClean"] = True
+        else:
+            status["reason"] = (f"{agent_providers.chat_only_reason('openclaw', 'settings')} "
+                                f"{agent_providers.FIX_FULL_ACCESS}")
+    return status
+
+
+def _openclaw_leftovers_cleanup(host=""):
+    """Remove the v0.7.4 leftovers with the safe editor, keeping a 0600 backup next to openclaw.json.
+    Only on the user's request (POST /api/openclaw/leftovers/cleanup); never automatic."""
+    path = _openclaw_config_path()
+    keep = OPENCLAW_BROWSER_TRANSPORT == "direct"
+    removed = []
+
+    def mutate(cfg):
+        removed[:] = openclaw_leftovers.cleanup(cfg, (PORT,), (host,) if host else (), keep_origins=keep)
+        return bool(removed)
+
+    backup = f"{path}.vo-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    changed, err = _edit_openclaw_config(mutate, path, backup_path=backup)
+    if err:
+        return {"ok": False, "error": "not_cleaned", "message": err, "_status": 404 if "not found" in err else 409}
+    return {"ok": True, "cleaned": list(removed) if changed else [], "backup": os.path.basename(backup) if changed else "",
+            "status": _openclaw_leftovers_status(host)}
 
 
 def _safe_openclaw_agent_id(agent_id=None):
@@ -1000,17 +1543,92 @@ def _openclaw_binary():
     return ""
 
 
+def _model_ref_primary(value):
+    """Return the primary model id from an OpenClaw model reference.
+
+    OpenClaw accepts both ``"provider/model"`` and ``{"primary": ..., "fallbacks": [...]}``
+    for ``agents.defaults.model`` and per-agent ``model``.
+    """
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        primary = value.get("primary")
+        return primary.strip() if isinstance(primary, str) else ""
+    return ""
+
+
+def _openclaw_agents_section(cfg):
+    agents_cfg = cfg.get("agents") if isinstance(cfg, dict) else None
+    return agents_cfg if isinstance(agents_cfg, dict) else {}
+
+
+def _default_model_id(cfg):
+    """Primary model of ``agents.defaults.model`` (string or ``{primary}``)."""
+    defaults = _openclaw_agents_section(cfg).get("defaults")
+    if not isinstance(defaults, dict):
+        return ""
+    return _model_ref_primary(defaults.get("model"))
+
+
+def _iter_openclaw_agent_entries(cfg):
+    """Yield ``(agent_id, mutable entry)`` for OpenClaw's keyed and legacy schemas.
+
+    OpenClaw 2026.9 keeps agents in ``agents.entries`` (a dict keyed by id); older
+    releases use ``agents.list`` rows with an ``id``. For keyed entries the key is
+    the identity, so a stale embedded ``id`` never wins.
+    """
+    agents_cfg = _openclaw_agents_section(cfg)
+    entries = agents_cfg.get("entries")
+    if isinstance(entries, dict):
+        for agent_id, entry in entries.items():
+            if isinstance(entry, dict) and str(agent_id or "").strip():
+                yield str(agent_id), entry
+        return
+    rows = agents_cfg.get("list")
+    for entry in rows if isinstance(rows, list) else []:
+        if isinstance(entry, dict) and str(entry.get("id") or "").strip():
+            yield str(entry.get("id")), entry
+
+
+def _openclaw_agent_rows(cfg):
+    """Normalized copies ``{id, workspace, model(str), ...}`` for read-only callers."""
+    rows = []
+    for agent_id, entry in _iter_openclaw_agent_entries(cfg):
+        row = dict(entry)
+        row["id"] = agent_id
+        row["model"] = _model_ref_primary(entry.get("model"))
+        row["workspace"] = str(entry.get("workspace") or "")
+        rows.append(row)
+    return rows
+
+
+def _set_openclaw_entry_model(entry, model_id):
+    """Set or clear an agent entry's model, keeping ``{primary, fallbacks}`` objects."""
+    model_id = str(model_id or "").strip()
+    current = entry.get("model")
+    if not model_id:
+        entry.pop("model", None)
+    elif isinstance(current, dict):
+        current["primary"] = model_id
+    else:
+        entry["model"] = model_id
+
+
 def _primary_openclaw_model(cfg=None):
     cfg = cfg if isinstance(cfg, dict) else _load_openclaw_model_config()
-    return str(cfg.get("agents", {}).get("defaults", {}).get("model", {}).get("primary", "") or "")
+    return _default_model_id(cfg)
 
 
 def _default_openclaw_model(cfg=None):
     cfg = cfg if isinstance(cfg, dict) else _load_openclaw_model_config()
-    for agent in cfg.get("agents", {}).get("list", []) or []:
-        if isinstance(agent, dict) and agent.get("default") and agent.get("model"):
-            return str(agent.get("model") or "")
-    return _primary_openclaw_model(cfg) or "unknown"
+    main_model = ""
+    for agent_id, agent in _iter_openclaw_agent_entries(cfg):
+        model = _model_ref_primary(agent.get("model"))
+        if model and agent.get("default"):
+            return model
+        if model and agent_id == "main":
+            main_model = model
+    return main_model or _primary_openclaw_model(cfg) or "unknown"
 
 
 def _context_window_for_model(model, provider="", cfg=None):
@@ -1154,11 +1772,10 @@ def _quote_sqlite_identifier(name):
 def _openclaw_agent_ids():
     ids = ["main"]
     cfg = _load_openclaw_model_config()
-    for item in cfg.get("agents", {}).get("list", []) or []:
-        if isinstance(item, dict) and item.get("id"):
-            safe_id = _safe_openclaw_agent_id(item.get("id"))
-            if safe_id and safe_id not in ids:
-                ids.append(safe_id)
+    for item_id, _entry in _iter_openclaw_agent_entries(cfg):
+        safe_id = _safe_openclaw_agent_id(item_id)
+        if safe_id and safe_id not in ids:
+            ids.append(safe_id)
     agents_dir = os.path.join(WORKSPACE_BASE, "agents")
     try:
         for name in sorted(os.listdir(agents_dir)):
@@ -1351,56 +1968,66 @@ def _update_openclaw_auth_profiles_json(updater, create_if_missing=False, agent_
     if not os.path.exists(path) and not create_if_missing:
         return False, None
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        try:
-            with open(path, "r") as f:
-                data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            data = {"version": 1, "profiles": {}, "lastGood": {}}
-        data.setdefault("version", 1)
-        data.setdefault("profiles", {})
-        data.setdefault("lastGood", {})
-        changed = updater(data)
-        if not changed:
-            return False, None
-        _atomic_write_text(path, json.dumps(data, indent=2) + "\n")
-        return True, None
+        data_owner.makedirs(os.path.dirname(path), exist_ok=True)
+        with _json_file_lock(path):
+            try:
+                data = _read_json_state(path, default={"version": 1, "profiles": {}, "lastGood": {}})
+            except JsonStateError as exc:
+                # Every saved key lives here: never start over from an unreadable store
+                # (an empty file holds nothing to lose).
+                if not (os.path.isfile(path) and os.path.getsize(path) == 0):
+                    return False, f"{exc}; it was left untouched"
+                data = {"version": 1, "profiles": {}, "lastGood": {}}
+            data.setdefault("version", 1)
+            data.setdefault("profiles", {})
+            data.setdefault("lastGood", {})
+            changed = updater(data)
+            if not changed:
+                return False, None
+            _atomic_write_text(path, json.dumps(data, indent=2) + "\n")
+            return True, None
     except Exception as e:
         return False, str(e)
 
 
 def _mirror_openclaw_config_auth_profile(provider, profile_id):
-    cfg_path = _openclaw_config_path()
-    cfg = _load_openclaw_model_config()
-    cfg.setdefault("auth", {}).setdefault("profiles", {})[profile_id] = {
-        "provider": provider,
-        "mode": "api_key",
-    }
-    try:
-        _atomic_write_text(cfg_path, json.dumps(cfg, indent=2) + "\n")
-        return True, None
-    except OSError as exc:
-        return False, str(exc)
+    # Never rewrites a file it could not read (it used to replace openclaw.json with
+    # just this entry when the file had comments or a read failed).
+    entry = {"provider": provider, "mode": "api_key"}
+
+    def mutate(cfg):
+        auth = cfg.setdefault("auth", {})
+        if not isinstance(auth, dict):
+            return False
+        profiles = auth.setdefault("profiles", {})
+        if not isinstance(profiles, dict) or profiles.get(profile_id) == entry:
+            return False
+        profiles[profile_id] = dict(entry)
+        return True
+
+    changed, err = _edit_openclaw_config(mutate, create=True)
+    return (False, err) if err else (True, None)
 
 
 def _remove_openclaw_config_auth_profiles(profile_ids):
     if not profile_ids:
         return True, None
-    cfg_path = _openclaw_config_path()
-    cfg = _load_openclaw_model_config()
-    profiles = cfg.setdefault("auth", {}).setdefault("profiles", {})
-    changed = False
-    for profile_id in profile_ids:
-        if profile_id in profiles:
-            profiles.pop(profile_id, None)
-            changed = True
-    if not changed:
-        return True, None
-    try:
-        _atomic_write_text(cfg_path, json.dumps(cfg, indent=2) + "\n")
-        return True, None
-    except OSError as exc:
-        return False, str(exc)
+
+    def mutate(cfg):
+        profiles = (cfg.get("auth") or {}).get("profiles") if isinstance(cfg.get("auth"), dict) else None
+        if not isinstance(profiles, dict):
+            return False
+        changed = False
+        for profile_id in profile_ids:
+            if profile_id in profiles:
+                profiles.pop(profile_id, None)
+                changed = True
+        return changed
+
+    _changed, err = _edit_openclaw_config(mutate)
+    if err and err != "openclaw.json was not found":
+        return False, err
+    return True, None
 
 
 def _cleanup_openclaw_sqlite_auth_state(agent_id, provider, profile_ids):
@@ -1634,7 +2261,7 @@ def _delete_openclaw_auth_direct(provider, profile_id="", agent_id=None):
 
 def _read_openclaw_config_models(cfg):
     models = []
-    default_model = cfg.get("agents", {}).get("defaults", {}).get("model", {}).get("primary", "")
+    default_model = _default_model_id(cfg)
     if default_model:
         models.append({
             "id": default_model,
@@ -1823,11 +2450,11 @@ def _get_openclaw_native_fallback(reason="", agent_id=None):
     except Exception as e:
         return {"ok": False, "error": str(e), "models": [], "authProfiles": [], "agents": {}}
     agents = {}
-    for agent in cfg.get("agents", {}).get("list", []):
-        agents[agent.get("id")] = {
-            "id": agent.get("id"),
-            "workspace": agent.get("workspace"),
-            "model": agent.get("model", ""),
+    for agent in _openclaw_agent_rows(cfg):
+        agents[agent["id"]] = {
+            "id": agent["id"],
+            "workspace": agent["workspace"],
+            "model": agent["model"],
         }
     models = _read_openclaw_config_models(cfg)
     auth_profiles = _read_openclaw_auth_profiles(auth_agent_id)
@@ -1839,7 +2466,7 @@ def _get_openclaw_native_fallback(reason="", agent_id=None):
         "authAgent": auth_agent_id,
         "authStatus": {"agent": auth_agent_id, "storePath": os.path.join(_openclaw_agent_dir(auth_agent_id), "openclaw-agent.sqlite"), "source": "sqlite-fallback"},
         "managedAuth": _openclaw_managed_auth_report(),
-        "defaultModel": cfg.get("agents", {}).get("defaults", {}).get("model", {}).get("primary", ""),
+        "defaultModel": _default_model_id(cfg),
         "runtimeDefaultModel": _default_openclaw_model(cfg),
         "agents": agents,
         "providers": sorted({m["provider"] for m in models if m.get("provider")}),
@@ -1849,7 +2476,7 @@ def _get_openclaw_native_fallback(reason="", agent_id=None):
             "list": "openclaw models list --all --json",
             "auth": "openclaw models auth list --json",
             "status": "openclaw models status --json",
-            "assign": "openclaw config patch / agents.list[].model",
+            "assign": "openclaw config patch / agents.entries.<agentId>.model",
         },
     }
 
@@ -1900,14 +2527,14 @@ def _get_openclaw_native_models(agent_id=None):
     cloud_providers = []
     try:
         cfg = _load_openclaw_model_config()
-        default_model = cfg.get("agents", {}).get("defaults", {}).get("model", {}).get("primary", "")
+        default_model = _default_model_id(cfg)
         local_providers = _openclaw_local_providers_from_config(cfg)
         cloud_providers = _openclaw_cloud_providers_from_config(cfg, auth_profiles)
-        for agent in cfg.get("agents", {}).get("list", []):
-            agents[agent.get("id")] = {
-                "id": agent.get("id"),
-                "workspace": agent.get("workspace"),
-                "model": agent.get("model", ""),
+        for agent in _openclaw_agent_rows(cfg):
+            agents[agent["id"]] = {
+                "id": agent["id"],
+                "workspace": agent["workspace"],
+                "model": agent["model"],
             }
     except Exception:
         pass
@@ -1930,7 +2557,7 @@ def _get_openclaw_native_models(agent_id=None):
             "list": "openclaw models list --all --json",
             "auth": "openclaw models auth list --json",
             "status": "openclaw models status --json",
-            "assign": "openclaw config patch / agents.list[].model",
+            "assign": "openclaw config patch / agents.entries.<agentId>.model",
         },
     }
 
@@ -2224,8 +2851,7 @@ def _set_hermes_profile_model(profile_id, provider, model, base_url=""):
             output.extend(["model:", f"  default: {model}", f"  provider: {provider}"])
             if base_url:
                 output.append(f"  base_url: {str(base_url).strip()}")
-        with open(cfg_path, "w") as f:
-            f.write("\n".join(output) + "\n")
+        _atomic_write_text(cfg_path, "\n".join(output) + "\n")
     except Exception as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "profile": profile_id, "provider": provider, "model": model}
@@ -2235,8 +2861,7 @@ def _write_yaml_file(path, data):
     if not yaml:
         return False, "PyYAML is not available; cannot update Hermes YAML config"
     try:
-        with open(path, "w") as f:
-            yaml.safe_dump(data, f, sort_keys=False)
+        _atomic_write_text(path, yaml.safe_dump(data, sort_keys=False))
         return True, None
     except Exception as e:
         return False, str(e)
@@ -2296,8 +2921,7 @@ def _write_hermes_aliases_text(path, aliases):
     else:
         new_lines = lines[:start] + block + lines[end:]
     try:
-        with open(path, "w") as f:
-            f.write("\n".join(new_lines).rstrip() + "\n")
+        _atomic_write_text(path, "\n".join(new_lines).rstrip() + "\n")
         return True, None
     except Exception as e:
         return False, str(e)
@@ -2316,23 +2940,14 @@ def _update_hermes_aliases_text(path, updater):
 
 
 def _save_hermes_api_key(provider, api_key, label=""):
+    # Hermes keeps its own keys (`hermes auth add`); the office never passes one on a command line, where the
+    # process list shows it. (Should this come back: without --api-key and with no terminal, Hermes reads the
+    # key from stdin, so send it as input in a new session.)
     return {
         "ok": False,
         "error": "Hermes credentials are owned by the native Hermes profile. Manage them with 'hermes auth'.",
         "_status": 405,
     }
-    provider = _safe_provider_id(provider)
-    api_key = str(api_key or "").strip()
-    label = str(label or "Virtual Office").strip()[:80]
-    if not provider or not api_key:
-        return {"ok": False, "error": "provider and API key are required"}
-    if not HERMES_BIN:
-        return {"ok": False, "error": "Hermes CLI is not configured"}
-    args = [HERMES_BIN, "auth", "add", provider, "--type", "api-key", "--label", label, "--api-key", api_key]
-    result = _run_text_command(args, timeout=30, env=_hermes_env())
-    if not result.get("ok"):
-        return {"ok": False, "error": result.get("text") or "Hermes auth add failed"}
-    return {"ok": True, "provider": provider, "label": label, "maskedKey": _mask_secret(api_key)}
 
 
 def _delete_hermes_auth(provider, target):
@@ -2406,8 +3021,7 @@ def _save_hermes_custom_provider(profile_id, provider, base_url, models):
         cache_data = {}
     cache_data[provider] = {"models": [e["id"] for e in entries], "ts": int(time.time())}
     try:
-        with open(cache_path, "w") as f:
-            json.dump(cache_data, f, indent=2)
+        _atomic_write_text(cache_path, json.dumps(cache_data, indent=2))
     except Exception:
         pass
     return {"ok": True, "profile": profile_id, "provider": provider, "modelCount": len(entries)}
@@ -2452,8 +3066,7 @@ def _delete_hermes_custom_provider(profile_id, provider):
         with open(cache_path, "r") as f:
             cache_data = json.load(f)
         cache_data.pop(provider, None)
-        with open(cache_path, "w") as f:
-            json.dump(cache_data, f, indent=2)
+        _atomic_write_text(cache_path, json.dumps(cache_data, indent=2))
     except Exception:
         pass
     return {"ok": True, "profile": profile_id, "provider": provider, "removedAliases": removed}
@@ -2518,12 +3131,12 @@ def _delete_openclaw_auth(provider, profile_id="", agent_id=None, sync_all=False
     return _delete_openclaw_auth_direct(provider, profile_id, agent_id=agent_id)
 
 # ─── DYNAMIC AGENT DISCOVERY ─────────────────────────────────
-from discovery import discover_all_agents, discover_hermes_agents, get_agent_workspace_dir, get_agent_session_id
+from discovery import discover_all_agents, discover_hermes_agents, get_agent_workspace_dir, get_agent_session_id, clean_display_text
 from providers.codex import CodexProvider
 from providers.claude_code import ClaudeCodeProvider
-from providers.hermes import HermesApiClient, HermesDesktopBackendClient, discover_desktop_backend
+from providers.hermes import HermesApiClient
 from license import get_license_status, activate_license, deactivate_license, check_feature, get_agent_limit
-from project_store import MarkdownProjectStore
+from project_store import MarkdownProjectStore, is_safe_project_id
 
 PROJECT_STORE = MarkdownProjectStore(STATUS_DIR)
 
@@ -2545,13 +3158,7 @@ def _load_agent_workspaces():
 
 
 def _save_agent_workspaces(data):
-    os.makedirs(os.path.dirname(AGENT_WORKSPACES_FILE), exist_ok=True)
-    with open(AGENT_WORKSPACES_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-    try:
-        os.chmod(AGENT_WORKSPACES_FILE, 0o666)
-    except OSError:
-        pass
+    _write_json_atomic(AGENT_WORKSPACES_FILE, data)
 
 
 def _find_agent_record(agent_key):
@@ -2704,7 +3311,10 @@ def _agent_preview_workspace_root(agent_id, agent):
     candidates = []
     if raw:
         if is_windows_absolute(raw):
-            candidates.extend(_map_agent_preview_absolute_path(raw))
+            if os.name == "nt":
+                candidates.append(os.path.abspath(os.path.expanduser(raw)))
+            else:
+                candidates.extend(_map_agent_preview_absolute_path(raw))
         else:
             candidates.append(os.path.abspath(os.path.expanduser(raw)))
             candidates.extend(_map_agent_preview_absolute_path(raw))
@@ -2715,6 +3325,105 @@ def _agent_preview_workspace_root(agent_id, agent):
         if candidate and os.path.isdir(candidate):
             return os.path.abspath(candidate)
     return ""
+
+
+def _agent_pc_context(agent_id):
+    """Return the canonical agent record and server-visible Home path."""
+    agent = _find_agent_record(agent_id)
+    if not agent:
+        raise AgentPCError("agent_not_found", "Unknown agent id for Agent PC.", 404, agentId=agent_id)
+    canonical_id = AGENT_PC_STORE.ensure_profile(agent)
+    return canonical_id, agent, _agent_preview_workspace_root(canonical_id, agent)
+
+
+_AGENT_PC_TOOL_PATH_KEYS = (
+    "path", "file_path", "filePath", "file", "filename", "output_path", "outputPath",
+    "output_file", "outputFile", "artifact_path", "artifactPath", "target_path", "targetPath",
+)
+_AGENT_PC_TOOL_URL_KEYS = ("url", "uri", "href", "target_url", "targetUrl")
+
+
+def _agent_pc_tool_activity_payload(tool_name, arguments=None, *, phase="", result=None, source="provider", run_id="", session_id=""):
+    """Normalize provider tool data into the durable Agent PC vocabulary."""
+    args = arguments if isinstance(arguments, dict) else {}
+    name = str(tool_name or "").replace("functions.", "").strip()
+    lowered = name.lower()
+    for key in _AGENT_PC_TOOL_URL_KEYS:
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            parsed = urllib.parse.urlparse(value.strip())
+            if parsed.scheme in {"http", "https"} and parsed.netloc:
+                return {
+                    "kind": "url", "url": value.strip(), "title": parsed.netloc,
+                    "toolName": name, "source": source, "phase": phase,
+                    "runId": run_id, "sessionId": session_id,
+                }
+    if re.search(r"(^|[._-])(browser|agent[_-]?browser|playwright|puppeteer)([._-]|$)", lowered):
+        return {
+            "kind": "browser", "title": "Live Agent Browser", "toolName": name,
+            "source": source, "phase": phase, "runId": run_id, "sessionId": session_id,
+        }
+    path = ""
+    for key in _AGENT_PC_TOOL_PATH_KEYS:
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            path = value.strip()
+            break
+    if not path:
+        patch_text = str(args.get("patch") or args.get("input") or args.get("value") or "")
+        match = re.search(r"^\*\*\* (?:Add|Update) File:\s*(.+)$", patch_text, re.MULTILINE)
+        if match:
+            path = match.group(1).strip()
+    if not path and str(phase).lower() in {"result", "done", "complete", "completed"}:
+        match = re.search(
+            r"(?:generated(?:\s+and\s+saved)?|saved|created|written|output)(?:\s+(?:to|at))?[:\s]+([^\n\r]+\.(?:html?|md|txt|json|ya?ml|toml|csv|js|mjs|cjs|ts|tsx|jsx|py|go|rs|java|css|svg|png|jpe?g|gif|webp|pdf|mp4|webm|mov|mp3|wav|ogg))\b",
+            str(result or ""),
+            re.I,
+        )
+        if match:
+            path = match.group(1).strip().strip("'\"`")
+    if not path:
+        return None
+    return {
+        "kind": "file", "path": path,
+        "workdir": next((str(args.get(key)).strip() for key in ("workdir", "work_dir", "cwd", "directory") if args.get(key)), ""),
+        "title": os.path.basename(path.replace("\\", "/")), "toolName": name,
+        "source": source, "phase": phase, "runId": run_id, "sessionId": session_id,
+    }
+
+
+def _record_agent_pc_activity(agent_id, payload):
+    if not payload:
+        return None
+    try:
+        canonical_id, _agent, home_path = _agent_pc_context(agent_id)
+        return AGENT_PC_STORE.record_activity(canonical_id, payload, home_path=home_path)
+    except AgentPCError as exc:
+        # Tool activity outside connected roots is still indexed by record_activity;
+        # unknown/deleted agents and invalid resources should not disrupt runtimes.
+        if exc.code not in {"agent_not_found", "invalid_kind", "invalid_url", "path_required", "sensitive_path"}:
+            print(f"[AGENT PC] Activity ignored for {agent_id}: {exc.code}: {exc.message}")
+    except Exception as exc:
+        print(f"[AGENT PC] Activity observer failed for {agent_id}: {exc}")
+    return None
+
+
+def _observe_provider_tool_activity(agent_id, event):
+    if not isinstance(event, dict):
+        return
+    payload = _agent_pc_tool_activity_payload(
+        event.get("toolName") or event.get("tool") or event.get("name") or "",
+        event.get("arguments") or event.get("args") or {},
+        phase=event.get("phase") or event.get("status") or "",
+        result=event.get("result"),
+        source=event.get("source") or event.get("provider") or "provider-observer",
+        run_id=event.get("runId") or event.get("run_id") or "",
+        session_id=event.get("sessionId") or event.get("sessionKey") or "",
+    )
+    _record_agent_pc_activity(agent_id, payload)
+
+
+gateway_presence.set_activity_observer(_observe_provider_tool_activity)
 
 
 def _resolve_agent_preview_file(agent_id, raw_path, workdir=""):
@@ -2858,6 +3567,13 @@ def publish_agent_preview(payload):
         }
         _agent_preview_records.append(record)
         del _agent_preview_records[:-AGENT_PREVIEW_RECORD_LIMIT]
+    _record_agent_pc_activity(agent_id, {
+        **target,
+        "operation": str(payload.get("operation") or payload.get("category") or ""),
+        "toolName": str(payload.get("toolName") or "explicit_preview"),
+        "runId": str(payload.get("runId") or ""),
+        "sessionId": str(payload.get("sessionId") or payload.get("sessionKey") or ""),
+    })
     public_record = {key: value for key, value in record.items() if key != "createdEpoch"}
     return True, {"ok": True, "schemaVersion": AGENT_PREVIEW_SCHEMA_VERSION, "preview": public_record}, 201
 
@@ -2873,6 +3589,88 @@ def list_agent_previews(after=0):
         rows = [{key: value for key, value in item.items() if key != "createdEpoch"} for item in _agent_preview_records if int(item.get("serial") or 0) > cursor]
         latest = _agent_preview_serial
     return {"ok": True, "schemaVersion": AGENT_PREVIEW_SCHEMA_VERSION, "cursor": latest, "previews": rows}
+
+
+def _agent_pc_api_error(exc):
+    if isinstance(exc, AgentPCError):
+        return exc.payload(), exc.status
+    traceback.print_exc()
+    return {"ok": False, "error": {"code": "agent_pc_error", "message": str(exc)}}, 500
+
+
+def _agent_pc_route_parts(request_path):
+    prefix = "/api/agent-pc/"
+    if not request_path.startswith(prefix):
+        return []
+    return [urllib.parse.unquote(part) for part in request_path[len(prefix):].split("/") if part]
+
+
+def _agent_pc_summary(agent_id):
+    try:
+        canonical_id, _agent, home_path = _agent_pc_context(agent_id)
+        return AGENT_PC_STORE.summary(canonical_id, home_path=home_path), 200
+    except Exception as exc:
+        return _agent_pc_api_error(exc)
+
+
+def _agent_pc_tree(agent_id, query):
+    try:
+        params = urllib.parse.parse_qs(query)
+        root_id = (params.get("rootId") or ["home"])[0]
+        relative = (params.get("path") or [""])[0]
+        canonical_id, _agent, home_path = _agent_pc_context(agent_id)
+        result = AGENT_PC_STORE.list_tree(canonical_id, root_id, relative, home_path=home_path)
+        return result, 200
+    except Exception as exc:
+        return _agent_pc_api_error(exc)
+
+
+def _agent_pc_descriptor(agent_id, query):
+    try:
+        params = urllib.parse.parse_qs(query)
+        root_id = (params.get("rootId") or ["home"])[0]
+        relative = (params.get("path") or [""])[0]
+        saved_id = (params.get("savedId") or [""])[0]
+        canonical_id, _agent, home_path = _agent_pc_context(agent_id)
+        if saved_id:
+            _full, descriptor = AGENT_PC_STORE.resolve_saved(canonical_id, saved_id)
+        else:
+            _full, descriptor = AGENT_PC_STORE.resolve_file(canonical_id, root_id, relative, home_path=home_path)
+        return {"ok": True, "schemaVersion": descriptor.get("schemaVersion"), "preview": descriptor}, 200
+    except Exception as exc:
+        return _agent_pc_api_error(exc)
+
+
+def _agent_pc_mutation(agent_id, action, payload):
+    try:
+        canonical_id, _agent, home_path = _agent_pc_context(agent_id)
+        if action == "activity":
+            result = AGENT_PC_STORE.record_activity(canonical_id, payload, home_path=home_path)
+        elif action == "roots":
+            result = AGENT_PC_STORE.connect_root(canonical_id, payload)
+        elif action == "saved":
+            result = AGENT_PC_STORE.save_item(canonical_id, payload, home_path=home_path)
+        elif action == "state":
+            result = AGENT_PC_STORE.set_ui_state(canonical_id, payload.get("state") if isinstance(payload.get("state"), dict) else payload)
+        else:
+            raise AgentPCError("route_not_found", "Agent PC action was not found.", 404)
+        return result, 200 if action == "state" else 201
+    except Exception as exc:
+        return _agent_pc_api_error(exc)
+
+
+def _agent_pc_delete(agent_id, collection, item_id):
+    try:
+        canonical_id, _agent, _home_path = _agent_pc_context(agent_id)
+        if collection == "roots":
+            result = AGENT_PC_STORE.disconnect_root(canonical_id, item_id)
+        elif collection == "saved":
+            result = AGENT_PC_STORE.delete_saved(canonical_id, item_id)
+        else:
+            raise AgentPCError("route_not_found", "Agent PC action was not found.", 404)
+        return result, 200
+    except Exception as exc:
+        return _agent_pc_api_error(exc)
 
 
 def _resource_glob_matches(relpath, pattern):
@@ -3049,9 +3847,10 @@ def _save_workspace_text_file(agent_key, agent, relpath, content, create=False, 
             }
         backup_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         backup_path = os.path.join(_resource_backup_root(agent_key), backup_id, rel)
-        os.makedirs(os.path.dirname(backup_path), exist_ok=True)
+        data_owner.makedirs(os.path.dirname(backup_path), exist_ok=True)
         shutil.copy2(full, backup_path)
-    os.makedirs(os.path.dirname(full), exist_ok=True)
+        data_owner.adopt(backup_path)
+    data_owner.makedirs(os.path.dirname(full), exist_ok=True)
     _atomic_write_text(full, text)
     revision = hashlib.sha256(text.encode("utf-8")).hexdigest()
     return {
@@ -3135,8 +3934,9 @@ def _delete_workspace_text_file(agent_key, agent, relpath):
         return {"error": err, "_status": 400}
     backup_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     backup_path = os.path.join(_resource_backup_root(agent_key), backup_id, rel)
-    os.makedirs(os.path.dirname(backup_path), exist_ok=True)
+    data_owner.makedirs(os.path.dirname(backup_path), exist_ok=True)
     shutil.copy2(full, backup_path)
+    data_owner.adopt(backup_path)
     os.remove(full)
     return {"ok": True, "deleted": rel, "backupId": backup_id}
 
@@ -3281,13 +4081,113 @@ def _office_config_agent_override(agent_key):
     return {}
 
 
-def _update_office_config_agent(agent_key, patch):
-    path = os.path.join(STATUS_DIR, "office-config.json")
+OFFICE_CONFIG_FILE_NAME = "office-config.json"
+# Last browser save per layout file: {"rev", "client", "seq"} (v0.10.1 saves).
+_OFFICE_SAVE_LAST = {}
+
+
+def _office_config_rev_of(raw):
+    """Revision of the saved layout = hash of its bytes ("0" = nothing saved yet).
+    Any writer (browser, agent API, server-side agent patch) changes it."""
+    return hashlib.sha1(raw).hexdigest()[:16] if raw else "0"
+
+
+def _office_config_read_with_rev(path):
     try:
-        with open(path, "r") as f:
-            cfg = json.load(f)
-    except Exception:
-        cfg = {}
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except FileNotFoundError:
+        return None, "0"
+    return raw, _office_config_rev_of(raw)
+
+
+def _office_save_check(path, base_rev, client, seq):
+    """Decide a layout POST under the file lock: None = write it, else the 409 body.
+
+    A save names the revision it was based on (X-VO-Base-Rev / If-Match). It is
+    refused when the layout changed since, unless the change is this tab's own
+    older save (its newer snapshot passes it). A tab's older snapshot arriving
+    after its newer one is refused. No base revision = last write wins (old API)."""
+    raw, current = _office_config_read_with_rev(path)
+    last = _OFFICE_SAVE_LAST.get(os.path.abspath(path)) or {}
+    own_last = bool(client) and last.get("client") == client and last.get("rev") == current
+    if own_last and seq is not None and last.get("seq") is not None and seq <= last["seq"]:
+        return {"ok": False, "error": "stale_save", "rev": current,
+                "message": "A newer save from this window is already stored."}
+    # The response layer's ETag (24 hex of the same sha1, maybe -gz) also names this revision.
+    if base_rev is None or base_rev == current or (
+            raw and len(base_rev) >= 16 and hashlib.sha1(raw).hexdigest().startswith(base_rev)):
+        return None
+    if own_last and seq is not None and (last.get("seq") is None or seq > last["seq"]):
+        return None
+    try:
+        config = json.loads(raw.decode("utf-8")) if raw else None
+    except ValueError:
+        config = None
+    return {"ok": False, "error": "conflict", "rev": current, "config": config,
+            "message": "The office layout was changed somewhere else since this window loaded it."}
+
+
+def _office_save_write(path, body, client, seq):
+    """Store a browser/API layout (caller holds the file lock); returns the new revision."""
+    try:
+        _read_json_state(path, default=None)
+    except JsonStateError:
+        # Keep the unreadable file for recovery instead of overwriting it.
+        try:
+            os.replace(path, f"{path}.unreadable-{int(time.time())}")
+        except OSError:
+            pass
+    _write_json_atomic(path, body, indent=None)
+    rev = _office_config_read_with_rev(path)[1]
+    _OFFICE_SAVE_LAST[os.path.abspath(path)] = {"rev": rev, "client": client, "seq": seq}
+    return rev
+
+
+def _office_save_headers(headers):
+    base = headers.get("X-VO-Base-Rev") or headers.get("If-Match")
+    base = str(base or "").strip()
+    if base.startswith("W/"):
+        base = base[2:]
+    base = base.strip().strip('"').strip()
+    if base.endswith("-gz"):
+        base = base[:-3]
+    base = base or None
+    client = str(headers.get("X-VO-Client") or "").strip()[:80] or None
+    try:
+        seq = int(str(headers.get("X-VO-Save-Seq") or "").strip())
+    except ValueError:
+        seq = None
+    return base, client, seq
+
+
+def _default_office_config():
+    """The bundled default layout with the live roster (what GET serves when nothing is saved)."""
+    default_path = os.path.join(os.path.dirname(__file__) or ".", "default-office-config.json")
+    with open(default_path, "r", encoding="utf-8") as handle:
+        return json.loads(_patch_default_config_agents(handle.read()))
+
+
+def _update_office_config_agent(agent_key, patch):
+    path = os.path.join(STATUS_DIR, OFFICE_CONFIG_FILE_NAME)
+    with _json_file_lock(path):
+        try:
+            cfg = _read_json_state(path, default=None)
+        except JsonStateError as exc:
+            # Never rebuild the layout from scratch after a failed read (BE-18).
+            print(f"office-config.json not updated: {exc}")
+            return None
+        if cfg is None:
+            try:
+                cfg = _default_office_config()
+            except (OSError, ValueError):
+                return None
+        item = _apply_office_config_agent_patch(cfg, agent_key, patch)
+        _write_json_atomic(path, cfg)
+        return item
+
+
+def _apply_office_config_agent_patch(cfg, agent_key, patch):
     agents = cfg.setdefault("agents", [])
     item = None
     for candidate in agents:
@@ -3300,13 +4200,6 @@ def _update_office_config_agent(agent_key, patch):
     for key, value in patch.items():
         if value is not None:
             item[key] = value
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(cfg, f, indent=2)
-    try:
-        os.chmod(path, 0o666)
-    except OSError:
-        pass
     return item
 
 
@@ -3351,6 +4244,7 @@ def _get_agent_workspace_payload(agent_key):
         "workspace": agent.get("workspace") or agent.get("home") or "",
     }
     heartbeat = ""
+    heartbeat_revision = ""
     provider_kind = agent.get("providerKind", "openclaw")
     capabilities = payload_agent["capabilities"]
     manifest = _get_provider_registry().manifest(provider_kind)
@@ -3373,6 +4267,7 @@ def _get_agent_workspace_payload(agent_key):
             try:
                 with open(hb, "r", encoding="utf-8", errors="replace") as f:
                     heartbeat = f.read()
+                heartbeat_revision = hashlib.sha256(heartbeat.encode("utf-8")).hexdigest()
             except OSError:
                 heartbeat = ""
     return {
@@ -3388,6 +4283,8 @@ def _get_agent_workspace_payload(agent_key):
         "score": _agent_score_info(key),
         "settings": {
             "heartbeatContent": heartbeat,
+            # Send back as heartbeatRevision: a save over a newer HEARTBEAT.md is refused (409).
+            "heartbeatRevision": heartbeat_revision,
             "heartbeatApplicable": heartbeat_applicable,
             "cronApplicable": provider_kind == "openclaw",
             "filesApplicable": bool(capabilities.get("resourcesRead")),
@@ -3395,7 +4292,9 @@ def _get_agent_workspace_payload(agent_key):
             "profileEditable": bool(capabilities.get("profileEdit")),
             "agentSkillsApplicable": bool(capabilities.get("skills")),
             "skillLibraryApplicable": True,
-            "modelEditable": bool(capabilities.get("models") and provider_kind != "hermes"),
+            # (a layer agent's model: per chat in its chat window, its default in Agent Providers)
+            "modelEditable": bool(capabilities.get("models") and provider_kind != "hermes"
+                                  and not (_pl_owns() and provider_layer_turns.layer_agent(agent.get("id")))),
             "resourceSchema": resource_schema,
             "skillSchema": skill_schema,
         },
@@ -3403,12 +4302,23 @@ def _get_agent_workspace_payload(agent_key):
 
 
 def _handle_agent_workspace_update(agent_key, body):
+    # One writer at a time for the whole multi-agent store (v0.10.1 saves): two
+    # saves at once (any two agents) used to drop one of them.
+    with _json_file_lock(AGENT_WORKSPACES_FILE):
+        return _handle_agent_workspace_update_locked(agent_key, body)
+
+
+def _handle_agent_workspace_update_locked(agent_key, body):
     payload = _get_agent_workspace_payload(agent_key)
     if not payload.get("ok"):
         return payload
     key = payload["agent"]["statusKey"]
     store_key = _safe_agent_workspace_key(key)
-    store = _load_agent_workspaces()
+    try:
+        store = _read_json_state(AGENT_WORKSPACES_FILE, default={})
+    except JsonStateError as exc:
+        # Never rebuild every agent's desk from nothing after a failed read.
+        return {"error": f"The agent desk data cannot be read, so nothing was saved ({exc}).", "_status": 503}
     workspace = store.setdefault(store_key, {"bulletin": [], "tasks": [], "notes": [], "settings": {}})
     workspace.setdefault("bulletin", [])
     workspace.setdefault("tasks", [])
@@ -3538,11 +4448,16 @@ def _handle_agent_workspace_update(agent_key, body):
         item_id = str(body.get("id") or "")
         for note in workspace.get("notes", []):
             if note.get("id") == item_id:
+                # Fields left out keep their saved value (v0.10.1 saves: the editor sent
+                # tags: [] and erased them).
                 note["title"] = (body.get("title") or note.get("title") or "Untitled note").strip()[:160]
-                note["content"] = str(body.get("content") or "")[:50000]
-                note["folder"] = (body.get("folder") or "General").strip()[:120] or "General"
+                if "content" in body:
+                    note["content"] = str(body.get("content") or "")[:50000]
+                if "folder" in body or not note.get("folder"):
+                    note["folder"] = (body.get("folder") or "General").strip()[:120] or "General"
                 note["kind"] = (body.get("kind") or note.get("kind") or "note").strip()[:40]
-                note["tags"] = [str(x).strip()[:40] for x in body.get("tags", []) if str(x).strip()][:12]
+                if isinstance(body.get("tags"), list):
+                    note["tags"] = [str(x).strip()[:40] for x in body.get("tags", []) if str(x).strip()][:12]
                 note["updatedAt"] = now
                 break
     elif action == "deleteNote":
@@ -3614,7 +4529,8 @@ def _handle_agent_workspace_update(agent_key, body):
         content = str(body.get("content") or "")
         if not content:
             content = f"---\nname: {name or 'new-skill'}\ndescription: \"Agent workflow skill.\"\n---\n\n# {name or 'New Skill'}\n\nUse this skill when...\n"
-        result = _handle_skill_write(key, name, {"name": name, "content": content, "rootId": body.get("rootId") or ""})
+        result = _handle_skill_write(key, name, {"name": name, "content": content, "rootId": body.get("rootId") or "",
+                                                 "revision": body.get("revision") or ""})
         if not result.get("ok"):
             return result
     elif action == "deleteAgentSkill":
@@ -3628,7 +4544,7 @@ def _handle_agent_workspace_update(agent_key, body):
         name = (body.get("name") or "").strip()
         if not content:
             content = f"---\nname: {name or 'new-library-skill'}\ndescription: \"Reusable Virtual Office skill.\"\n---\n\n# {name or 'New Library Skill'}\n\nUse this skill when...\n"
-        result = _handle_skills_library_create({"name": name, "content": content})
+        result = _handle_skills_library_create({"name": name, "content": content, "revision": body.get("revision") or ""})
         if not result.get("ok"):
             return result
     elif action == "applyLibrarySkill":
@@ -3658,10 +4574,11 @@ def _handle_agent_workspace_update(agent_key, body):
                 settings[field] = body.get(field)
         if "leaderboardPoints" in body:
             try:
-                scores = _load_scores()
-                score_entry = scores.setdefault("agents", {}).setdefault(key, {"score": 0, "completed": 0, "streak": 0, "history": []})
-                score_entry["score"] = int(body.get("leaderboardPoints") or 0)
-                _save_scores(scores)
+                with _json_file_lock(SCORES_FILE):
+                    scores = _load_scores_for_write()
+                    score_entry = scores["agents"].setdefault(key, {"score": 0, "completed": 0, "streak": 0, "history": []})
+                    score_entry["score"] = int(body.get("leaderboardPoints") or 0)
+                    _save_scores(scores)
             except Exception:
                 pass
         if "heartbeatContent" in body:
@@ -3695,7 +4612,10 @@ def _handle_agent_workspace_update(agent_key, body):
                         "error": native_result.get("error") or "Native profile update failed",
                         "_status": 502,
                     }
-            _update_office_config_agent(key, patch)
+            # Agent Studio saves the office copy itself in the same action (officeSaved): writing it here
+            # too changed the layout under that save and showed a false "changed somewhere else" (B1).
+            if body.get("officeSaved") is not True:
+                _update_office_config_agent(key, patch)
     else:
         return {"error": f"Unknown action: {action}", "_status": 400}
 
@@ -3744,7 +4664,7 @@ If Virtual Office runs elsewhere, use that office base URL.
 
 Office agent IDs look like:
 
-- `main`, `dev-cody`, `pq-m-moe` for OpenClaw agents
+- `main`, `ops`, `research` for OpenClaw agents
 - `hermes-default` or `hermes-<profile>` for Hermes agents
 
 ## Curl example
@@ -3957,14 +4877,13 @@ def _ensure_builtin_communication_skill():
         for skill_name, content in _builtin_office_skill_contents().items():
             skill_dir = os.path.join(lib_dir, skill_name)
             skill_file = os.path.join(skill_dir, "SKILL.md")
-            os.makedirs(skill_dir, exist_ok=True)
+            data_owner.makedirs(skill_dir, exist_ok=True)
             old = ""
             if os.path.isfile(skill_file):
                 with open(skill_file, "r") as f:
                     old = f.read()
             if old != content:
-                with open(skill_file, "w") as f:
-                    f.write(content)
+                _atomic_write_text(skill_file, content)
             if skill_name == AGENT_PLATFORM_COMM_SKILL_NAME:
                 first_path = skill_file
         return first_path
@@ -4021,24 +4940,93 @@ def _hermes_platform_roster_agent():
 _PROVIDER_REGISTRY = None
 
 
-def _openclaw_gateway_home_path():
+# OpenClaw's folder as its gateway reports it (config.get: where its openclaw.json is), per gateway, for a few minutes.
+_OPENCLAW_REPORTED_HOME = {"key": None, "home": "", "at": 0.0}
+_OPENCLAW_REPORTED_HOME_TTL = 300.0
+_OPENCLAW_GATEWAY_PATH_FIX = (
+    "Set VO_OPENCLAW_GATEWAY_PATH to OpenClaw's folder as the gateway's machine sees it (for example "
+    "/home/you/.openclaw, the folder with openclaw.json), then restart the office."
+)
+
+
+def _openclaw_home_of_config_path(path):
+    """The folder of a reported openclaw.json path ('' unless it is absolute; POSIX or Windows)."""
+    text = str(path or "").strip()
+    if is_windows_absolute(text):
+        import ntpath
+        return ntpath.dirname(ntpath.normpath(text))
+    if text.startswith("/"):
+        return posixpath.dirname(posixpath.normpath(text))
+    return ""
+
+
+def _openclaw_gateway_reported_home(ask=False):
+    """OpenClaw's folder in the gateway's own namespace, as the gateway reports it (the folder of its openclaw.json).
+    ask=False reads only what an earlier ask learned (no network); '' when unknown or the gateway did not answer."""
+    cache = _OPENCLAW_REPORTED_HOME
+    try:
+        key = _gateway_config_key()
+    except Exception:   # (asked while this module is still being defined)
+        return ""
+    fresh = cache["key"] == key and time.time() - cache["at"] < _OPENCLAW_REPORTED_HOME_TTL
+    if not ask or (fresh and cache["home"]):
+        return cache["home"] if cache["key"] == key else ""
+    result = _gateway_rpc_call("config.get", {}, timeout=10)
+    home = _openclaw_home_of_config_path(result.get("path")) if isinstance(result, dict) and result.get("ok") else ""
+    cache.update(key=key, home=home, at=time.time())
+    return home
+
+
+def _openclaw_gateway_home_source(ask_gateway=False):
+    """(home, source) of ``_openclaw_gateway_home_path``: source is 'setting' (VO_OPENCLAW_GATEWAY_PATH),
+    'workspaces' (openclaw.json's agent folders), 'gateway' (the gateway's own answer) or 'office' (the office's own
+    OpenClaw folder: right only when the office and the gateway see the same paths)."""
+    explicit = str(os.environ.get("VO_OPENCLAW_GATEWAY_PATH") or "").strip()
+    if explicit:
+        return os.path.abspath(os.path.expanduser(explicit)), "setting"
+    inferred = _openclaw_home_from_workspaces()
+    if inferred:
+        return inferred, "workspaces"
+    reported = _openclaw_gateway_reported_home(ask=ask_gateway)
+    if reported:
+        return reported, "gateway"
+    return WORKSPACE_BASE, "office"
+
+
+def _openclaw_gateway_home_problem(home, source):
+    """Why a new agent's folder must not be made under ``home`` ('' when it may): never at the top of a disk, and
+    from Docker never the container's own mount point when nothing said where OpenClaw's folder is on its machine."""
+    text = str(home or "").strip()
+    top = text in ("", "/") or bool(re.fullmatch(r"[A-Za-z]:[\\/]*", text))
+    if top or (source == "office" and _running_in_docker()):
+        why = (f"OpenClaw's folder on the gateway's machine would be {text or 'unknown'}, the top of the disk" if top else
+               "The office could not work out where OpenClaw's folder is on the gateway's machine (its agents' folders "
+               "are not named workspace or workspace-<id>, and the gateway did not say)")
+        return f"The agent was not created: {why}. {_OPENCLAW_GATEWAY_PATH_FIX}"
+    return ""
+
+
+def _openclaw_gateway_home_path(ask_gateway=False):
     """Return the OpenClaw home path as seen by the external Gateway.
 
     Docker commonly mounts the host OpenClaw home at ``/openclaw``. Native
     agent creation is executed by the host Gateway, so workspace paths passed
     to ``agents.create`` must use the host namespace. Prefer an explicit
     deployment override, then infer that home from an existing native
-    workspace recorded in ``openclaw.json``.
+    workspace recorded in ``openclaw.json``, then the gateway's own answer
+    (``ask_gateway``: ask it now; otherwise only what it said before).
     """
-    explicit = str(os.environ.get("VO_OPENCLAW_GATEWAY_PATH") or "").strip()
-    if explicit:
-        return os.path.abspath(os.path.expanduser(explicit))
+    return _openclaw_gateway_home_source(ask_gateway)[0]
+
+
+def _openclaw_home_from_workspaces():
+    """OpenClaw's folder inferred from openclaw.json's agent folders named workspace / workspace-<id> ('' if none)."""
 
     config_path = os.path.join(WORKSPACE_BASE, "openclaw.json")
     try:
         with open(config_path, "r", encoding="utf-8") as handle:
-            configured = (json.load(handle).get("agents") or {}).get("list") or []
-    except (OSError, ValueError, TypeError):
+            configured = _openclaw_agent_rows(json.load(handle))
+    except (OSError, ValueError, TypeError, AttributeError):
         configured = []
 
     ordered = sorted(
@@ -4052,7 +5040,7 @@ def _openclaw_gateway_home_path():
         basename = os.path.basename(os.path.normpath(workspace))
         if basename == "workspace" or basename.startswith("workspace-"):
             return os.path.dirname(os.path.normpath(workspace))
-    return WORKSPACE_BASE
+    return ""
 
 
 def _provider_registry_context():
@@ -4114,6 +5102,17 @@ def _get_provider_registry():
     return _PROVIDER_REGISTRY
 
 
+_PROVIDER_HEALTH_MAX_AGE = _env_int("VO_PROVIDER_HEALTH_MAX_AGE_SEC", 90, minimum=0, maximum=3600)
+
+
+def _registry_health_manifests(registry):
+    """Manifests with health, reusing recent results (BE-24). Accepts older registries."""
+    try:
+        return registry.manifests(include_health=True, max_age=_PROVIDER_HEALTH_MAX_AGE)
+    except TypeError:
+        return registry.manifests(include_health=True)
+
+
 def _reset_provider_registry():
     global _PROVIDER_REGISTRY
     _PROVIDER_REGISTRY = None
@@ -4135,6 +5134,9 @@ _DISCOVERY_CACHE_FIELDS = {
 
 
 def _discovery_agent_key(agent):
+    if (agent or {}).get("providerTransport") == "serve":
+        # Two `hermes serve` connections can both have a "default" profile: key by office id.
+        return ("hermes-serve", str((agent or {}).get("id") or ""))
     return (
         str((agent or {}).get("providerKind") or (agent or {}).get("providerId") or "openclaw"),
         str((agent or {}).get("providerAgentId") or (agent or {}).get("profile") or (agent or {}).get("id") or ""),
@@ -4164,12 +5166,9 @@ def _save_discovery_cache(agents):
         "updatedAt": datetime.now(timezone.utc).isoformat(),
         "agents": [_cache_safe_discovered_agent(agent) for agent in agents],
     }
-    os.makedirs(os.path.dirname(DISCOVERY_CACHE_FILE), exist_ok=True)
-    _atomic_write_text(DISCOVERY_CACHE_FILE, json.dumps(payload, indent=2) + "\n")
-    try:
-        os.chmod(DISCOVERY_CACHE_FILE, 0o600)
-    except OSError:
-        pass
+    data_owner.makedirs(os.path.dirname(DISCOVERY_CACHE_FILE), exist_ok=True)
+    _atomic_write_text(DISCOVERY_CACHE_FILE, json.dumps(payload, indent=2) + "\n", mode=0o600)
+    private_files.tighten(DISCOVERY_CACHE_FILE)
 
 
 def _forget_discovered_agent(provider_kind, provider_agent_id):
@@ -4186,7 +5185,7 @@ def _discover_roster():
     try:
         manifest_health = {
             str(item.get("id") or ""): item
-            for item in registry.manifests(include_health=True)
+            for item in _registry_health_manifests(registry)
             if isinstance(item, dict) and item.get("id")
         }
     except Exception:
@@ -4199,20 +5198,62 @@ def _discover_roster():
             for row in live
         ):
             live.append(gateway_agent)
+    # Hermes `hermes serve` connections: one agent per profile (design 2.10).
+    try:
+        serve_rows = [] if _pl_owns() else agent_providers.discovery_rows()
+    except Exception as exc:
+        print(f"[agent-providers] serve discovery skipped: {exc}")
+        serve_rows = []
+    if _pl_owns():
+        # OpenClaw and Hermes agents come from the layer (its gateways' agents.list, its Hermes profiles), in the places
+        # 0.10 gave them (OpenClaw first, Hermes after the other providers), so the demo shows the same agents
+        live = [row for row in live if not isinstance(row, dict)
+                or str(row.get("providerKind") or row.get("providerId") or "openclaw") != "openclaw"]
+        layer_rows = provider_layer_ids.roster_rows(skip={str(row.get("id") or "") for row in live})
+        live = [row for row in layer_rows if row.get("providerKind") == "openclaw"] + live
+        hidden = _pl_hidden_hermes()
+        serve_rows = [row for row in layer_rows if row.get("providerKind") != "openclaw" and row.get("id") not in hidden]
+    live_ids = {str(row.get("id") or "") for row in live}
+    live.extend(row for row in serve_rows if str(row.get("id") or "") not in live_ids)
     merged = []
     live_keys = set()
+    live_agent_ids = set()
+    openclaw_discovery_succeeded = any(
+        str(row.get("providerKind") or row.get("providerId") or "openclaw") == "openclaw"
+        for row in live
+        if isinstance(row, dict)
+    )
     for row in live:
         item = dict(row)
+        # Names, emoji and roles come from agent-editable files: keep them plain text.
+        for field, limit in (("name", 60), ("emoji", 16), ("role", 80)):
+            if field in item and item.get(field) is not None:
+                item[field] = clean_display_text(item.get(field), limit)
         provider_kind = str(item.get("providerKind") or item.get("providerId") or "openclaw")
         provider_manifest = manifest_health.get(provider_kind) or {}
         capabilities = provider_manifest.get("capabilities") if isinstance(provider_manifest.get("capabilities"), dict) else {}
         health = provider_manifest.get("health") if isinstance(provider_manifest.get("health"), dict) else {}
         health_authoritative = bool(capabilities.get("health")) and bool(health)
-        provider_connected = (
-            bool(health.get("ok")) and health.get("authOk") is not False
-        ) if health_authoritative else True
-        item["available"] = bool(row.get("available", True)) and provider_connected
-        item["connectionState"] = "connected" if item["available"] else str(health.get("connectionState") or "offline")
+        if item.get("providerTransport") in ("serve", "layer"):
+            # `hermes serve` rows carry their own connection status; the provider manifest
+            # health is the legacy local CLI probe (binary + home), which a serve-only
+            # install never has, so it must not take these agents offline.
+            own_state = str(row.get("connectionState") or "").strip()
+            item["available"] = row.get("available") is not False
+            item["connectionState"] = "connected" if item["available"] else (
+                own_state if own_state and own_state != "connected" else "offline")
+        elif provider_kind == "hermes" and item.get("apiAvailable") and "api" in (item.get("connectionModes") or []):
+            # A Hermes API-server row (0.7.x hermes.connections) is listed only after its API server answered /health
+            # during this discovery, so that answer is its health. The manifest health is the local CLI probe, which an
+            # office without a Hermes CLI (the Docker image ships none) never passes: it must not take these offline.
+            item["available"] = row.get("available") is not False
+            item["connectionState"] = "connected" if item["available"] else "offline"
+        else:
+            provider_connected = (
+                bool(health.get("ok")) and health.get("authOk") is not False
+            ) if health_authoritative else True
+            item["available"] = bool(row.get("available", True)) and provider_connected
+            item["connectionState"] = "connected" if item["available"] else str(health.get("connectionState") or "offline")
         item["lastSeenAt"] = now
         if item["available"]:
             item.pop("offlineSince", None)
@@ -4220,11 +5261,26 @@ def _discover_roster():
             item.setdefault("offlineSince", now)
         merged.append(item)
         live_keys.add(_discovery_agent_key(item))
+        live_agent_ids.add(str(item.get("id") or ""))
     with _DISCOVERY_CACHE_LOCK:
         for cached in _load_discovery_cache():
             if _discovery_agent_key(cached) in live_keys:
                 continue
+            # Never two agents with one id (a switched legacy row now lives on its serve profile),
+            # and serve agents come only from their connection (it keeps its own offline cache).
+            if str(cached.get("id") or "") in live_agent_ids or cached.get("providerTransport") == "serve":
+                continue
+            # OpenClaw's config is authoritative: once live discovery succeeded,
+            # agents deleted outside the office must not return as offline ghosts.
+            # Other providers keep their intentional offline history.
+            # (with the layer, its id map is the authority once read: an agent it no longer lists is gone)
+            layer_read = _pl_owns() and getattr(provider_layer_ids.ids(), "loaded_at", 0) > 0
+            if (openclaw_discovery_succeeded or layer_read) and str(cached.get("providerKind") or cached.get("providerId") or "openclaw") == "openclaw":
+                continue
             item = dict(cached)
+            for field, limit in (("name", 60), ("emoji", 16), ("role", 80)):
+                if field in item and item.get(field) is not None:
+                    item[field] = clean_display_text(item.get(field), limit)
             item["available"] = False
             item["connectionState"] = "offline"
             item.setdefault("offlineSince", now)
@@ -4267,23 +5323,64 @@ def _sync_provider_presence_health(rows, prune=False):
         except Exception:
             pass
 
-_discovered_roster = _discover_roster()
-_discovered_at = time.time()
+def _initial_roster():
+    """Start from the last saved roster so the server can answer at once (BE-08);
+    a background refresh replaces it within seconds. First run discovers inline."""
+    cached = _load_discovery_cache()
+    if cached:
+        return cached, 1.0  # non-zero but stale: first get_roster() refreshes in the background
+    return _discover_roster(), time.time()
+
+
+_discovered_roster, _discovered_at = _initial_roster()
 DISCOVERY_REFRESH_SEC = 30
 _DISCOVERY_REFRESH_LOCK = threading.Lock()
+_DISCOVERY_BACKGROUND = {"running": False}
+_DISCOVERY_BACKGROUND_LOCK = threading.Lock()
+
+
+def _run_discovery_refresh():
+    global _discovered_roster, _discovered_at
+    with _DISCOVERY_REFRESH_LOCK:
+        roster = _discover_roster()
+        _discovered_roster = roster
+        _discovered_at = time.time()
+        _sync_provider_presence_health(roster, prune=True)
+    try:
+        _rebuild_agent_maps()
+    except Exception:
+        traceback.print_exc()
+
+
+def _background_discovery_worker():
+    try:
+        _run_discovery_refresh()
+    except Exception:
+        traceback.print_exc()
+    finally:
+        with _DISCOVERY_BACKGROUND_LOCK:
+            _DISCOVERY_BACKGROUND["running"] = False
+
 
 def _refresh_discovery(force=False):
-    """Refresh the provider-owned roster when stale or explicitly requested."""
-    global _discovered_roster, _discovered_at
-    if not force and time.time() - _discovered_at <= DISCOVERY_REFRESH_SEC:
-        return False
-    with _DISCOVERY_REFRESH_LOCK:
-        if not force and time.time() - _discovered_at <= DISCOVERY_REFRESH_SEC:
-            return False
-        _discovered_roster = _discover_roster()
-        _discovered_at = time.time()
-        _sync_provider_presence_health(_discovered_roster, prune=True)
+    """Refresh the provider-owned roster.
+
+    Stale-while-revalidate (BE-08): when the roster is older than
+    DISCOVERY_REFRESH_SEC a background thread rediscovers and requests keep the
+    cached roster. ``force`` (or ``_discovered_at = 0`` after an agent was created
+    or deleted) refreshes inline so the caller sees the change.
+    """
+    if force or _discovered_at == 0:
+        _run_discovery_refresh()
         return True
+    if time.time() - _discovered_at <= DISCOVERY_REFRESH_SEC:
+        return False
+    with _DISCOVERY_BACKGROUND_LOCK:
+        if _DISCOVERY_BACKGROUND["running"]:
+            return False
+        _DISCOVERY_BACKGROUND["running"] = True
+    threading.Thread(target=_background_discovery_worker, name="roster-refresh", daemon=True).start()
+    return False
 
 def get_roster():
     """Get current discovered agent roster."""
@@ -4434,13 +5531,17 @@ def _patch_default_config_agents(config_str):
 # Color palette used for default config agent patching
 _AGENT_COLORS_LIST = ['#ffd700','#d32f2f','#1976d2','#388e3c','#f9a825','#e65100','#00897b','#7b1fa2','#6d4c41','#5c6bc0','#78909c','#4caf50','#00bcd4','#e91e90','#ff6d00','#795548','#607d8b','#9c27b0','#009688','#ff5722']
 
-def refresh_agent_maps(force_discovery=False):
-    """Refresh discovery when requested, then update compatibility maps."""
+def _rebuild_agent_maps():
     global AGENT_INFO, AGENT_WORKSPACES, AGENT_SESSION_IDS
-    _refresh_discovery(force=force_discovery)
     AGENT_INFO = _build_agent_info()
     AGENT_WORKSPACES = _build_agent_workspaces()
     AGENT_SESSION_IDS = _build_agent_session_ids()
+
+
+def refresh_agent_maps(force_discovery=False):
+    """Refresh discovery when requested, then update compatibility maps."""
+    _refresh_discovery(force=force_discovery)
+    _rebuild_agent_maps()
 
 
 def _agent_display_label(agent_id_or_key):
@@ -4611,6 +5712,10 @@ _TRAJECTORY_THREAD_CACHE = {}
 _TRAJECTORY_THREAD_CACHE_LOCK = threading.Lock()
 _CODEX_COMMENTARY_CACHE = {}
 _CODEX_COMMENTARY_CACHE_LOCK = threading.Lock()
+_TRAJECTORY_CACHE_MAX_RUNS = 500
+_TRAJECTORY_CACHE_MAX_FILES = 64
+_CODEX_COMMENTARY_MAX_MESSAGES = 400
+_CODEX_COMMENTARY_MAX_FILES = 64
 
 
 def _trajectory_run_metadata(trajectory_file):
@@ -4671,7 +5776,13 @@ def _trajectory_run_metadata(trajectory_file):
                 next_offset = stream.tell()
         except OSError:
             return runs
+        if len(runs) > _TRAJECTORY_CACHE_MAX_RUNS:  # BE-33: bounded, keep the most recent runs
+            keep = sorted(runs.items(), key=lambda item: int((item[1] or {}).get("lastMs") or 0))[-_TRAJECTORY_CACHE_MAX_RUNS:]
+            runs = dict(keep)
+        _TRAJECTORY_THREAD_CACHE.pop(trajectory_file, None)
         _TRAJECTORY_THREAD_CACHE[trajectory_file] = {"offset": next_offset, "runs": runs, "version": 2}
+        while len(_TRAJECTORY_THREAD_CACHE) > _TRAJECTORY_CACHE_MAX_FILES:
+            _TRAJECTORY_THREAD_CACHE.pop(next(iter(_TRAJECTORY_THREAD_CACHE)), None)
         return {key: dict(value) for key, value in runs.items()}
 
 
@@ -4780,7 +5891,13 @@ def _codex_rollout_commentary_items(rollout_file, thread_id):
         except OSError:
             return messages
         messages.sort(key=lambda message: message.get("epochMs") or 0)
+        if len(messages) > _CODEX_COMMENTARY_MAX_MESSAGES:  # BE-33: bounded per rollout
+            messages = messages[-_CODEX_COMMENTARY_MAX_MESSAGES:]
+            seen = {message.get("id") for message in messages}
+        _CODEX_COMMENTARY_CACHE.pop(rollout_file, None)
         _CODEX_COMMENTARY_CACHE[rollout_file] = {"offset": next_offset, "messages": messages, "ids": seen}
+        while len(_CODEX_COMMENTARY_CACHE) > _CODEX_COMMENTARY_MAX_FILES:
+            _CODEX_COMMENTARY_CACHE.pop(next(iter(_CODEX_COMMENTARY_CACHE)), None)
         return [dict(message) for message in messages]
 
 
@@ -5535,211 +6652,6 @@ def _codex_tool_stream_key(tool, idx=0):
     return str(tool.get("id") or f"{idx}:{tool.get('name') or 'tool'}:{json.dumps(tool.get('arguments') or {}, sort_keys=True, default=str)[:120]}")
 
 
-def _handle_codex_run_start(body):
-    """Start a Codex message in the background and expose progress over SSE."""
-    message = (body.get("message") or "").strip()
-    agent_key = body.get("agentId") or body.get("key") or body.get("sessionKey") or "codex-default"
-    if not message:
-        return {"ok": False, "error": "message is required", "_status": 400}
-
-    agent = _get_codex_agent(agent_key)
-    if not agent:
-        return {"ok": False, "error": f"Codex agent '{agent_key}' not found", "_status": 404}
-
-    profile = agent.get("profile") or agent.get("providerAgentId") or "default"
-    run_id = f"codex-{int(time.time() * 1000)}-{str(uuid.uuid4())[:8]}"
-    progress_id = f"codex-progress-{run_id}"
-    events = queue.Queue()
-    status_key = agent.get("statusKey") or agent.get("id")
-    meta = {
-        "runId": run_id,
-        "agentId": agent.get("id"),
-        "agentKey": agent_key,
-        "profile": profile,
-        "statusKey": status_key,
-        "events": events,
-        "startedAt": int(time.time() * 1000),
-        "done": False,
-        "result": None,
-    }
-    _remember_codex_stream_run(meta)
-
-    def enqueue(event_name, payload=None):
-        payload = payload if isinstance(payload, dict) else {}
-        payload.setdefault("runId", run_id)
-        payload.setdefault("agentId", agent.get("id") or "")
-        payload.setdefault("profile", profile)
-        try:
-            events.put_nowait({"event": event_name, "data": payload, "ts": int(time.time() * 1000)})
-        except Exception:
-            pass
-
-    def worker():
-        last_reply = ""
-        last_thinking = ""
-        last_approval_id = ""
-        last_token_usage_signature = ""
-        seen_tools = {}
-        enqueue("run.started", {"providerPath": "app-server"})
-
-        def on_progress(run_state):
-            nonlocal last_reply, last_thinking, last_approval_id, last_token_usage_signature
-            run_state = run_state if isinstance(run_state, dict) else {}
-            with CODEX_STREAM_RUNS_LOCK:
-                meta["sessionId"] = run_state.get("threadId") or meta.get("sessionId") or ""
-                meta["turnId"] = run_state.get("turnId") or run_state.get("runId") or meta.get("turnId") or ""
-            gateway_presence.set_provider_event(status_key, "codex", {
-                "event": "turn.stream",
-                "thread_id": run_state.get("threadId") or "",
-                "turn_id": run_state.get("turnId") or run_state.get("runId") or "",
-                "status": run_state.get("status") or "",
-            })
-
-            token_usage = run_state.get("tokenUsage") if isinstance(run_state.get("tokenUsage"), dict) else {}
-            if token_usage:
-                token_usage_signature = json.dumps(token_usage, sort_keys=True, default=str)
-                if token_usage_signature != last_token_usage_signature:
-                    last_token_usage_signature = token_usage_signature
-                    enqueue("session.metrics", _codex_stream_event_payload(run_id, agent, profile, run_state))
-
-            reply = str(run_state.get("reply") or "")
-            if reply and reply != last_reply:
-                delta = reply[len(last_reply):] if reply.startswith(last_reply) else ""
-                last_reply = reply
-                enqueue("message.delta", _codex_stream_event_payload(run_id, agent, profile, run_state, delta=delta))
-
-            thinking = str(run_state.get("thinking") or "")
-            if thinking and thinking != last_thinking:
-                last_thinking = thinking
-                enqueue("reasoning.available", _codex_stream_event_payload(run_id, agent, profile, run_state))
-
-            approval = run_state.get("approval") if isinstance(run_state.get("approval"), dict) else None
-            approval_id = str((approval or {}).get("approval_id") or (approval or {}).get("id") or "")
-            if approval and approval_id and approval_id != last_approval_id:
-                last_approval_id = approval_id
-                enqueue("approval.request", _codex_stream_event_payload(run_id, agent, profile, run_state, approval=approval))
-
-            for idx, tool in enumerate(run_state.get("tools") or []):
-                if not isinstance(tool, dict):
-                    continue
-                key = _codex_tool_stream_key(tool, idx)
-                status = str(tool.get("status") or "").lower()
-                is_terminal = status in {"done", "error", "failed"}
-                prior = seen_tools.get(key)
-                if not prior:
-                    enqueue("tool.started", _codex_stream_event_payload(run_id, agent, profile, run_state, toolCard=tool, toolCallId=key))
-                if is_terminal and (not prior or prior.get("status") != status or prior.get("result") != tool.get("result") or prior.get("error") != tool.get("error")):
-                    event_name = "tool.failed" if status in {"error", "failed"} or tool.get("error") else "tool.completed"
-                    enqueue(event_name, _codex_stream_event_payload(run_id, agent, profile, run_state, toolCard=tool, toolCallId=key))
-                seen_tools[key] = dict(tool)
-
-        run_body = dict(body)
-        run_body["_streamRunId"] = run_id
-        run_body["_streamProgressId"] = progress_id
-        run_body["_onProgress"] = on_progress
-        try:
-            result = _handle_codex_chat(run_body)
-        except Exception as exc:
-            result = {"ok": False, "error": str(exc), "_status": 500}
-        with CODEX_STREAM_RUNS_LOCK:
-            meta["done"] = True
-            meta["result"] = result
-        if result.get("ok"):
-            token_usage = result.get("tokenUsage") if isinstance(result.get("tokenUsage"), dict) else {}
-            enqueue("run.completed", {
-                "runId": run_id,
-                "agentId": agent.get("id") or "",
-                "profile": profile,
-                "sessionId": result.get("sessionId") or _get_codex_session_id(profile) or "",
-                "turnId": result.get("runId") or meta.get("turnId") or "",
-                "reply": result.get("reply") or "",
-                "tools": result.get("tools") or [],
-                "thinking": result.get("thinking") or "",
-                "approval": result.get("approval") if isinstance(result.get("approval"), dict) else None,
-                "tokenUsage": token_usage,
-                "contextUsed": _codex_context_used_from_token_usage(token_usage),
-                "contextWindow": _codex_context_window_from_token_usage(token_usage),
-                "providerPath": result.get("providerPath") or "app-server",
-            })
-        else:
-            token_usage = result.get("tokenUsage") if isinstance(result.get("tokenUsage"), dict) else {}
-            enqueue("run.failed", {
-                "runId": run_id,
-                "agentId": agent.get("id") or "",
-                "profile": profile,
-                "sessionId": result.get("sessionId") or _get_codex_session_id(profile) or "",
-                "turnId": result.get("runId") or meta.get("turnId") or "",
-                "reply": result.get("reply") or "",
-                "tools": result.get("tools") or [],
-                "thinking": result.get("thinking") or "",
-                "approval": result.get("approval") if isinstance(result.get("approval"), dict) else None,
-                "tokenUsage": token_usage,
-                "contextUsed": _codex_context_used_from_token_usage(token_usage),
-                "contextWindow": _codex_context_window_from_token_usage(token_usage),
-                "providerPath": result.get("providerPath") or "app-server",
-                "error": result.get("error") or result.get("reply") or "Codex run failed",
-            })
-        threading.Timer(600, _clear_codex_stream_run, args=(run_id,)).start()
-
-    threading.Thread(target=worker, daemon=True, name=f"codex-run-{run_id}").start()
-    return {
-        "ok": True,
-        "runId": run_id,
-        "providerPath": "app-server",
-        "agent": {"id": agent.get("id"), "name": agent.get("name"), "providerKind": "codex", "profile": profile},
-    }
-
-
-def _handle_codex_run_events(handler, run_id):
-    meta = _get_codex_stream_run(run_id)
-    if not meta:
-        handler.send_response(404)
-        handler.send_header("Content-Type", "text/event-stream")
-        handler.send_header("Cache-Control", "no-cache")
-        handler.send_header("Access-Control-Allow-Origin", "*")
-        handler.end_headers()
-        handler.wfile.write(b"event: run.failed\ndata: {\"error\":\"Codex run not found\"}\n\n")
-        return
-
-    handler.send_response(200)
-    handler.send_header("Content-Type", "text/event-stream")
-    handler.send_header("Cache-Control", "no-cache")
-    handler.send_header("Connection", "keep-alive")
-    handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.end_headers()
-
-    events = meta.get("events")
-    if not isinstance(events, queue.Queue):
-        return
-
-    last_keepalive = time.time()
-    try:
-        while True:
-            try:
-                item = events.get(timeout=0.5)
-            except queue.Empty:
-                if time.time() - last_keepalive >= 10:
-                    handler.wfile.write(b": keepalive\n\n")
-                    handler.wfile.flush()
-                    last_keepalive = time.time()
-                if meta.get("done") and events.empty():
-                    break
-                continue
-
-            event_name = str(item.get("event") or "message")
-            payload = item.get("data") if isinstance(item.get("data"), dict) else {}
-            encoded = json.dumps(payload, ensure_ascii=False, default=str)
-            handler.wfile.write(f"event: {event_name}\ndata: {encoded}\n\n".encode("utf-8"))
-            handler.wfile.flush()
-            if event_name in {"run.completed", "run.failed", "run.cancelled", "run.canceled"}:
-                break
-    except (BrokenPipeError, ConnectionError, OSError):
-        pass
-    finally:
-        if meta.get("done"):
-            _clear_codex_stream_run(run_id)
-
-
 CLAUDE_CODE_STREAM_RUNS_LOCK = threading.Lock()
 CLAUDE_CODE_STREAM_RUNS = {}
 
@@ -5846,10 +6758,13 @@ def _handle_claude_code_run_start(body):
             with CLAUDE_CODE_STREAM_RUNS_LOCK:
                 meta["sessionId"] = run_state.get("sessionId") or run_state.get("threadId") or meta.get("sessionId") or ""
                 meta["turnId"] = run_state.get("runId") or meta.get("turnId") or ""
+            # (presence: this turn's run is the stream's run id, which run.started/run.completed use too; the CLI's own
+            #  run/session id is not a presence run — a run opened under it was never ended and held the agent working)
             gateway_presence.set_provider_event(status_key, "claude-code", {
                 "event": "turn.stream",
                 "session_id": run_state.get("sessionId") or run_state.get("threadId") or "",
-                "run_id": run_state.get("runId") or "",
+                "run_id": run_id,
+                "native_run_id": run_state.get("runId") or "",
                 "status": run_state.get("status") or "",
             })
 
@@ -5933,7 +6848,6 @@ def _handle_claude_code_run_events(handler, run_id):
         handler.send_response(404)
         handler.send_header("Content-Type", "text/event-stream")
         handler.send_header("Cache-Control", "no-cache")
-        handler.send_header("Access-Control-Allow-Origin", "*")
         handler.end_headers()
         handler.wfile.write(b"event: run.failed\ndata: {\"error\":\"Claude Code run not found\"}\n\n")
         return
@@ -5942,7 +6856,6 @@ def _handle_claude_code_run_events(handler, run_id):
     handler.send_header("Content-Type", "text/event-stream")
     handler.send_header("Cache-Control", "no-cache")
     handler.send_header("Connection", "keep-alive")
-    handler.send_header("Access-Control-Allow-Origin", "*")
     handler.end_headers()
 
     events = meta.get("events")
@@ -7229,105 +8142,6 @@ def _handle_hermes_api_chat(agent, profile, delivery_message, original_message, 
     }
 
 
-def _handle_hermes_desktop_chat(agent, profile, delivery_message, timeout):
-    """Run a Hermes turn through Desktop's `hermes serve` TUI-gateway backend."""
-    hermes_cfg = VO_CONFIG.get("hermes", {})
-    desktop_url = agent.get("desktopUrl") or hermes_cfg.get("desktopUrl")
-    if not desktop_url:
-        return {"ok": False, "fallback": True, "error": "Hermes Desktop Backend URL is not configured"}
-
-    client = HermesDesktopBackendClient(
-        base_url=desktop_url,
-        token=hermes_cfg.get("desktopToken"),
-        host_header=hermes_cfg.get("desktopHostHeader"),
-        tcp_host=hermes_cfg.get("desktopTcpHost"),
-        tcp_port=hermes_cfg.get("desktopTcpPort"),
-        timeout_sec=min(int(timeout or hermes_cfg.get("timeoutSec") or 600), 60),
-    )
-    status = client.test(verify_ws=False)
-    if not status.get("ok"):
-        return {"ok": False, "fallback": True, "error": status.get("error") or "Hermes Desktop Backend is not reachable"}
-    if status.get("authRequired"):
-        return {"ok": False, "fallback": True, "error": "Hermes Desktop Backend is reachable but requires dashboard authentication"}
-
-    result = client.send_chat_message(
-        delivery_message,
-        session_id=_get_hermes_session_id(profile),
-        timeout_sec=int(timeout or hermes_cfg.get("timeoutSec") or 600),
-    )
-    result["providerPath"] = "desktop"
-    result["fallback"] = bool((not result.get("ok")) and (not result.get("reply")))
-    return result
-
-
-def _handle_hermes_desktop_run_start(agent, agent_key, profile, body, timeout):
-    """Register a Desktop Backend run that will stream over /api/hermes/runs/<id>/events."""
-    hermes_cfg = VO_CONFIG.get("hermes", {})
-    desktop_url = agent.get("desktopUrl") or hermes_cfg.get("desktopUrl")
-    if not desktop_url:
-        return {"ok": False, "fallback": True, "error": "Hermes Desktop Backend URL is not configured", "_status": 409}
-
-    client = HermesDesktopBackendClient(
-        base_url=desktop_url,
-        token=hermes_cfg.get("desktopToken"),
-        host_header=agent.get("desktopHostHeader") or hermes_cfg.get("desktopHostHeader"),
-        tcp_host=agent.get("desktopTcpHost") or hermes_cfg.get("desktopTcpHost"),
-        tcp_port=agent.get("desktopTcpPort") or hermes_cfg.get("desktopTcpPort"),
-        timeout_sec=min(int(timeout or hermes_cfg.get("timeoutSec") or 600), 60),
-    )
-    status = client.test(verify_ws=True)
-    if not status.get("ok") or not status.get("chatReady"):
-        return {"ok": False, "fallback": True, "error": status.get("error") or "Hermes Desktop Backend WebSocket is not ready", "_status": 409}
-    if status.get("authRequired"):
-        return {"ok": False, "fallback": True, "error": "Hermes Desktop Backend is reachable but requires dashboard authentication", "_status": 409}
-
-    delivery = _build_hermes_delivery_message(agent, agent_key, body.get("message") or "", body)
-    now_ms = int(time.time() * 1000)
-    run_seed = f"{profile}|{agent_key}|{now_ms}|{delivery.get('deliveryMessage') or ''}"
-    run_id = "hermes-desktop-" + hashlib.sha1(run_seed.encode("utf-8")).hexdigest()[:16]
-    agent_id = agent.get("id") or agent_key
-    session_id = _get_hermes_session_id(profile) or ""
-
-    history = _load_hermes_history(profile)
-    history.append({
-        "role": "user",
-        "text": body.get("message") or "",
-        "ts": now_ms,
-        "agentId": agent_id,
-        "from": delivery["senderName"] if delivery["isHumanSource"] else "You",
-        "fromType": delivery["fromType"] or "",
-        "sourceApp": delivery["sourceApp"] if delivery["isHumanSource"] else "",
-        "sourceSurface": delivery["sourceSurface"] if delivery["isHumanSource"] else "",
-        "sourceLabel": delivery["sourceLabel"] if delivery["isHumanSource"] else "",
-        "attachments": delivery["attachments"],
-    })
-    _save_hermes_history(profile, history)
-
-    _remember_hermes_active_run({
-        "runId": run_id,
-        "providerPath": "desktop",
-        "sessionId": session_id,
-        "agentId": agent_id,
-        "agentKey": agent_key,
-        "statusKey": agent.get("statusKey") or agent_id,
-        "profile": profile,
-        "message": body.get("message") or "",
-        "deliveryMessage": delivery["deliveryMessage"],
-        "timeoutSec": timeout,
-        "startedAt": now_ms,
-        "desktopUrl": desktop_url,
-    })
-    gateway_presence.set_provider_event(agent.get("statusKey") or agent_id, "hermes", {"event": "run.started", "run_id": run_id, "providerPath": "desktop"})
-    _publish_hermes_api_progress(profile, agent_id, run_id, tools=[], reasoning_parts=[], reply="")
-    return {
-        "ok": True,
-        "providerPath": "desktop",
-        "runId": run_id,
-        "sessionId": session_id,
-        "agent": {"id": agent_id, "name": agent.get("name"), "providerKind": "hermes", "profile": profile},
-    }
-
-
 def _handle_hermes_run_start(body):
     """Start a run on the selected native Hermes gateway."""
     message = (body.get("message") or "").strip()
@@ -7447,350 +8261,6 @@ def _handle_hermes_run_start(body):
         "sessionKey": f"hermes:{profile}:{session_id}",
         "agent": {"id": agent.get("id"), "name": agent.get("name"), "providerKind": "hermes", "profile": profile, "connectionId": connection_id},
     }
-
-
-def _handle_hermes_desktop_run_events(handler, run_id, meta):
-    """Stream an already-registered Hermes Desktop Backend run to the browser."""
-    profile = meta.get("profile") or "default"
-    agent = _get_hermes_agent(meta.get("agentId") or meta.get("agentKey") or f"hermes-{profile}") or {}
-    agent_id = agent.get("id") or meta.get("agentId") or "hermes-default"
-    status_key = agent.get("statusKey") or meta.get("statusKey") or agent_id
-    session_id = meta.get("sessionId") or _get_hermes_session_id(profile) or ""
-    timeout = int(meta.get("timeoutSec") or VO_CONFIG.get("hermes", {}).get("timeoutSec") or 600)
-    hermes_cfg = VO_CONFIG.get("hermes", {})
-    client = HermesDesktopBackendClient(
-        base_url=meta.get("desktopUrl") or agent.get("desktopUrl") or hermes_cfg.get("desktopUrl"),
-        token=hermes_cfg.get("desktopToken"),
-        host_header=agent.get("desktopHostHeader") or hermes_cfg.get("desktopHostHeader"),
-        tcp_host=agent.get("desktopTcpHost") or hermes_cfg.get("desktopTcpHost"),
-        tcp_port=agent.get("desktopTcpPort") or hermes_cfg.get("desktopTcpPort"),
-        timeout_sec=min(timeout, 60),
-    )
-
-    handler.send_response(200)
-    handler.send_header("Content-Type", "text/event-stream")
-    handler.send_header("Cache-Control", "no-cache")
-    handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.send_header("X-Accel-Buffering", "no")
-    handler.end_headers()
-
-    client_connected = True
-
-    def send_sse(event_name, payload):
-        nonlocal client_connected
-        if not client_connected:
-            return False
-        data = dict(payload or {})
-        data.setdefault("event", event_name)
-        data.setdefault("runId", run_id)
-        data.setdefault("sessionId", session_id)
-        data.setdefault("agentId", agent_id)
-        data.setdefault("profile", profile)
-        data.setdefault("providerPath", "desktop")
-        try:
-            handler.wfile.write(f"event: {event_name}\ndata: {json.dumps(data)}\n\n".encode("utf-8"))
-            handler.wfile.flush()
-            return True
-        except (BrokenPipeError, ConnectionResetError, OSError):
-            client_connected = False
-            return False
-
-    reply = ""
-    reasoning_text = ""
-    tools = []
-    tools_by_id = {}
-    approval = None
-    error_text = ""
-    last_progress_publish = 0.0
-
-    def publish_progress(force=False):
-        nonlocal last_progress_publish
-        now = time.time()
-        if force or now - last_progress_publish >= 0.25:
-            _publish_hermes_api_progress(profile, agent_id, run_id, tools=tools, reasoning_parts=[reasoning_text] if reasoning_text else [], reply=reply)
-            last_progress_publish = now
-
-    def upsert_tool(card):
-        if not isinstance(card, dict):
-            return None
-        tool_id = str(card.get("id") or f"{run_id}:tool:{len(tools) + 1}")
-        card["id"] = tool_id
-        existing = tools_by_id.get(tool_id)
-        if existing:
-            existing.update(card)
-            return existing
-        tools_by_id[tool_id] = card
-        tools.append(card)
-        return card
-
-    def handle_desktop_event(event_name, payload):
-        nonlocal reply, reasoning_text
-        payload = dict(payload or {})
-        payload["providerPath"] = "desktop"
-        payload["agentId"] = agent_id
-        payload["profile"] = profile
-        payload["runId"] = run_id
-        gateway_presence.set_provider_event(status_key, "hermes", {**payload, "event": event_name, "run_id": run_id})
-
-        if event_name == "message.delta":
-            reply = str(payload.get("reply") or (reply + str(payload.get("delta") or "")))
-            payload["reply"] = reply
-        elif event_name == "reasoning.available":
-            reasoning_text = str(payload.get("thinking") or payload.get("text") or reasoning_text)
-            payload["thinking"] = reasoning_text
-        elif event_name in {"tool.started", "tool.completed", "tool.failed"}:
-            card = upsert_tool(payload.get("toolCard") if isinstance(payload.get("toolCard"), dict) else {})
-            if card:
-                payload["toolCard"] = card
-        publish_progress(force=event_name != "message.delta")
-        send_sse(event_name, payload)
-
-    def finalize_history(ok=False):
-        final_ts = int(time.time() * 1000)
-        tool_messages = _hermes_tool_activity_messages(
-            tools,
-            agent_id=agent_id,
-            run_id=run_id,
-            base_ts=final_ts,
-            coerce_complete=bool(ok) and not approval,
-        )
-        final_message = {
-            "role": "assistant",
-            "text": reply,
-            "ts": final_ts + len(tools),
-            "agentId": agent_id,
-            "exitCode": 0 if ok else 1,
-            "sessionId": session_id,
-            "runId": run_id,
-            "tools": [],
-            "thinking": "" if reasoning_text.strip() == reply.strip() else reasoning_text,
-            "reasoningTokens": 0,
-            "approval": approval,
-            "error": error_text or None,
-        }
-        _update_hermes_session_history(
-            profile,
-            session_id,
-            lambda history: _remove_hermes_progress_messages(history) + tool_messages + [final_message],
-        )
-        _clear_hermes_active_run(run_id)
-
-    send_sse("run.started", {"ok": True})
-    publish_progress(force=True)
-
-    result = None
-    try:
-        result = client.send_chat_message(
-            meta.get("deliveryMessage") or meta.get("message") or "",
-            session_id=session_id,
-            timeout_sec=timeout,
-            on_event=handle_desktop_event,
-            run_id=run_id,
-        )
-    except Exception as exc:
-        result = {"ok": False, "error": str(exc), "reply": reply, "tools": tools, "thinking": reasoning_text}
-
-    if result.get("sessionId"):
-        session_id = result.get("sessionId")
-        _set_hermes_session_id(profile, session_id)
-    reply = result.get("reply") or reply
-    reasoning_text = result.get("thinking") or reasoning_text
-    if result.get("tools"):
-        for item in result.get("tools") or []:
-            upsert_tool(item)
-    error_text = result.get("error") or result.get("stderr") or error_text
-    ok = bool(result.get("ok"))
-    terminal_event = "run.completed" if ok else "run.failed"
-    terminal_payload = {
-        "ok": ok,
-        "reply": reply,
-        "tools": tools,
-        "thinking": "" if reasoning_text.strip() == reply.strip() else reasoning_text,
-        "error": None if ok else (error_text or "Hermes Desktop Backend run failed"),
-    }
-    gateway_presence.set_provider_event(status_key, "hermes", {"event": terminal_event, "run_id": run_id, "error": terminal_payload.get("error") or ""})
-    publish_progress(force=True)
-    send_sse(terminal_event, terminal_payload)
-    finalize_history(ok=ok)
-
-
-def _handle_hermes_run_events(handler, run_id):
-    """Proxy Hermes' native run SSE stream to the browser and persist final history."""
-    meta = _get_hermes_active_run(run_id)
-    if not meta:
-        handler.send_response(404)
-        handler.send_header("Content-Type", "application/json")
-        handler.send_header("Access-Control-Allow-Origin", "*")
-        handler.end_headers()
-        handler.wfile.write(json.dumps({"ok": False, "error": f"Hermes run '{run_id}' not found"}).encode())
-        return
-    profile = meta.get("profile") or "default"
-    agent = _get_hermes_agent(meta.get("agentId") or meta.get("agentKey") or f"hermes-{profile}") or {}
-    agent_id = agent.get("id") or meta.get("agentId") or "hermes-default"
-    status_key = agent.get("statusKey") or meta.get("statusKey") or agent_id
-    session_id = meta.get("sessionId") or _get_hermes_session_id(profile) or ""
-    original_message = meta.get("message") or ""
-    timeout = int(meta.get("timeoutSec") or VO_CONFIG.get("hermes", {}).get("timeoutSec") or 600)
-    client = _hermes_api_client_for_profile(profile)
-
-    handler.send_response(200)
-    handler.send_header("Content-Type", "text/event-stream")
-    handler.send_header("Cache-Control", "no-cache")
-    handler.send_header("Access-Control-Allow-Origin", "*")
-    handler.send_header("X-Accel-Buffering", "no")
-    handler.end_headers()
-
-    client_connected = True
-
-    def send_sse(event_name, payload):
-        nonlocal client_connected
-        if not client_connected:
-            return False
-        data = dict(payload or {})
-        data.setdefault("event", event_name)
-        data.setdefault("runId", run_id)
-        data.setdefault("sessionId", session_id)
-        try:
-            handler.wfile.write(f"event: {event_name}\ndata: {json.dumps(data)}\n\n".encode("utf-8"))
-            handler.wfile.flush()
-            return True
-        except (BrokenPipeError, ConnectionResetError, OSError):
-            client_connected = False
-            return False
-
-    reply = ""
-    reasoning_parts = []
-    tools = []
-    started_tools = {}
-    started_tool_keys = {}
-    tool_seq = 0
-    approval = None
-    terminal_event = None
-    error_text = ""
-    last_progress_publish = 0.0
-
-    def publish_progress(force=False):
-        nonlocal last_progress_publish
-        now = time.time()
-        if force or now - last_progress_publish >= 0.25:
-            _publish_hermes_api_progress(profile, agent_id, run_id, tools=tools, reasoning_parts=reasoning_parts, reply=reply)
-            last_progress_publish = now
-
-    def finalize_history(ok=False):
-        final_ts = int(time.time() * 1000)
-        tool_messages = _hermes_tool_activity_messages(
-            tools,
-            agent_id=agent_id,
-            run_id=run_id,
-            base_ts=final_ts,
-            coerce_complete=bool(ok) and not approval,
-        )
-        final_message = {
-            "role": "assistant",
-            "text": reply,
-            "ts": final_ts + len(tools),
-            "agentId": agent_id,
-            "exitCode": 0 if ok else 1,
-            "sessionId": session_id,
-            "runId": run_id,
-            "tools": [],
-            "thinking": "" if "\n\n".join(reasoning_parts).strip() == reply.strip() else "\n\n".join(reasoning_parts),
-            "reasoningTokens": 0,
-            "approval": approval,
-            "error": error_text or None,
-        }
-        _update_hermes_session_history(
-            profile,
-            session_id,
-            lambda history: _remove_hermes_progress_messages(history) + tool_messages + [final_message],
-        )
-        _clear_hermes_active_run(run_id)
-
-    send_sse("run.started", {"ok": True, "agentId": agent_id, "profile": profile})
-    publish_progress(force=True)
-
-    try:
-        for event in client.stream_run_events(run_id, timeout_sec=timeout + 30):
-            gateway_presence.set_provider_event(status_key, "hermes", event)
-            event_name = str(event.get("event") or "").lower() or "event"
-            payload = {**event, "agentId": agent_id, "profile": profile}
-            if event_name == "message.delta":
-                delta = str(event.get("delta") or "")
-                reply += delta
-                payload["reply"] = reply
-                publish_progress()
-            elif event_name == "reasoning.available":
-                text = str(event.get("text") or "")
-                if text:
-                    reasoning_parts.append(text)
-                    payload["thinking"] = "\n\n".join(reasoning_parts)
-                    publish_progress(force=True)
-            elif event_name == "tool.started":
-                tool_seq += 1
-                fallback_id = f"{run_id}:tool:{tool_seq}"
-                card = _hermes_event_tool_card(event, "running", fallback_id=fallback_id)
-                event_tool_key = f"{event.get('tool') or event.get('name') or 'tool'}:{event.get('preview') or event.get('label') or ''}"
-                started_tool_keys[event_tool_key] = card["id"]
-                started_tools[card["id"]] = card
-                tools.append(card)
-                payload["toolCard"] = card
-                publish_progress(force=True)
-            elif event_name in {"tool.completed", "tool.failed"}:
-                event_tool_key = f"{event.get('tool') or event.get('name') or 'tool'}:{event.get('preview') or event.get('label') or ''}"
-                fallback_id = started_tool_keys.get(event_tool_key)
-                if not fallback_id:
-                    matching_id = next((tid for tid, item in reversed(list(started_tools.items())) if item.get("name") == (event.get("tool") or event.get("name"))), "")
-                    fallback_id = matching_id or f"{run_id}:tool:{len(started_tools) + 1}"
-                card = _hermes_event_tool_card(event, "done" if event_name == "tool.completed" else "error", fallback_id=fallback_id)
-                if card["id"] in started_tools:
-                    started_tools[card["id"]].update(_merge_hermes_tool_card(started_tools[card["id"]], card))
-                    card = started_tools[card["id"]]
-                else:
-                    tools.append(card)
-                payload["toolCard"] = card
-                publish_progress(force=True)
-            elif event_name == "approval.request":
-                approval = _remember_hermes_approval_pending(
-                    _hermes_api_approval_from_event(event, agent_id=agent_id, profile=profile, session_id=session_id, original_message=original_message),
-                    agent_id=agent_id,
-                    profile=profile,
-                    session_id=session_id,
-                )
-                payload["approval"] = approval
-                publish_progress(force=True)
-            elif event_name in {"run.completed", "run.failed", "run.cancelled", "run.canceled"}:
-                terminal_event = event
-                if event.get("output"):
-                    reply = str(event.get("output") or reply)
-                if event.get("error"):
-                    error_text = str(event.get("error") or "")
-                if event_name == "run.completed":
-                    approval = None
-                payload.update({
-                    "reply": reply,
-                    "tools": tools,
-                    "approval": approval,
-                    "error": error_text or None,
-                })
-                publish_progress(force=True)
-                send_sse(event_name, payload)
-                break
-            send_sse(event_name, payload)
-    except Exception as exc:
-        error_text = str(exc)
-        terminal_event = {"event": "run.failed", "error": error_text}
-        gateway_presence.set_provider_event(status_key, "hermes", {"event": "run.failed", "run_id": run_id, "error": error_text})
-        send_sse("run.failed", {"ok": False, "error": error_text, "reply": reply, "tools": tools})
-
-    terminal_name = str((terminal_event or {}).get("event") or "").lower()
-    ok = terminal_name == "run.completed"
-    if approval:
-        ok = False
-        error_text = error_text or "Hermes is waiting for approval."
-    elif terminal_name in {"run.failed", "run.cancelled", "run.canceled"}:
-        ok = False
-        error_text = error_text or terminal_name.replace("run.", "Hermes run ")
-    finalize_history(ok=ok)
 
 
 def _monitor_hermes_native_run(run_id):
@@ -8341,32 +8811,20 @@ def _handle_codex_chat(body):
         return {"ok": False, "error": str(e), "_status": 500}
 
 
-def _handle_codex_interrupt(body):
-    agent_key = body.get("agentId") or body.get("key") or body.get("sessionKey") or "codex-default"
-    agent = _get_codex_agent(agent_key)
-    if not agent:
-        return {"ok": False, "error": f"Codex agent '{agent_key}' not found", "_status": 404}
-    profile = agent.get("profile") or agent.get("providerAgentId") or "default"
-    result = _codex_provider().interrupt(profile)
-    if result.get("ok"):
-        history = _load_codex_history(profile)
-        history.append({
-            "role": "assistant",
-            "text": "",
-            "ts": int(time.time() * 1000),
-            "agentId": agent.get("id"),
-            "ephemeral": "codex-progress",
-            "progressId": f"codex-interrupt-{int(time.time() * 1000)}",
-            "sessionId": result.get("threadId") or _get_codex_session_id(profile),
-            "runId": result.get("turnId") or "",
-            "tools": [],
-            "thinking": "Stop requested. Waiting for Codex to interrupt the active turn.",
-            "reasoningTokens": 0,
-        })
-        _save_codex_history(profile, history)
-    else:
-        result["_status"] = 409
-    return result
+def _codex_profile_run_active(profile):
+    now_ms = time.time() * 1000
+    with CODEX_ACTIVE_RUNS_LOCK:
+        metas = [m for m in CODEX_ACTIVE_RUNS.values() if isinstance(m, dict) and m.get("profile") == profile]
+    for meta in metas:
+        run = meta.get("run")
+        state = getattr(run, "state", None)
+        if run is None or getattr(run, "_closed", False) or getattr(state, "completed", True):
+            continue
+        limit_ms = (int(meta.get("timeoutSec") or 900) + 60) * 1000
+        if now_ms - float(meta.get("startedAt") or 0) > limit_ms:
+            continue
+        return True
+    return False
 
 
 def _remember_codex_active_run(meta):
@@ -8499,11 +8957,18 @@ def _handle_codex_run_start(body):
     if not provider:
         return {"ok": False, "error": "Codex provider module unavailable", "_status": 503}
     if not getattr(provider, "prefer_app_server", False):
-        return {"ok": False, "fallback": True, "error": "Codex app-server streaming is disabled by configuration", "_status": 409}
+        # (exec mode, codex.preferAppServer off: not a conflict but "use /api/codex/chat"; a 200 the chat window
+        # follows at once, so no turn logs a console 409)
+        return {"ok": False, "fallback": True, "mode": "exec",
+                "error": "Codex app-server streaming is disabled by configuration", "_status": 200}
 
     codex_cfg = VO_CONFIG.get("codex", {})
     timeout = int(body.get("timeoutSec") or codex_cfg.get("timeoutSec") or 900)
     profile = agent.get("profile") or agent.get("providerAgentId") or "main"
+    if _codex_profile_run_active(profile):
+        # BE-30: one turn per agent so Stop and approvals reach the right run.
+        return {"ok": False, "error": "This Codex agent is already working on a message. Wait for it or press Stop.",
+                "code": "run_active", "_status": 409}
     delivery = _build_codex_delivery_message(agent, agent_key, message, body)
     requested_session_id = str(body.get("sessionId") or body.get("session_id") or "").strip()
     pending_session_id = _pending_provider_session_id(body, "codex")
@@ -8711,11 +9176,33 @@ def msg_matches_ephemeral(msg, marker):
     return isinstance(msg, dict) and msg.get("ephemeral") == marker
 
 
-def _handle_codex_test(body=None):
-    cfg = dict(VO_CONFIG.get("codex", {}))
+# Settings keys that name a program the server would execute. Tests and draft
+# tests always take these from the saved config, never from a request (CH-04/CH-36).
+_EXECUTABLE_SETTING_KEYS = frozenset({"binary"})
+
+
+def _cli_test_config(config_key, body=None):
+    cfg = dict(VO_CONFIG.get(config_key, {}) or {})
     if isinstance(body, dict):
-        cfg.update({k: v for k, v in body.items() if v is not None})
-    result = CodexProvider(
+        cfg.update({k: v for k, v in body.items() if v is not None and k not in _EXECUTABLE_SETTING_KEYS})
+    return cfg
+
+
+def _cli_test_answer(config_key, body, provider):
+    """A CLI test's answer, saying which program it ran and, when the form named another one that is not saved yet,
+    that one (a test never runs an unsaved executable, CH-04: the form says to save it first)."""
+    result = provider.test()
+    typed = str((body or {}).get("binary") or "").strip() if isinstance(body, dict) else ""
+    saved = str((VO_CONFIG.get(config_key) or {}).get("binary") or "").strip()
+    if isinstance(result, dict) and typed and os.path.expanduser(typed) not in (saved, os.path.expanduser(saved), provider.binary):
+        result["unsavedBinary"] = typed
+        result["testedBinary"] = provider.binary
+    return result
+
+
+def _handle_codex_test(body=None):
+    cfg = _cli_test_config("codex", body)
+    provider = CodexProvider(
         home_path=cfg.get("homePath"),
         binary=cfg.get("binary"),
         workspace_root=cfg.get("workspaceRoot"),
@@ -8729,8 +9216,8 @@ def _handle_codex_test(body=None):
         include_main=cfg.get("includeMain", True),
         include_native_agents=cfg.get("includeNativeAgents", True),
         register_native_agents=cfg.get("registerNativeAgents", True),
-    ).test()
-    return result
+    )
+    return _cli_test_answer("codex", body, provider)
 
 
 def _handle_claude_code_chat(body):
@@ -8810,7 +9297,12 @@ def _handle_claude_code_chat(body):
         if agent_model and agent_model != "inherit":
             provider.model = agent_model
         requested_permission_mode = str(body.get("permissionMode") or body.get("claudePermissionMode") or "").strip()
-        if requested_permission_mode in {"default", "acceptEdits", "auto", "dontAsk", "plan", "bypassPermissions"}:
+        # A request may only narrow what the owner configured, never widen it
+        # (no "bypassPermissions" from a chat request, BE-01/CH-04).
+        _perm_rank = {"plan": 0, "default": 1, "acceptEdits": 2, "auto": 3, "dontAsk": 3, "bypassPermissions": 4}
+        configured_mode = str(provider.permission_mode or "acceptEdits")
+        if (requested_permission_mode in _perm_rank
+                and _perm_rank[requested_permission_mode] <= _perm_rank.get(configured_mode, 2)):
             provider.permission_mode = requested_permission_mode
         session_id = "" if origin_session_id.startswith("@new:") else origin_session_id
         status_key = agent.get("statusKey") or agent.get("id")
@@ -8967,10 +9459,8 @@ def _handle_claude_code_interrupt(body):
 
 
 def _handle_claude_code_test(body=None):
-    cfg = dict(VO_CONFIG.get("claudeCode", {}))
-    if isinstance(body, dict):
-        cfg.update({k: v for k, v in body.items() if v is not None})
-    return ClaudeCodeProvider(
+    cfg = _cli_test_config("claudeCode", body)
+    provider = ClaudeCodeProvider(
         home_path=cfg.get("homePath"),
         binary=cfg.get("binary"),
         workspace_root=cfg.get("workspaceRoot"),
@@ -8982,7 +9472,8 @@ def _handle_claude_code_test(body=None):
         include_main=cfg.get("includeMain", True),
         include_native_agents=cfg.get("includeNativeAgents", True),
         register_native_agents=cfg.get("registerNativeAgents", True),
-    ).test()
+    )
+    return _cli_test_answer("claudeCode", body, provider)
 
 
 def _handle_hermes_approval_respond(body):
@@ -9100,41 +9591,6 @@ def _test_hermes_api(api_url=None, api_key=None):
     return result
 
 
-def _test_hermes_desktop(desktop_url=None, desktop_token=None, desktop_host_header=None, desktop_tcp_host=None, desktop_tcp_port=None):
-    client = HermesDesktopBackendClient(
-        base_url=desktop_url,
-        token=desktop_token,
-        host_header=desktop_host_header,
-        tcp_host=desktop_tcp_host,
-        tcp_port=desktop_tcp_port,
-        timeout_sec=min(int(VO_CONFIG.get("hermes", {}).get("timeoutSec") or 600), 10),
-    )
-    return client.test(verify_ws=True)
-
-
-def _handle_hermes_desktop_discover(body=None):
-    """Auto-discover the optional Hermes Desktop Backend connection point."""
-    body = body or {}
-    hermes_cfg = VO_CONFIG.get("hermes", {})
-    result = discover_desktop_backend(
-        hermes_home=body.get("homePath") or hermes_cfg.get("homePath"),
-        desktop_url=body.get("desktopUrl") or hermes_cfg.get("desktopUrl"),
-        desktop_token=body.get("desktopToken") or hermes_cfg.get("desktopToken") or "",
-        desktop_host_header=body.get("desktopHostHeader") or hermes_cfg.get("desktopHostHeader") or "",
-        desktop_tcp_host=body.get("desktopTcpHost") or hermes_cfg.get("desktopTcpHost") or "",
-        desktop_tcp_port=body.get("desktopTcpPort") or hermes_cfg.get("desktopTcpPort") or "",
-        desktop_log_path=body.get("desktopLogPath") or hermes_cfg.get("desktopLogPath") or "",
-        timeout_sec=min(int(hermes_cfg.get("timeoutSec") or 600), 3),
-    )
-    if result.get("ok"):
-        result["message"] = "Hermes Desktop Backend discovered and connected."
-    elif result.get("found"):
-        result["message"] = "Hermes Desktop Backend was found, but the route is not reachable from this server yet."
-    else:
-        result["message"] = result.get("error") or "Hermes Desktop Backend was not found."
-    return result
-
-
 def _handle_hermes_test(body=None):
     """Test configured native Hermes API gateway connections."""
     body = body or {}
@@ -9152,8 +9608,21 @@ def _handle_hermes_test(body=None):
     saved_by_id = {str(item.get("id") or ""): item for item in configured if isinstance(item, dict)}
     for item in connections:
         saved = saved_by_id.get(str(item.get("id") or "")) or {}
+        # BE-10: only reuse a saved key for the very URL it was saved with, so a
+        # test request can never send the key to an address of its choosing.
         if not item.get("apiKey") and saved.get("apiKey"):
-            item["apiKey"] = saved.get("apiKey")
+            requested_url = str(item.get("apiUrl") or item.get("url") or "").strip().rstrip("/")
+            saved_url = str(saved.get("apiUrl") or saved.get("url") or "").strip().rstrip("/")
+            def _norm(url):
+                try:
+                    return normalize_endpoint_url(url, ("http", "https")).lower()
+                except ValueError:
+                    return ""
+            if requested_url and saved_url and _norm(requested_url) and _norm(requested_url) == _norm(saved_url):
+                item["apiKey"] = saved.get("apiKey")
+            elif not requested_url:
+                item["apiUrl"] = saved_url
+                item["apiKey"] = saved.get("apiKey")
 
     connection_statuses = []
     for index, connection in enumerate(connections):
@@ -9203,7 +9672,7 @@ def _handle_hermes_test(body=None):
 def _handle_agent_platforms():
     """Return manifest-driven agent providers for creator/editor UIs."""
     platforms = []
-    for item in _get_provider_registry().manifests(include_health=True):
+    for item in _registry_health_manifests(_get_provider_registry()):
         capabilities = item.get("capabilities") or {}
         health = item.pop("health", {}) or {}
         installed = bool(
@@ -9314,7 +9783,7 @@ def _sanitize_provider_setting_value(field, value):
 
 def _provider_settings_payload(provider_id=""):
     rows = []
-    manifests = _get_provider_registry().manifests(include_health=True)
+    manifests = _registry_health_manifests(_get_provider_registry())
     for item in manifests:
         if provider_id and item.get("id") != provider_id:
             continue
@@ -9348,6 +9817,11 @@ def _validate_provider_setting(field, value, existing=None, path="setting"):
             raise ValueError(f"{path} must be true or false")
         return value
     if field_type == "number":
+        if value is None or value == "":
+            # CH-35: a blank number keeps the saved value (or the default), never 0.
+            if required:
+                raise ValueError(f"{path} is required")
+            return existing if isinstance(existing, (int, float)) and not isinstance(existing, bool) else field.get("default")
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"{path} must be a number")
         minimum = field.get("min")
@@ -9374,7 +9848,8 @@ def _validate_provider_setting(field, value, existing=None, path="setting"):
                 raise ValueError(f"{path} contains duplicate connection id '{row_id}'")
             if row_id:
                 seen.add(row_id)
-            old_row = existing_by_id.get(row_id) or {}
+            # CH-35: a renamed connection keeps its saved secrets (client sends originalId).
+            old_row = existing_by_id.get(row_id) or existing_by_id.get(str(row.get("originalId") or "")) or {}
             clean = {}
             for child in field.get("itemFields") or []:
                 if not isinstance(child, dict) or not child.get("key"):
@@ -9424,8 +9899,78 @@ def _reload_provider_settings_runtime():
     new_gateway_token = _get_gateway_token()
     if GATEWAY_URL != old_gateway_url or new_gateway_token != old_gateway_token:
         gateway_presence.stop()
-        if new_gateway_token:
+        if new_gateway_token and not _pl_owns():
             gateway_presence.start(GATEWAY_URL, new_gateway_token, port=PORT, client_version=_get_openclaw_version())
+    if new_gateway_token:
+        _pl_adopt_saved_gateway_soon()   # (idempotent: the layer takes it only while it has no OpenClaw connection)
+
+
+def _pl_adopt_saved_gateway():
+    """(layer on) The office's saved OpenClaw gateway (setup wizard, Settings, a token read from openclaw.json) becomes
+    the layer's OpenClaw connection while the layer has none yet (vo-migrate.mjs adoptOpenClaw; idempotent)."""
+    if not _pl_owns() or PROVIDER_LAYER is None:
+        return None
+    url, token = _read_gateway_config()
+    return provider_layer_gateway.adopt_saved_gateway(PROVIDER_LAYER, url, token)
+
+
+def _pl_gateway_test(wait_s=10.0):
+    """The setup wizard's gateway test while the layer owns OpenClaw: the saved gateway handed to the layer (when it has
+    no OpenClaw connection yet), then the layer's connection as the wizard shows it (same fields as 0.10's test)."""
+    _url, token = _read_gateway_config()
+    if not token:
+        return {"ok": False, "gateway": "not set up", "token": False, "error": "The gateway token is not set"}
+    adopted = _pl_adopt_saved_gateway()
+    client = _get_openclaw_gateway_client()
+    deadline = time.time() + wait_s
+    while True:
+        st = client.status(fresh=True) if isinstance(client, provider_layer_gateway.LayerGatewayClient) else client.status()
+        if st.get("connected") or st.get("state") in ("pairing", "not_configured") or time.time() >= deadline:
+            break
+        time.sleep(0.5)
+    out = {"via": "layer", **({"adopted": True} if adopted and adopted.get("adopted") else {})}
+    if st.get("connected"):
+        res = _gateway_rpc_call("agents.list", {}, timeout=10)
+        agents = res.get("agents") if isinstance(res.get("agents"), list) else []
+        return dict(out, ok=True, gateway="reachable", token=True, permission=True, agents=len(agents))
+    if st.get("state") == "pairing":
+        return dict(out, ok=True, gateway="reachable", token=True, permission=False,
+                    detail=st.get("detail") or "Waiting for approval in OpenClaw.", fix=st.get("fix") or "", agents=0)
+    if st.get("state") == "not_configured":
+        return dict(out, ok=False, gateway="not set up", token=True,
+                    error="No OpenClaw connection in Agent Providers yet: add one there, or check the gateway address.")
+    return dict(out, ok=False, gateway="unreachable", token=True,
+                error=st.get("detail") or st.get("lastError") or "The gateway is not answering", fix=st.get("fix") or "")
+
+
+def _setup_openclaw_folder():
+    """The setup wizard's Detect while the layer owns OpenClaw: the office's agent list comes from the gateway, so the
+    saved OpenClaw folder is checked on its own: whether it holds openclaw.json and which agents that file lists (ids,
+    names and emoji only; never a setting or a secret)."""
+    import discovery as _discovery
+    home = str(WORKSPACE_BASE or "")
+    path = os.path.join(os.path.expanduser(home), "openclaw.json") if home else ""
+    out = {"ok": True, "path": home, "found": bool(path) and os.path.isfile(path), "readable": False, "agents": [],
+           "layer": bool(_pl_owns())}
+    if out["found"]:
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                cfg = json.load(handle)
+            out["readable"] = True
+            for row in _discovery.openclaw_config_agents(cfg)[:100]:
+                ident = row.get("identity") if isinstance(row.get("identity"), dict) else {}
+                aid = clean_display_text(row.get("id"))
+                if aid:
+                    out["agents"].append({"id": aid, "name": clean_display_text(row.get("name") or ident.get("name") or aid),
+                                          "emoji": clean_display_text(row.get("emoji") or ident.get("emoji") or "", 8)})
+        except (OSError, ValueError, AttributeError, TypeError):
+            pass
+    return out
+
+
+def _pl_adopt_saved_gateway_soon():
+    if _pl_owns() and PROVIDER_LAYER is not None:
+        threading.Thread(target=_pl_adopt_saved_gateway, name="pl-adopt-gateway", daemon=True).start()
 
 
 def _save_provider_settings(body):
@@ -9435,6 +9980,10 @@ def _save_provider_settings(body):
         return {"ok": False, "error": f"Unknown provider settings schema: {provider_id}", "_status": 404}
     manifest, schema, config_key = resolved
     incoming = body.get("values") if isinstance(body.get("values"), dict) else {}
+    if config_key == "hermes" and isinstance(incoming.get("connections"), list):
+        # `hermes serve` rows belong to Agent Providers (agent-providers.json): never taken in here.
+        incoming = dict(incoming, connections=[row for row in incoming["connections"]
+                                               if not agent_providers.is_serve_row(row)])
     fields = _provider_settings_field_map(schema)
     unknown = sorted(set(incoming) - set(fields))
     if unknown:
@@ -9444,15 +9993,19 @@ def _save_provider_settings(body):
     persistent_path = os.path.join(data_dir, "vo-config.json")
     if os.path.isdir(data_dir):
         cfg_path = persistent_path
+    cfg_lock = _json_file_lock(cfg_path)
+    cfg_lock.acquire()
     try:
-        existing_root = {}
-        for try_path in (cfg_path, os.path.join(os.path.dirname(__file__), "vo-config.json")):
+        # Only a missing file falls back to the bundled default (BE-19).
+        try:
+            existing_root = _read_json_state(cfg_path, default=None)
+        except JsonStateError as exc:
+            return {"ok": False, "error": f"Settings were not saved: {exc}", "_status": 409}
+        if existing_root is None:
             try:
-                with open(try_path, "r", encoding="utf-8") as handle:
-                    existing_root = json.load(handle)
-                break
-            except (FileNotFoundError, json.JSONDecodeError, OSError):
-                continue
+                existing_root = _read_json_state(os.path.join(os.path.dirname(__file__), "vo-config.json"), default={})
+            except JsonStateError:
+                existing_root = {}
         existing_cfg = existing_root.get(config_key) if isinstance(existing_root.get(config_key), dict) else {}
         clean_cfg = dict(existing_cfg)
         for key, field in fields.items():
@@ -9461,10 +10014,12 @@ def _save_provider_settings(body):
             clean_cfg[key] = _validate_provider_setting(field, incoming[key], existing_cfg.get(key), key)
         if config_key == "hermes" and isinstance(clean_cfg.get("connections"), list):
             clean_cfg["connections"] = _normalize_hermes_connections({"connections": clean_cfg["connections"]})
+        # (a blank value, a secret left blank included, keeps what is set: the environment's stays in charge)
+        _note_settings_changes(existing_root, {config_key: {
+            key: clean_cfg[key] for key in incoming if key in clean_cfg and incoming[key] not in (None, "")}})
         existing_root[config_key] = clean_cfg
         existing_root["_setupComplete"] = True
-        os.makedirs(os.path.dirname(cfg_path), exist_ok=True)
-        _atomic_write_text(cfg_path, json.dumps(existing_root, indent=2))
+        _write_json_atomic(cfg_path, existing_root, mode=0o600)
         _reload_provider_settings_runtime()
         payload = _provider_settings_payload(provider_id)
         return {"ok": True, "provider": (payload.get("providers") or [{}])[0]}
@@ -9473,6 +10028,202 @@ def _save_provider_settings(body):
     except Exception as exc:
         traceback.print_exc()
         return {"ok": False, "error": str(exc), "_status": 500}
+    finally:
+        cfg_lock.release()
+
+
+# ─── Test without saving (CH-36) ─────────────────────────────────
+_PROBE_TIMEOUT_SEC = 3.0
+_PROBE_MAX_BYTES = 256 * 1024
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Probes answer for the address they were given; a redirect is reported, not followed."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _probe_address_error(url):
+    """'' when the server may dial this test address, else a readable reason.
+
+    Same rule as saved helper URLs (BE-11: plain http(s), no credentials), plus
+    no link-local, multicast or reserved targets (cloud metadata lives at
+    169.254.169.254). Loopback and LAN stay allowed: local browsers and metrics
+    helpers normally live there."""
+    import ipaddress
+    import socket
+
+    parsed = urllib.parse.urlparse(str(url or "").strip())
+    host = parsed.hostname
+    if not host:
+        return "The address has no host name."
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or None, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError, ValueError):
+        return f"Could not find the host {host}."
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])
+        except ValueError:
+            return "The host resolved to an address that is not allowed."
+        mapped = getattr(ip, "ipv4_mapped", None)
+        ip = mapped or ip
+        if ip.is_link_local or ip.is_multicast or ip.is_unspecified or ip.is_reserved:
+            return "That address is not allowed (link-local or reserved range)."
+    return ""
+
+
+def _probe_url(url, path_suffix=""):
+    """GET a helper address without saving it. Returns (status, body_bytes, error)."""
+    clean = _safe_helper_url(url)
+    if not clean:
+        return 0, b"", "Use a plain http:// or https:// address without a user name or password."
+    target = clean.rstrip("/") + path_suffix if path_suffix else clean
+    reason = _probe_address_error(target)
+    if reason:
+        return 0, b"", reason
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    request = urllib.request.Request(target, headers={"User-Agent": "VirtualOffice-probe", "Accept": "application/json"})
+    try:
+        with opener.open(request, timeout=_PROBE_TIMEOUT_SEC) as resp:
+            return int(resp.status or 200), resp.read(_PROBE_MAX_BYTES), ""
+    except urllib.error.HTTPError as exc:
+        return int(exc.code), b"", f"The address answered HTTP {exc.code}."
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        reason = getattr(exc, "reason", exc)
+        return 0, b"", f"No answer: {reason}"[:240]
+
+
+def _handle_browser_probe(body):
+    body = body if isinstance(body, dict) else {}
+    cdp_url = str(body.get("cdpUrl") or "").strip()
+    viewer_url = str(body.get("viewerUrl") or "").strip()
+    if not cdp_url:
+        return {"ok": False, "error": "Enter a CDP URL.", "_status": 400, "saved": False}
+    result = {"ok": False, "saved": False, "cdpUrl": cdp_url}
+    status, raw, error = _probe_url(cdp_url, "/json/version")
+    if status == 404:
+        status, raw, error = _probe_url(cdp_url, "/json")
+    info = None
+    if status and 200 <= status < 300:
+        try:
+            info = json.loads(raw.decode("utf-8", "replace"))
+        except ValueError:
+            error = "The address answered, but not like a Chrome DevTools endpoint."
+    if isinstance(info, (dict, list)):
+        result["ok"] = True
+        if isinstance(info, dict):
+            result["browser"] = str(info.get("Browser") or "")[:120]
+            result["protocolVersion"] = str(info.get("Protocol-Version") or "")[:20]
+    else:
+        result["error"] = error or "The address answered, but not like a Chrome DevTools endpoint."
+    if viewer_url:
+        v_status, _raw, v_error = _probe_url(viewer_url)
+        # The viewer opens in the user's browser, so the server's view is only a hint.
+        result["viewer"] = {"reachable": bool(v_status) and v_status < 500, "status": v_status or None}
+        if v_error and not v_status:
+            result["viewer"]["error"] = v_error
+    return result
+
+
+_PC_METRICS_TEST_KEYS = ("cpu", "memory", "gpus", "disk", "network", "hostname", "platform", "uptime")
+
+
+def _handle_pc_metrics_probe(body):
+    body = body if isinstance(body, dict) else {}
+    url = str(body.get("url") or "").strip()
+    if not url:
+        return {"ok": False, "error": "Enter a metrics server URL.", "_status": 400, "saved": False}
+    status, raw, error = _probe_url(url)
+    if not (status and 200 <= status < 300):
+        return {"ok": False, "saved": False, "error": error or f"The address answered HTTP {status}."}
+    try:
+        data = json.loads(raw.decode("utf-8", "replace"))
+    except ValueError:
+        data = None
+    if not isinstance(data, dict) or not any(key in data for key in ("cpu", "memory", "gpus")):
+        return {"ok": False, "saved": False, "error": "The address answered, but not like pc-metrics-server.py."}
+    # Only the metric sections go back, so this cannot read arbitrary pages.
+    metrics = {key: data[key] for key in _PC_METRICS_TEST_KEYS if key in data}
+    if len(json.dumps(metrics, default=str)) > 65536:
+        metrics = {key: metrics[key] for key in ("cpu", "memory") if key in metrics}
+    return {"ok": True, "saved": False, "metrics": metrics}
+
+
+def _draft_url_values(fields, values):
+    """Every URL in a draft (top-level url fields and connection-list rows)."""
+    urls = []
+    for key, field in fields.items():
+        if key not in values:
+            continue
+        if field.get("type") == "url" and isinstance(values[key], str):
+            urls.append(values[key])
+        elif field.get("type") == "connection-list" and isinstance(values[key], list):
+            url_keys = [str(c.get("key")) for c in field.get("itemFields") or [] if isinstance(c, dict) and c.get("type") == "url"]
+            for row in values[key]:
+                if isinstance(row, dict):
+                    urls.extend(str(row.get(k)) for k in url_keys if isinstance(row.get(k), str))
+    return [u.strip() for u in urls if u and u.strip()]
+
+
+def _handle_provider_test(body):
+    """Test a provider. With `values` (same shape as a save; blank secrets keep the
+    saved ones) the draft is tested on a throwaway registry and nothing is saved."""
+    body = body if isinstance(body, dict) else {}
+    provider_id = str(body.get("providerId") or body.get("providerKind") or "").strip()
+    values = body.get("values")
+    if not isinstance(values, dict) or not values:
+        result = _get_provider_registry().invoke(provider_id, "test")
+        if not isinstance(result, dict):
+            result = {"ok": False, "error": "Provider returned an invalid health response"}
+        if isinstance(values, dict):
+            result = dict(result, draftTested=False)
+        return result
+    resolved = _provider_settings_manifest(provider_id.lower())
+    if not resolved:
+        return {"ok": False, "error": f"Unknown provider settings schema: {provider_id}", "_status": 404, "draftTested": False}
+    _manifest, schema, config_key = resolved
+    fields = _provider_settings_field_map(schema)
+    unknown = sorted(set(values) - set(fields))
+    if unknown:
+        return {"ok": False, "error": f"Unsupported settings: {', '.join(unknown)}", "_status": 400, "draftTested": False}
+    draft_root = copy.deepcopy(VO_CONFIG)
+    saved_cfg = draft_root.get(config_key) if isinstance(draft_root.get(config_key), dict) else {}
+    draft_cfg = dict(saved_cfg)
+    ignored = []
+    try:
+        for key, field in fields.items():
+            if key not in values:
+                continue
+            if key in _EXECUTABLE_SETTING_KEYS:
+                proposed = str(values.get(key) or "").strip()
+                if proposed and proposed != str(saved_cfg.get(key) or "").strip():
+                    ignored.append(key)
+                continue
+            draft_cfg[key] = _validate_provider_setting(field, values[key], saved_cfg.get(key), key)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "_status": 400, "draftTested": False}
+    for url in _draft_url_values(fields, values):
+        reason = _probe_address_error(url)
+        if reason:
+            return {"ok": False, "error": f"{url}: {reason}", "_status": 400, "draftTested": False}
+    if config_key == "hermes" and isinstance(draft_cfg.get("connections"), list):
+        draft_cfg["connections"] = _normalize_hermes_connections({"connections": draft_cfg["connections"]})
+    draft_root[config_key] = draft_cfg
+    context = _provider_registry_context()
+    context["config"] = draft_root
+    try:
+        result = build_provider_registry(context).invoke(provider_id, "test")
+    except Exception as exc:
+        traceback.print_exc()
+        result = {"ok": False, "error": str(exc)}
+    result = dict(result) if isinstance(result, dict) else {"ok": False, "error": "Provider returned an invalid health response"}
+    result["draftTested"] = True
+    if ignored:
+        result["ignoredFields"] = ignored
+        result["note"] = "A new executable path is only used after you save; this test used the saved one."
+    return result
 
 
 # ─── UNIFIED CHAT SESSIONS (per-framework session management) ───────────────
@@ -9987,14 +10738,53 @@ def _hermes_agent_ref_uses_local_sessions(agent_ref):
     profile when both point at the same Hermes home.  In that case the local
     profile supplies mounted resources, but the canonical API connection owns
     chat/session operations.  Passing the API id to the CLI would otherwise
-    fail whenever the two names differ (for example ``aster`` -> ``default``).
+    fail whenever the two names differ (for example ``astra`` -> ``default``).
     """
     record = (agent_ref or {}).get("record") or {}
     modes = set(record.get("connectionModes") or [])
     return "cli" in modes and "api" not in modes
 
 
-def handle_chat_sessions_list(agent_id, limit=40):
+_VO_CHAT_ENVELOPE_RE = re.compile(r"^\s*Message from .{0,200}? via (?:My )?Virtual Office(?: Chat)?\.\s*", re.S)
+_VO_CHAT_TAIL_RE = re.compile(r"\s*Reply directly to the user\..*$", re.S)
+_VO_ATTACH_TAIL_RE = re.compile(r"\s*Attached files uploaded through Virtual Office:.*$", re.S)
+
+
+def _clean_session_text(text, limit=120):
+    """CH-21: what the user typed, not the routing envelope the office adds
+    for the agent ("[A2A ...]", "Message from X via Virtual Office Chat ...")."""
+    value = str(text or "")
+    _attrs, value = _parse_a2a_envelope(value)
+    value = _VO_CHAT_ENVELOPE_RE.sub("", value, count=1)
+    value = _VO_ATTACH_TAIL_RE.sub("", value)
+    value = _VO_CHAT_TAIL_RE.sub("", value)
+    for line in value.splitlines():
+        line = re.sub(r"\s+", " ", line).strip()
+        if line:
+            return line[:limit]
+    return ""
+
+
+def _hp_serve_sessions_list(agent_id, limit, manage=False):
+    """Drawer list for a `hermes serve` agent (design 2.6): the adapter's REST sessions (cron, child,
+    hidden and archived chats left out by it) plus the office's own active selection. Rows carry
+    `deletable` (manage only)."""
+    served = agent_providers.chat_sessions(agent_id, limit=limit, manage=manage)
+    if served is None:
+        return None
+    payload, status = served
+    active_id = str(_load_provider_active_session("hermes-serve", str(agent_id)).get("sessionId") or "")
+    for row in payload.get("sessions") or []:
+        row["active"] = bool(active_id and str(row.get("id") or "") == active_id)
+    payload["activeSessionId"] = active_id
+    return payload, status
+
+
+def handle_chat_sessions_list(agent_id, limit=40, manage=False):
+    if agent_providers.is_serve_agent(agent_id):
+        served = _hp_serve_sessions_list(agent_id, limit, manage)
+        if served is not None:
+            return served
     agent_ref = _chat_sessions_agent(agent_id)
     if not agent_ref:
         return {"ok": False, "error": f"Unknown agent: {agent_id}", "sessions": []}, 404
@@ -10034,6 +10824,12 @@ def handle_chat_sessions_list(agent_id, limit=40):
         for row in outcome["sessions"]:
             row["active"] = bool(active_id and str(row.get("id") or "") == active_id)
         outcome["activeSessionId"] = active_id
+    if isinstance(outcome.get("sessions"), list):
+        for row in outcome["sessions"]:
+            if isinstance(row, dict):
+                for field in ("title", "preview"):
+                    if isinstance(row.get(field), str) and row.get(field):
+                        row[field] = _clean_session_text(row[field], 120 if field == "title" else 240) or row[field][:120]
     status = 200 if outcome.get("ok") else 502
     return {
         "schemaVersion": CHAT_SESSION_SCHEMA_VERSION,
@@ -10046,6 +10842,10 @@ def handle_chat_sessions_list(agent_id, limit=40):
 
 def handle_chat_session_create(agent_id, body=None):
     """Start a fresh session/thread for the agent using its native surface."""
+    if agent_providers.is_serve_agent(agent_id):
+        # A `hermes serve` chat is created by its first message (the adapter's run).
+        _save_provider_active_session("hermes-serve", str(agent_id), "", source="new", newSessionPending=True)
+        return {"ok": True, "sessionId": "", "newSessionPending": True, "transport": "hermes-serve"}, 200
     agent_ref = _chat_sessions_agent(agent_id)
     if not agent_ref:
         return {"ok": False, "error": f"Unknown agent: {agent_id}"}, 404
@@ -10162,6 +10962,14 @@ def handle_chat_session_create(agent_id, body=None):
 
 
 def handle_chat_session_delete(agent_id, session_id, body=None):
+    if agent_providers.is_serve_agent(agent_id) and session_id:
+        served = agent_providers.chat_session_delete(agent_id, session_id)
+        if served is not None:
+            if served[1] == 200:
+                active = _load_provider_active_session("hermes-serve", str(agent_id))
+                if str(active.get("sessionId") or "") == str(session_id):
+                    _save_provider_active_session("hermes-serve", str(agent_id), "", source="deleted")
+            return served
     agent_ref = _chat_sessions_agent(agent_id)
     if not agent_ref:
         return {"ok": False, "error": f"Unknown agent: {agent_id}"}, 404
@@ -10227,6 +11035,9 @@ def handle_chat_session_delete(agent_id, session_id, body=None):
 
 
 def handle_chat_session_switch(agent_id, session_id, body=None):
+    if agent_providers.is_serve_agent(agent_id) and session_id:
+        _save_provider_active_session("hermes-serve", str(agent_id), str(session_id)[:400], source="switch")
+        return {"ok": True, "sessionId": str(session_id)[:400], "transport": "hermes-serve"}, 200
     agent_ref = _chat_sessions_agent(agent_id)
     if not agent_ref:
         return {"ok": False, "error": f"Unknown agent: {agent_id}"}, 404
@@ -10536,6 +11347,16 @@ def _office_agent_ref(agent_id_or_key):
     }
 
 
+def _drop_shared_write(path):
+    """An office file v0.7.4 made writable by anyone (chmod 0666) keeps its owner's write only."""
+    try:
+        mode = os.stat(path).st_mode & 0o7777
+        if mode & 0o022:   # group or others may write
+            os.chmod(path, mode & ~0o022)
+    except OSError as exc:
+        print(f"[data] could not make {os.path.basename(path)} writable by its owner only: {exc}")
+
+
 def _append_comm_event(event):
     event = dict(event)
     if "text" in event:
@@ -10545,13 +11366,11 @@ def _append_comm_event(event):
     event.setdefault("schema", "vo.agent-platform-communication.v1")
     path = _comm_log_path()
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "a") as f:
+        data_owner.makedirs(os.path.dirname(path), exist_ok=True)
+        # (never chmod 0666: data_owner gives the folder's owner the file; agent messages stay theirs)
+        with data_owner.open_new(path, "a") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
-        try:
-            os.chmod(path, 0o666)
-        except OSError:
-            pass
+        _drop_shared_write(path)
     except OSError as e:
         print(f"[COMM] Failed to append communication event: {e}")
     return event
@@ -10752,6 +11571,9 @@ def _handle_agent_platform_comm_send(body):
         "metadata": metadata,
         "visibleInOffice": True,
     })
+    if not is_human_source:
+        _life_hook("a2a_sent", sender=from_ref.get("id"), target=to_ref.get("id"), ref=inbound.get("id"),
+                   conversation=conversation_id)
 
     provider_prefixes = {
         "openclaw": "OpenClaw",
@@ -10872,11 +11694,9 @@ def _save_hermes_platform_state(state):
     state.setdefault("schema", "vo.hermes-platform-queue.v1")
     state.setdefault("adapters", {})
     state["updatedAt"] = _now_ms()
+    # (never chmod 0666: anyone on the machine could put a message in front of a Hermes agent)
     _atomic_write_text(_hermes_platform_queue_path(), json.dumps(state, indent=2, ensure_ascii=False) + "\n")
-    try:
-        os.chmod(_hermes_platform_queue_path(), 0o666)
-    except OSError:
-        pass
+    _drop_shared_write(_hermes_platform_queue_path())
 
 
 def _hermes_platform_counts(state):
@@ -11473,19 +12293,18 @@ async def _gateway_rpc_call_at_async(gw_url, token, method, params=None, timeout
     async with ws_connect(
         gw_url,
         max_size=_OPENCLAW_GATEWAY_RPC_MAX_BYTES,
-        additional_headers={"Origin": _gateway_control_origin()},
         close_timeout=3,
     ) as ws:
-        await asyncio.wait_for(ws.recv(), timeout=5)
+        challenge = await asyncio.wait_for(ws.recv(), timeout=5)
         connect_id = f"vo-agent-admin-connect-{uuid.uuid4()}"
-        await ws.send(json.dumps({
+        await ws.send(json.dumps(_oc_with_device({
             "type": "req",
             "id": connect_id,
             "method": "connect",
             "params": {
                 "minProtocol": GATEWAY_PROTOCOL_VERSION,
                 "maxProtocol": GATEWAY_PROTOCOL_VERSION,
-                "client": {"id": "openclaw-control-ui", "version": _get_openclaw_version(), "platform": "server", "mode": "webchat"},
+                "client": {"id": "gateway-client", "version": _get_openclaw_version(), "platform": "server", "mode": "backend"},
                 "role": "operator",
                 "scopes": ["operator.read", "operator.write", "operator.admin"],
                 "caps": [],
@@ -11495,7 +12314,7 @@ async def _gateway_rpc_call_at_async(gw_url, token, method, params=None, timeout
                 "locale": "en-US",
                 "userAgent": "virtual-office-server/agent-admin",
             },
-        }))
+        }, gw_url, challenge)))
         while True:
             msg = json.loads(await asyncio.wait_for(ws.recv(), timeout=10))
             if msg.get("id") == connect_id:
@@ -11583,7 +12402,15 @@ def _test_openclaw_gateway_config(openclaw_cfg=None):
 def _gateway_config_key():
     url, token = _read_gateway_config()
     mode = (VO_CONFIG.get("openclaw", {}) or {}).get("endpointMode") or "auto"
-    return mode, url or "", token or ""
+    # The access level is part of the key: a change reconnects with the matching scopes (design 2.3).
+    return mode, url or "", token or "", _openclaw_access_level()
+
+
+def _openclaw_access_level():
+    try:
+        return agent_providers.connection_access("openclaw")
+    except Exception:
+        return "full"
 
 
 def _openclaw_gateway_connection_settings(_config_key=None):
@@ -11600,11 +12427,74 @@ def _openclaw_gateway_connection_settings(_config_key=None):
         "endpointMode": resolution.get("mode") or "auto",
         "endpointLocation": endpoint.get("location") or "",
         "endpointLabel": endpoint.get("label") or "",
+        "access": _openclaw_access_level(),
     }
 
 
+_openclaw_device_obj = None
+
+
+def _openclaw_device():
+    """The office's OpenClaw device identity (key + pairing in the data folder; used only where OpenClaw needs it)."""
+    global _openclaw_device_obj
+    with _openclaw_gateway_client_lock:
+        if _openclaw_device_obj is None:
+            _openclaw_device_obj = OpenClawDevice(STATUS_DIR, logger=print)
+            gateway_presence.set_device(_openclaw_device_obj)
+        return _openclaw_device_obj
+
+
+def _oc_with_device(frame, url, challenge):
+    """A short-lived connection's connect frame, plus the office's device once it is paired with that gateway (its
+    scopes narrowed to the approved ones, so it never opens a new pairing request)."""
+    device = _openclaw_device()
+    params = frame.get("params") if isinstance(frame, dict) else None
+    if not isinstance(params, dict) or not device.paired_for(url):
+        return frame
+    try:
+        payload = (json.loads(challenge) if isinstance(challenge, (str, bytes)) else challenge or {}).get("payload")
+        approved = device.public(url).get("scopes") or []
+        if approved and "operator.admin" not in approved:
+            params["scopes"] = [scope for scope in params.get("scopes") or [] if scope in approved]
+        signed = device.sign_connect(payload, params.get("client") or {}, params.get("role") or "operator",
+                                     list(params.get("scopes") or []), (params.get("auth") or {}).get("token") or "")
+        if signed:
+            params["device"] = signed
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return frame
+
+
+class _PairedOnlyDevice:
+    """v0.11, the layer on: the layer pairs with OpenClaw (as "My Virtual Office"); VO's own Python client signs with the
+    office's 0.10 device only where that device is already paired, and never opens a pairing request of its own (from
+    Docker's bridge network it left a second, nameless request in OpenClaw's Devices beside the layer's)."""
+
+    def __init__(self, device):
+        self._device = device
+
+    def wanted(self, url):
+        self._device.wanted(url)   # (remembers the address public() describes)
+        return self._device.paired_for(url)
+
+    def require(self, url):
+        return None
+
+    def __getattr__(self, name):
+        return getattr(self._device, name)
+
+
 def _get_openclaw_gateway_client():
-    global _openclaw_gateway_client
+    global _openclaw_gateway_client, _layer_gateway_client
+    if _pl_owns() and PROVIDER_LAYER is not None:
+        # (the layer owns OpenClaw: the office's own gateway calls go through its link, never a second client or pairing)
+        with _openclaw_gateway_client_lock:
+            if _layer_gateway_client is None:
+                _layer_gateway_client = provider_layer_gateway.LayerGatewayClient(lambda: PROVIDER_LAYER)
+            return _layer_gateway_client
+    device = _openclaw_device()
+    if _pl_owns():
+        device = _PairedOnlyDevice(device)
     with _openclaw_gateway_client_lock:
         if _openclaw_gateway_client is None:
             _openclaw_gateway_client = OpenClawGatewayClient(
@@ -11612,6 +12502,7 @@ def _get_openclaw_gateway_client():
                 ws_connect,
                 max_size=_OPENCLAW_GATEWAY_RPC_MAX_BYTES,
                 logger=print,
+                device=device,
             )
         return _openclaw_gateway_client
 
@@ -11683,6 +12574,9 @@ def _gateway_info_payload():
         "rpcUrl": "/api/openclaw/rpc" if OPENCLAW_BROWSER_TRANSPORT == "proxy" else "",
         "eventsUrl": "/api/openclaw/events" if OPENCLAW_BROWSER_TRANSPORT == "proxy" else "",
     }
+    if _pl_owns():   # (the layer has the gateway: the page calls through the office, never the gateway itself)
+        payload.update(transport="proxy", rpcUrl="/api/openclaw/rpc", eventsUrl="", gatewayUrl="", provider="layer")
+        return payload
     if OPENCLAW_BROWSER_TRANSPORT == "direct":
         payload["token"] = gateway_token or ""
     return payload
@@ -11719,12 +12613,187 @@ def _openclaw_proxy_authorized(handler):
     )
 
 
+def _progress_connection_epoch():
+    # Opaque installation/configuration + upstream generation fence. No URLs or
+    # credentials cross the browser boundary, including in error responses.
+    generation = _get_openclaw_gateway_client().status().get("generation", 0)
+    material = repr((_gateway_config_key(), generation)).encode("utf-8")
+    return hmac.new(_OPENCLAW_PROXY_SECRET.encode("utf-8"), material, hashlib.sha256).hexdigest()
+
+
+def _progress_configured_owners():
+    # Read only the configuration-owned roster, never the offline discovery
+    # cache or filesystem agent-directory fallback. Connectivity is not consent.
+    try:
+        with open(os.path.join(WORKSPACE_BASE, "openclaw.json"), encoding="utf-8") as handle:
+            agents = json.load(handle).get("agents") or {}
+        if "entries" in agents:
+            entries = agents["entries"]
+            if not isinstance(entries, dict):
+                return []
+            # Current keyed configuration owns identity; a stale embedded ID
+            # cannot authorize a different owner. Never fall back to old rows.
+            rows = [dict(value, id=key) for key, value in entries.items()
+                    if isinstance(value, dict)]
+        else:
+            rows = agents.get("list") or []
+        return [row for row in rows if isinstance(row, dict) and row.get("enabled") is not False]
+    except (OSError, ValueError, TypeError):
+        return []
+
+
+def _progress_authorized_roster():
+    registry = _get_provider_registry()
+    owners = _progress_configured_owners()
+    result = []
+    for row in list(_discovered_roster or []):
+        kind = row.get("providerKind")
+        manifest = registry.manifest(kind)
+        if not manifest or not manifest.enabled:
+            continue
+        cfg = VO_CONFIG.get(kind, {}) or {}
+        if cfg.get("enabled") is False:
+            continue
+        caps = row.get("capabilities") or {}
+        if kind == "openclaw":
+            allowed = (manifest.capabilities.get("taskProgress") and caps.get("taskProgress")
+                and row.get("providerConnectionId") == "default"
+                and len([o for o in owners if o.get("id") == row.get("providerAgentId")]) == 1)
+        elif kind == "hermes":
+            connections = [c for c in _hermes_connections() if c.get("id") == row.get("providerConnectionId")]
+            # Hermes has a connection-level capability override, not a global
+            # task capability. Require that exact configured native API owner.
+            allowed = (len(connections) == 1 and row.get("providerAgentId") == connections[0].get("id")
+                and caps.get("taskProgress") and caps.get("sessionSwitch"))
+        else:
+            allowed = False
+        if allowed:
+            result.append(row)
+    return result
+
+
+def _resolve_hermes_progress_endpoint(cfg, authorize=None):
+    # Task-only: no discovery cache, endpoint fallback, redirects or autostart.
+    url = normalize_endpoint_url(str(cfg.get("apiUrl") or cfg.get("url") or ""), ("http", "https"))
+    if not url:
+        return {"ok": False, "code": "endpoint_unavailable"}
+    client = HermesApiClient(base_url=url, api_key=cfg.get("apiKey") or cfg.get("key") or "",
+                             timeout_sec=10, max_response_bytes=2097152, task_only=True)
+    try:
+        if authorize: authorize()
+        client.health()
+        if authorize: authorize()
+        if [c for c in _hermes_connections() if c.get("id") == cfg.get("id")] != [cfg]:
+            return {"ok": False, "code": "connection_changed"}
+        caps = client.capabilities()
+        if authorize: authorize()
+        if [c for c in _hermes_connections() if c.get("id") == cfg.get("id")] != [cfg]:
+            return {"ok": False, "code": "connection_changed"}
+        features = caps.get("features") or {}
+        endpoints = caps.get("endpoints") or {}
+        return {"ok": bool((features.get("session_resources") or endpoints.get("sessions")) and endpoints.get("session_messages")), "endpoint": {"url": url}}
+    except urllib.error.HTTPError as exc:
+        return {"ok": False, "code": "endpoint_authentication_failed" if exc.code in (401, 403) else "endpoint_rejected"}
+    except Exception:
+        return {"ok": False, "code": "endpoint_unavailable"}
+
+
+def _read_hermes_progress(identity, authorize=None):
+    connection = identity["connectionId"]
+    pinned = copy.deepcopy([c for c in _hermes_connections() if c.get("id") == connection])
+    try:
+        result = _read_hermes_progress_pinned(identity, authorize=authorize)
+    except Exception:
+        result = {"availability": "unavailable", "card": None, "code": "hermes_request_rejected"}
+    if [c for c in _hermes_connections() if c.get("id") == connection] != pinned:
+        return {"availability": "denied", "card": None, "code": "connection_changed"}
+    return result
+
+
+def _read_hermes_progress_pinned(identity, authorize=None):
+    from session_progress import hermes_history_snapshot
+    from urllib.error import HTTPError
+    # Current built-in API roster explicitly maps one native owner per named
+    # connection. Other extension mappings must provide their own adapter.
+    if identity["connectionId"] != identity["nativeOwnerId"]:
+        return {"availability": "unsupported", "card": None, "code": "unsupported_connection"}
+    connection = identity["connectionId"]
+    rows = [a for a in list(_discovered_roster or []) if a.get("providerKind") == "hermes" and a.get("providerConnectionId") == connection and a.get("providerAgentId") == identity["nativeOwnerId"]]
+    if len(rows) != 1 or not rows[0].get("apiAvailable"):
+        return {"availability": "unsupported", "card": None, "code": "hermes_native_bridge_required"}
+    # Resolve exact configured connection without discovery refresh or startup.
+    configs = [c for c in _hermes_connections() if c.get("id") == connection]
+    if len(configs) != 1:
+        return {"availability": "denied", "card": None, "code": "identity_denied"}
+    cfg = copy.deepcopy(configs[0])
+    # Office resolver probes only; it has no process startup or migration path.
+    resolution = _resolve_hermes_progress_endpoint(cfg, authorize=authorize)
+    if [c for c in _hermes_connections() if c.get("id") == connection] != [cfg]:
+        return {"availability": "denied", "card": None, "code": "connection_changed"}
+    if not resolution.get("ok"):
+        denied = resolution.get("code") in {"endpoint_authentication_failed", "endpoint_authorization_failed"}
+        return {"availability": "denied" if denied else "unavailable", "card": None, "code": "hermes_api_rejected" if denied else "hermes_api_unavailable"}
+    if authorize: authorize()
+    endpoint_url = (resolution.get("endpoint") or {}).get("url")
+    epoch = hmac.new(_OPENCLAW_PROXY_SECRET.encode(), repr((cfg, endpoint_url)).encode(), hashlib.sha256).hexdigest()
+    client = HermesApiClient(base_url=endpoint_url, api_key=cfg.get("apiKey") or cfg.get("key") or "", timeout_sec=10, max_response_bytes=2097152, task_only=True)
+    try:
+        page = client.session_messages(identity["nativeSessionId"], limit=500, offset=0, order="latest")
+        if [c for c in _hermes_connections() if c.get("id") == connection] != [cfg]:
+            return {"availability": "unavailable", "card": None, "code": "connection_changed"}
+        result = hermes_history_snapshot(page, identity["nativeSessionId"])
+        result["connectionEpoch"] = epoch
+        return result
+    except HTTPError as exc:
+        result = {"availability": "denied" if exc.code in (401, 403) else "unavailable", "card": None, "code": "hermes_request_rejected"}
+        if exc.code == 429:
+            from email.utils import parsedate_to_datetime
+            retry = exc.headers.get("Retry-After", "30") if exc.headers else "30"
+            try:
+                delay = float(retry)
+            except ValueError:
+                try:
+                    delay = parsedate_to_datetime(retry).timestamp() - time.time()
+                except (ValueError, TypeError, OverflowError):
+                    delay = 30
+            result["retryAfterMs"] = max(15000, min(300000, delay * 1000))
+        return result
+
+
+def _handle_session_progress(body):
+    from session_progress import ProgressService, identity_from
+    pinned_config = _gateway_config_key()
+    pinned_generation = _get_openclaw_gateway_client().status().get("generation", 0)
+    def gateway(method, params):
+        identity_from(body, _progress_authorized_roster())
+        if _gateway_config_key() != pinned_config:
+            raise ValueError("connection_changed")
+        return _get_openclaw_gateway_client().request(method, params, timeout=15, config_key=pinned_config, expected_generation=pinned_generation)
+    result = ProgressService(
+        roster=_progress_authorized_roster,
+        gateway=gateway,
+        connection_epoch=_progress_connection_epoch,
+        hermes=lambda identity: _read_hermes_progress(identity, authorize=lambda: identity_from(body, _progress_authorized_roster())),
+    ).handle(body)
+    # Discovery/ownership can change while upstream awaits. Never display a
+    # previously authorized response after its exact registry owner disappears.
+    if result.get("identity"):
+        try:
+            identity_from(body, _progress_authorized_roster())
+        except Exception:
+            result.update(availability="denied", card=None, code="identity_denied")
+    return result
+
+
 def _handle_openclaw_proxy_rpc(body):
     body = body if isinstance(body, dict) else {}
     method = str(body.get("method") or "").strip()
     params = body.get("params") if isinstance(body.get("params"), dict) else {}
     if method not in _OPENCLAW_PROXY_METHODS:
         return {"ok": False, "error": {"message": f"Gateway method '{method}' is not allowed by the chat proxy", "code": "method_not_allowed"}, "_status": 403}
+    if method in _HP_OPENCLAW_PROXY_WRITES and agent_providers.connection_access("openclaw") != "full":
+        return {"ok": False, "error": {"message": agent_providers.chat_only_reason("openclaw", "settings"),
+                                       "code": "chat_only", "fix": agent_providers.FIX_FULL_ACCESS}, "_status": 403}
     if method == "chat.history":
         params = dict(params)
         try:
@@ -11743,9 +12812,41 @@ def _handle_openclaw_proxy_rpc(body):
     }
 
 
+def _openclaw_events_filter(raw_path):
+    """Per-agent / per-chat filter for /api/openclaw/events (design 2.5, D5).
+
+    ``?agent=<id>&session=<key>``: one chat (agent-wide events of that agent too);
+    ``?agents=a,b``: every chat of those agents; ``?scope=cron``: cron + proxy frames only.
+    An event for agent X never reaches a stream that named only agent Y. Without any of
+    these the stream keeps today's default event set (chat.js / cron.html do not send them
+    yet: hp-chat B4 / hp-pages switch them over, then this compatibility path can go)."""
+    import openclaw_adapter
+    query = urllib.parse.parse_qs(urllib.parse.urlparse(raw_path or "").query)
+    first = lambda name: str((query.get(name) or [""])[0]).strip()  # noqa: E731
+    if first("scope") == "cron":
+        return lambda frame: (not isinstance(frame, dict) or frame.get("type") != "event"
+                              or frame.get("event") in openclaw_adapter.GLOBAL_EVENTS)
+    agent = first("agent")[:200]
+    session = first("session")[:400]
+    listed = [a.strip()[:200] for a in first("agents").split(",") if a.strip()][:50]
+    if not agent and not listed:
+        return None
+    natives = []
+    for office_id in ([agent] if agent else []) + listed:
+        row = _hp_roster_agent(office_id) or {}
+        natives.append(str(row.get("providerAgentId") or row.get("id") or office_id))
+    chat_session = session if agent and not listed else None
+    return lambda frame: any(openclaw_adapter.event_matches(frame, native, chat_session) for native in natives)
+
+
 def _handle_openclaw_proxy_events(handler):
     if not _openclaw_proxy_authorized(handler):
         return handler._send_json({"ok": False, "error": "OpenClaw chat proxy authorization failed"}, 403)
+    try:
+        event_filter = _openclaw_events_filter(handler.path)
+    except Exception:
+        event_filter = None
+    _hp_openclaw_start()
     handler.send_response(200)
     handler.send_header("Content-Type", "text/event-stream")
     handler.send_header("Cache-Control", "no-cache, no-store")
@@ -11780,6 +12881,8 @@ def _handle_openclaw_proxy_events(handler):
                 if not send_payload(None):
                     return
                 continue
+            if event_filter is not None and not event_filter(payload):
+                continue
             if not send_payload(payload):
                 return
             if payload.get("type") == "proxy.error":
@@ -11791,7 +12894,54 @@ def _handle_openclaw_proxy_events(handler):
             subscription.close()
 
 
+_GATEWAY_RESTART_BATCH = threading.local()
+
+
+class _GatewayRestartBatch:
+    """Collects gateway restart requests made during one model/provider save
+    (CH-34): a global auth delete used to restart the gateway once per agent.
+    On exit at most one restart is requested, and none when the caller sent
+    `restart: false` (the gateway's own config watcher then applies the files)."""
+
+    def __init__(self, allow=True):
+        self.allow = bool(allow)
+        self.requests = 0
+        self.result = None
+
+    def __enter__(self):
+        self.outer = getattr(_GATEWAY_RESTART_BATCH, "current", None)
+        _GATEWAY_RESTART_BATCH.current = self if self.outer is None else self.outer
+        return self
+
+    def __exit__(self, *exc):
+        if self.outer is not None:
+            return False
+        _GATEWAY_RESTART_BATCH.current = None
+        if self.requests and self.allow:
+            self.result = _send_openclaw_gateway_restart_request()
+        return False
+
+    def summary(self):
+        if not self.requests:
+            return {"requested": False, "reason": "nothing changed that needs the gateway"}
+        if not self.allow:
+            return {"requested": False, "skipped": True, "reason": "restart: false"}
+        return dict(self.result or {}, requested=True, coalesced=self.requests)
+
+
+def _gateway_restart_batch(allow=True):
+    return _GatewayRestartBatch(allow=allow)
+
+
 def _signal_openclaw_gateway(restart=False):
+    batch = getattr(_GATEWAY_RESTART_BATCH, "current", None)
+    if batch is not None:
+        batch.requests += 1
+        return {"ok": True, "deferred": True, "method": "batched-once-per-save", "restartRequested": bool(restart)}
+    return dict(_send_openclaw_gateway_restart_request(), restartRequested=bool(restart))
+
+
+def _send_openclaw_gateway_restart_request():
     try:
         rpc_result = _gateway_rpc_call(
             "gateway.restart.request",
@@ -11805,7 +12955,6 @@ def _signal_openclaw_gateway(restart=False):
                 "status": rpc_result.get("status") or rpc_result.get("result"),
                 "preflight": rpc_result.get("preflight"),
                 "restart": rpc_result.get("restart"),
-                "restartRequested": bool(restart),
             }
         return {"ok": False, "method": "gateway-rpc-restart-request", "error": rpc_result.get("error") or "Gateway RPC restart request failed."}
     except Exception as exc:
@@ -11850,16 +12999,16 @@ You are **{name}** {emoji} — {role}.
 - Use Virtual Office communication tools when talking to other office agents
 - Your text reply IS your response — write it directly
 
+## Tools
+- Add environment-specific tool notes here when useful
+
 ## Memory
 - Daily logs: `memory/YYYY-MM-DD.md`
 - Long-term: `MEMORY.md`
 """,
-        "HEARTBEAT.md": """# HEARTBEAT.md
-
-# Add periodic tasks below. If nothing needs attention, reply HEARTBEAT_OK.
-""",
+        # OpenClaw 2026.9 agents.files.set only accepts its bootstrap names
+        # (AGENTS, SOUL, IDENTITY, USER, BOOTSTRAP, MEMORY), so no HEARTBEAT/TOOLS.
         "MEMORY.md": f"# MEMORY.md - {name}\n\n_No memories yet._\n",
-        "TOOLS.md": f"# TOOLS.md — {name}\n\n_Add tool-specific notes here._\n",
     }
 
 def _default_openclaw_agent_model():
@@ -11877,6 +13026,33 @@ def _default_openclaw_agent_model():
     return ""
 
 
+def _wait_openclaw_agent_listed(agent_id, timeout_s=15.0):
+    """Wait (up to ``timeout_s``) until the gateway's agents.list shows ``agent_id``; True when it does."""
+    deadline = time.time() + timeout_s
+    while True:
+        result = _gateway_rpc_call("agents.list", {}, timeout=10)
+        if result.get("ok") and any(isinstance(a, dict) and str(a.get("id")) == agent_id for a in result.get("agents") or []):
+            return True
+        if time.time() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
+def _pl_sync_openclaw_agents():
+    """(layer on) List the agents of every OpenClaw connection again (the layer's /api/agent-providers/sync)."""
+    layer = PROVIDER_LAYER
+    if layer is None or not layer.ready():
+        return
+    try:
+        status, out = layer.call(layer.office_principal(), "GET", "/api/connections")
+        conns = (out.get("connections") or []) if status == 200 and isinstance(out, dict) else []
+        for conn in conns:
+            if conn.get("kind") == "openclaw" and conn.get("enabled"):
+                layer.call(layer.office_principal(), "POST", "/api/agent-providers/sync", {"id": conn["id"]}, timeout=20.0)
+    except Exception as exc:
+        print(f"[pl] listing the OpenClaw agents again failed: {type(exc).__name__}: {exc}")
+
+
 def _legacy_openclaw_agent_create(body):
     """Compatibility implementation for native OpenClaw agent creation."""
     name = (body.get("name") or "").strip()
@@ -11888,7 +13064,17 @@ def _legacy_openclaw_agent_create(body):
     role = body.get("role", "AI assistant")
     model = body.get("model", "")
     workspace_dir = os.path.join(WORKSPACE_BASE, f"workspace-{agent_id}")
-    gateway_workspace_dir = os.path.join(_openclaw_gateway_home_path(), f"workspace-{agent_id}")
+    # (the gateway makes the folder on its own machine: the path must be one there — VO_OPENCLAW_GATEWAY_PATH, the
+    #  agents' folders, or the gateway's own answer; never the container's /openclaw nor the top of a disk)
+    gateway_home, home_source = _openclaw_gateway_home_source(ask_gateway=True)
+    problem = _openclaw_gateway_home_problem(gateway_home, home_source)
+    if problem:
+        return {"error": problem, "code": "openclaw_folder_unknown", "_status": 409}
+    if is_windows_absolute(gateway_home):
+        import ntpath
+        gateway_workspace_dir = ntpath.join(gateway_home, f"workspace-{agent_id}")
+    else:
+        gateway_workspace_dir = os.path.join(gateway_home, f"workspace-{agent_id}")
 
     try:
         create_params = {"name": name, "workspace": gateway_workspace_dir, "emoji": emoji}
@@ -11897,14 +13083,41 @@ def _legacy_openclaw_agent_create(body):
             create_params["model"] = selected_model
         result = _gateway_rpc_call("agents.create", create_params, timeout=30)
         if not result.get("ok"):
-            status = 409 if "already exists" in str(result.get("error", "")).lower() else 500
-            return {"error": result.get("error", "OpenClaw agent creation failed"), "_status": status}
+            raw = str(result.get("error", "") or "OpenClaw agent creation failed")
+            status = 409 if "already exists" in raw.lower() else 500
+            if re.search(r"\b(EACCES|EPERM|EROFS|ENOENT)\b", raw) and "mkdir" in raw:
+                # (the folder could not be made on the gateway's machine: say which and what to set)
+                return {"error": f"The agent was not created: OpenClaw could not make its folder {gateway_workspace_dir} "
+                                  f"on the gateway's machine ({raw}). {_OPENCLAW_GATEWAY_PATH_FIX}",
+                        "code": "openclaw_folder_unwritable", "_status": 500}
+            return {"error": raw, "_status": status}
 
         agent_id = result.get("agentId") or agent_id
+        # OpenClaw applies the new agent a moment after agents.create answers (its config reloads): until agents.list
+        # shows it, agents.files.set and agents.delete answer 'agent "<id>" not found'.
+        _wait_openclaw_agent_listed(agent_id)
         for filename, content in _agent_template_files(name, role, emoji, "OpenClaw").items():
             file_result = _gateway_rpc_call("agents.files.set", {"agentId": agent_id, "name": filename, "content": content}, timeout=20)
             if not file_result.get("ok"):
-                return {"error": f"Agent created but failed to write {filename}: {file_result.get('error', 'unknown error')}", "_status": 500}
+                detail = file_result.get("error", "unknown error")
+                rollback = _gateway_rpc_call("agents.delete", {"agentId": agent_id, "deleteFiles": True}, timeout=30)
+                if rollback.get("ok"):
+                    _remove_openclaw_agent_paths(agent_id)
+                    return {
+                        "error": f"Agent creation was rolled back after {filename} could not be written: {detail}",
+                        "rolledBack": True,
+                        "_status": 500,
+                    }
+                return {
+                    "error": f"Agent was created but {filename} could not be written and automatic rollback failed: {detail}",
+                    "partialAgentId": agent_id,
+                    "rolledBack": False,
+                    "_status": 500,
+                }
+
+        # The layer lists a gateway's agents again by itself only after its own sub-menu changes: ask it now, so the
+        # new agent joins the office (a desk) instead of waiting for the next reconnect.
+        _pl_sync_openclaw_agents()
 
         # Refresh discovery
         global _discovered_at
@@ -12034,6 +13247,8 @@ def _handle_agent_create(body):
         "antigravity-cli": "antigravity",
     }
     provider_id = aliases.get(requested, requested)
+    if provider_id == "openclaw":
+        _hp_require_full("openclaw")
     manifest = _get_provider_registry().manifest(provider_id)
     if not manifest:
         return {"error": f"Unknown agent provider '{provider_id}'", "_status": 400}
@@ -12058,7 +13273,7 @@ def _handle_agent_create(body):
     global _discovered_at
     _discovered_at = 0
     refresh_agent_maps()
-    return {
+    response = {
         **result,
         "ok": True,
         "providerKind": provider_id,
@@ -12066,6 +13281,43 @@ def _handle_agent_create(body):
         "providerAgentId": result.get("profile") or result.get("providerAgentId"),
         "name": result.get("name") or name,
     }
+    status_key = _created_agent_status_key(provider_id, response)
+    if status_key:
+        response["statusKey"] = status_key
+    try:
+        AGENT_PC_STORE.ensure_profile({
+            "id": response.get("agentId") or response.get("profile") or _sanitize_agent_id(name),
+            "statusKey": response.get("agentId") or response.get("profile") or _sanitize_agent_id(name),
+            "name": response.get("name") or name,
+            "providerKind": provider_id,
+            "providerAgentId": response.get("providerAgentId") or response.get("agentId"),
+            "workspace": response.get("workspace") or "",
+        })
+    except Exception as exc:
+        print(f"[AGENT PC] Could not initialize profile for {name}: {exc}")
+    return response
+
+
+def _created_agent_status_key(provider_id, response):
+    """The key the office's roster gives a just-created agent (/api/agents statusKey, the office's agent id), so the
+    page names it (and the desk picked for it) the way every later roster read does. Providers whose roster key is
+    not their agentId (OpenCode, Antigravity: "kind:profile" for "kind-profile") are found by profile. None when the
+    roster does not list it yet."""
+    ids = {str(x) for x in (response.get("statusKey"), response.get("agentId")) if x}
+    native = {str(x) for x in (response.get("profile"), response.get("providerAgentId")) if x}
+    try:
+        roster = list(get_roster() or [])
+    except Exception:
+        return None
+    key = lambda a: str(a.get("statusKey") or a.get("id") or "")
+    for a in roster:
+        if isinstance(a, dict) and (str(a.get("id") or "") in ids or key(a) in ids):
+            return key(a) or None
+    for a in roster:
+        if (isinstance(a, dict) and (a.get("providerKind") or "") == provider_id
+                and str(a.get("providerAgentId") or a.get("profile") or "") in native):
+            return key(a) or None
+    return None
 
 
 def _write_template(workspace_dir, filename, content):
@@ -12146,6 +13398,8 @@ def _skill_root_for_agent(agent_key, requested_root="", require_write=False):
     roots, agent = _agent_skill_roots(agent_key)
     if not agent:
         return None, None, "Agent not found"
+    if require_write:
+        _hp_require_full_for_agent(agent, "settings")
     capabilities = agent.get("capabilities") if isinstance(agent.get("capabilities"), dict) else {}
     if not capabilities.get("skills"):
         return None, agent, "This provider does not expose agent skills"
@@ -12181,7 +13435,10 @@ def _handle_skill_list(agent_key):
         return {"error": "Agent not found", "_status": 404}
     capabilities = agent.get("capabilities") if isinstance(agent.get("capabilities"), dict) else {}
     if not capabilities.get("skills"):
-        return {"error": "This provider does not expose agent skills", "_status": 405}
+        # (a read of an agent with no skills the office reads itself, e.g. an OpenClaw agent through the provider layer,
+        #  whose skills are in Agent Providers: nothing to list, said as such; GET is this route's method, never a 405)
+        return {"ok": True, "skills": [], "supported": False,
+                "message": "This agent's skills are kept by its provider, in Agent Providers."}
     skills = []
     for root in roots:
         skills_dir = root.get("absolutePath") or ""
@@ -12249,6 +13506,13 @@ def _extract_skill_description(filepath):
     return ""
 
 
+def _skill_text_revision(path):
+    """Revision of a SKILL.md as the skill lists show it (text read, newlines normalised):
+    the one the editors send back."""
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        return hashlib.sha256(handle.read().encode("utf-8")).hexdigest()
+
+
 def _handle_skill_write(agent_key, skill_name, body):
     """Create or update a skill for an agent."""
     refresh_agent_maps()
@@ -12256,7 +13520,7 @@ def _handle_skill_write(agent_key, skill_name, body):
     if root_error:
         return {"error": root_error, "_status": 404 if not agent else 405}
     skills_dir = root.get("absolutePath") or ""
-    os.makedirs(skills_dir, exist_ok=True)
+    data_owner.makedirs(skills_dir, exist_ok=True)
 
     name = body.get("name", skill_name or "").strip()
     content = body.get("content", "")
@@ -12280,22 +13544,23 @@ def _handle_skill_write(agent_key, skill_name, body):
     real_target = os.path.realpath(skill_dir if os.path.exists(skill_dir) else os.path.dirname(skill_dir))
     if real_target != real_root and not real_target.startswith(real_root + os.sep):
         return {"error": "Skill path must stay inside the declared skill root", "_status": 400}
-    os.makedirs(skill_dir, exist_ok=True)
+    data_owner.makedirs(skill_dir, exist_ok=True)
     skill_file = os.path.join(skill_dir, "SKILL.md")
 
     if os.path.isfile(skill_file):
         backup_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         backup_file = os.path.join(_resource_backup_root(agent_key), "skills", backup_id, safe_name, "SKILL.md")
-        os.makedirs(os.path.dirname(backup_file), exist_ok=True)
+        data_owner.makedirs(os.path.dirname(backup_file), exist_ok=True)
         shutil.copy2(skill_file, backup_file)
+        data_owner.adopt(backup_file)
 
     expected_revision = str(body.get("revision") or body.get("expectedRevision") or "")
-    if os.path.isfile(skill_file) and expected_revision:
-        with open(skill_file, "rb") as handle:
-            current_revision = hashlib.sha256(handle.read()).hexdigest()
-        if current_revision != expected_revision:
-            return {"error": "This skill changed after it was opened. Reload it before saving.", "code": "revision_conflict", "currentRevision": current_revision, "_status": 409}
-    _atomic_write_text(skill_file, content)
+    with _json_file_lock(skill_file):  # the revision check and the write are one step
+        if os.path.isfile(skill_file) and expected_revision:
+            current_revision = _skill_text_revision(skill_file)
+            if current_revision != expected_revision:
+                return {"error": "This skill changed after it was opened. Reload it before saving.", "code": "revision_conflict", "currentRevision": current_revision, "_status": 409}
+        _atomic_write_text(skill_file, content)
 
     revision = hashlib.sha256(str(content).encode("utf-8")).hexdigest()
     return {"ok": True, "skill": safe_name, "path": skill_file, "rootId": root.get("id"), "revision": revision}
@@ -12307,7 +13572,7 @@ def _get_skills_library_dir():
     """Return path to the central skills library (master copies, not agent-specific)."""
     home = VO_CONFIG.get("openclaw", {}).get("homePath", os.path.expanduser("~/.openclaw"))
     d = os.path.join(home, "skills-library")
-    os.makedirs(d, exist_ok=True)
+    data_owner.makedirs(d, exist_ok=True)
     return d
 
 
@@ -12361,6 +13626,8 @@ def _handle_skills_library_list():
     lib_dir = _get_skills_library_dir()
     skills = []
     for entry in sorted(os.listdir(lib_dir)):
+        if not _safe_skill_library_entry(entry):
+            continue  # CH-06: only plain folder names reach the UI
         skill_dir = os.path.join(lib_dir, entry)
         if not os.path.isdir(skill_dir):
             continue
@@ -12393,14 +13660,16 @@ def _handle_skills_library_get(skill_name):
     if not os.path.isfile(skill_md):
         return {"error": f"Skill '{skill_name}' not found in library", "_status": 404}
     try:
-        with open(skill_md, "r") as f:
-            content = f.read()
+        with open(skill_md, "rb") as f:
+            raw = f.read()
+        content = raw.decode("utf-8", errors="replace")
     except Exception as e:
         return {"error": str(e), "_status": 500}
     name, description = _parse_skill_frontmatter(content)
     if not name:
         name = skill_name
-    return {"name": name, "description": description, "content": content}
+    # Send it back as "revision" when saving: a save over a newer copy is refused (409).
+    return {"name": name, "description": description, "content": content, "revision": _skill_text_revision(skill_md)}
 
 
 def _handle_skills_library_create(body):
@@ -12420,11 +13689,21 @@ def _handle_skills_library_create(body):
     validation_error = _validate_skill_content(content)
     if validation_error:
         return {"error": validation_error, "code": "invalid_skill", "_status": 400}
-    os.makedirs(skill_dir, exist_ok=True)
-    with open(skill_file, "w") as f:
-        f.write(content)
+    data_owner.makedirs(skill_dir, exist_ok=True)
+    expected_revision = str(body.get("revision") or body.get("expectedRevision") or "")
+    with _json_file_lock(skill_file):  # the revision check and the write are one step
+        if expected_revision == "new" and os.path.isfile(skill_file):
+            return {"error": f"A library skill named '{slug}' already exists. Open it to change it.",
+                    "code": "exists", "_status": 409}
+        if expected_revision and expected_revision != "new" and os.path.isfile(skill_file):
+            current_revision = _skill_text_revision(skill_file)
+            if current_revision != expected_revision:
+                return {"error": "This skill changed after it was opened. Reload it before saving.",
+                        "code": "revision_conflict", "currentRevision": current_revision, "_status": 409}
+        _atomic_write_text(skill_file, content)
     parsed_name, description = _parse_skill_frontmatter(content)
-    return {"ok": True, "skill": slug, "name": parsed_name or slug, "description": description, "path": skill_file}
+    return {"ok": True, "skill": slug, "name": parsed_name or slug, "description": description, "path": skill_file,
+            "revision": hashlib.sha256(content.encode("utf-8")).hexdigest()}
 
 
 def _handle_skills_library_save_from_agent(body):
@@ -12482,9 +13761,8 @@ def _handle_skills_library_save_from_agent(body):
                 "message": "Skill already exists in the Skill Library.",
             }
 
-    os.makedirs(skill_dir, exist_ok=True)
-    with open(skill_file, "w") as f:
-        f.write(content)
+    data_owner.makedirs(skill_dir, exist_ok=True)
+    _atomic_write_text(skill_file, content)
     parsed_name, description = _parse_skill_frontmatter(content)
     return {
         "ok": True,
@@ -12637,6 +13915,7 @@ def _handle_skill_workshop_inspect(qs):
 
 
 def _handle_skill_workshop_action(body):
+    _hp_require_full("openclaw")  # OpenClaw's skills.proposals.* writes
     action = (body.get("action") or "").strip()
     proposal_id = (body.get("proposalId") or body.get("id") or "").strip()
     agent_id = (body.get("agentId") or "").strip()
@@ -12724,13 +14003,15 @@ def _handle_skills_library_apply(body):
     existed = os.path.isfile(dest_file)
     if existed and not overwrite:
         return {"ok": False, "warning": f"Agent '{agent_id}' already has skill '{slug}'. Set overwrite=true to replace.", "exists": True}
-    os.makedirs(dest_dir, exist_ok=True)
-    if existed:
-        backup_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-        backup_file = os.path.join(_resource_backup_root(agent_id), "skills", backup_id, slug, "SKILL.md")
-        os.makedirs(os.path.dirname(backup_file), exist_ok=True)
-        shutil.copy2(dest_file, backup_file)
-    shutil.copy2(src_file, dest_file)
+    data_owner.makedirs(dest_dir, exist_ok=True)
+    with _json_file_lock(dest_file):
+        if existed:
+            backup_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+            backup_file = os.path.join(_resource_backup_root(agent_id), "skills", backup_id, slug, "SKILL.md")
+            data_owner.makedirs(os.path.dirname(backup_file), exist_ok=True)
+            shutil.copy2(dest_file, backup_file)
+            data_owner.adopt(backup_file)
+        _atomic_write_text(dest_file, content)  # an agent never reads a half-copied file
     return {"ok": True, "skill": slug, "agentId": agent_id, "path": dest_file, "rootId": root.get("id"), "overwritten": existed and overwrite}
 
 
@@ -12758,10 +14039,18 @@ def _handle_skills_library_upload(body):
         return {"error": validation_error, "code": "invalid_skill", "_status": 400}
     lib_dir = _get_skills_library_dir()
     skill_dir = os.path.join(lib_dir, slug)
-    os.makedirs(skill_dir, exist_ok=True)
-    with open(os.path.join(skill_dir, "SKILL.md"), "w") as f:
-        f.write(content)
-    return {"ok": True, "skill": slug, "name": name, "description": description}
+    data_owner.makedirs(skill_dir, exist_ok=True)
+    skill_file = os.path.join(skill_dir, "SKILL.md")
+    replaced = False
+    with _json_file_lock(skill_file):
+        if os.path.isfile(skill_file):
+            with open(skill_file, "r", encoding="utf-8", errors="replace") as handle:
+                replaced = handle.read() != content
+            if replaced:  # an upload with the same name keeps the version it replaces
+                shutil.copy2(skill_file, skill_file + ".bak")
+                data_owner.adopt(skill_file + ".bak")
+        _atomic_write_text(skill_file, content)
+    return {"ok": True, "skill": slug, "name": name, "description": description, "replaced": replaced}
 
 
 def _handle_skill_delete(agent_key, skill_name):
@@ -12787,65 +14076,96 @@ def _handle_skill_delete(agent_key, skill_name):
     if os.path.isdir(skill_folder):
         backup_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
         backup_folder = os.path.join(_resource_backup_root(agent_key), "skills", backup_id, safe_relative)
-        os.makedirs(os.path.dirname(backup_folder), exist_ok=True)
+        data_owner.makedirs(os.path.dirname(backup_folder), exist_ok=True)
         shutil.copytree(skill_folder, backup_folder)
+        data_owner.adopt_tree(backup_folder)
         shutil.rmtree(skill_folder)
         return {"ok": True, "deleted": skill_name, "backupId": backup_id}
     else:
         return {"error": f"Skill '{skill_name}' not found", "_status": 404}
 
 
-def _load_meetings_file():
-    """Load the persistent meetings/status file."""
+def _load_meetings_file(strict=False):
+    """Load the persistent meetings/status file.
+
+    Readers get ``{}`` when it is unreadable; writers pass ``strict=True`` and get
+    JsonStateError instead, so a broken file is never replaced by an empty one.
+    """
     try:
-        with open(STATUS_FILE, "r") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except FileNotFoundError:
-        return {}
-    except json.JSONDecodeError:
+        return _read_json_state(STATUS_FILE, default={})
+    except JsonStateError:
+        if strict:
+            raise
         return {}
 
 
 def _save_meetings_file(data):
-    """Persist the meetings/status file with permissive mode for shared runtimes."""
-    os.makedirs(os.path.dirname(STATUS_FILE), exist_ok=True)
-    with open(STATUS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-    try:
-        os.chmod(STATUS_FILE, 0o666)
-    except Exception:
-        pass
+    """Persist the meetings/status file atomically (keeps a .bak)."""
+    _write_json_atomic(STATUS_FILE, data)
 
 
+_MEETING_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_MEETING_AGENT_RE = re.compile(r"^[A-Za-z0-9_.:@-]{1,80}$")
+_MEETING_KIND_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+
+
+def _meeting_text(value, limit):
+    """Plain single-paragraph text for meeting fields agents can write (CH-02)."""
+    text = str(value or "")
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text).strip()
+    return text[:limit]
+
+
+def _meetings_locked(handler):
+    """Run a meetings read-modify-write under the file lock; refuse on unreadable state."""
+    def wrapper(*args, **kwargs):
+        with _json_file_lock(STATUS_FILE):
+            try:
+                return handler(*args, **kwargs)
+            except JsonStateError as exc:
+                return {"error": f"Meetings were not changed: {exc}", "_status": 409}
+    wrapper.__name__ = handler.__name__
+    wrapper.__doc__ = handler.__doc__
+    return wrapper
+
+
+@_meetings_locked
 def _handle_meeting_create(body):
     """Create/update a meeting in the canonical server-side status file."""
-    topic = (body.get("topic") or "").strip()
-    meet_id = (body.get("id") or "").strip()
+    topic = _meeting_text(body.get("topic"), 200)
+    meet_id = str(body.get("id") or "").strip()
     if not meet_id:
         meet_id = str(uuid.uuid4())[:8]
-    meet_type = (body.get("type") or "").strip()
+    if not _MEETING_ID_RE.match(meet_id):
+        return {"error": "Meeting id may only use letters, numbers, - and _", "_status": 400}
+    meet_type = str(body.get("type") or "").strip()
     agents = body.get("agents") or body.get("participants") or []
-    organizer = (body.get("organizer") or "").strip()
-    purpose = (body.get("purpose") or body.get("topic") or "").strip()
-    kind = (body.get("kind") or "discussion").strip() or "discussion"
+    organizer = str(body.get("organizer") or "").strip()
+    purpose = _meeting_text(body.get("purpose") or body.get("topic"), 1000)
+    kind = str(body.get("kind") or "discussion").strip().lower() or "discussion"
+    if not _MEETING_KIND_RE.match(kind):
+        kind = "discussion"
 
     if not topic:
         return {"error": "Meeting topic is required", "_status": 400}
     if not isinstance(agents, list) or len(agents) < 2:
         return {"error": "Meeting requires at least 2 agents", "_status": 400}
 
-    clean_agents = [str(a).strip() for a in agents if str(a).strip()]
+    clean_agents = []
+    for a in agents[:50]:
+        key = str(a).strip()
+        if key and _MEETING_AGENT_RE.match(key) and key not in clean_agents:
+            clean_agents.append(key)
     if len(clean_agents) < 2:
         return {"error": "Meeting requires at least 2 valid agent keys", "_status": 400}
 
-    if not organizer:
+    if not organizer or not _MEETING_AGENT_RE.match(organizer):
         organizer = clean_agents[0]
 
     if meet_type not in ("1on1", "group"):
         meet_type = "1on1" if len(clean_agents) == 2 else "group"
 
-    data = _load_meetings_file()
+    data = _load_meetings_file(strict=True)
     meetings = data.get("_meetings", [])
     if not isinstance(meetings, list):
         meetings = []
@@ -12873,22 +14193,33 @@ def _handle_meeting_create(body):
     return {"ok": True, "meeting": meeting}
 
 
+@_meetings_locked
 def _handle_meeting_end(body):
     """End one meeting by id. Requires a summary from the organizer."""
-    meet_id = (body.get("id") or body.get("meetingId") or "").strip()
+    meet_id = str(body.get("id") or body.get("meetingId") or "").strip()
     if not meet_id:
         return {"error": "Meeting id is required", "_status": 400}
 
-    summary = (body.get("summary") or "").strip()
-    resolution = (body.get("resolution") or "").strip()
-    ended_by = (body.get("endedBy") or body.get("organizer") or "").strip()
-    action_items = body.get("actionItems") or []
-    responses = body.get("responses") or {}  # {agentKey: "what they said"}
+    summary = _meeting_text(body.get("summary"), 8000)
+    resolution = _meeting_text(body.get("resolution"), 4000)
+    ended_by = str(body.get("endedBy") or body.get("organizer") or "").strip()
+    if ended_by and not _MEETING_AGENT_RE.match(ended_by):
+        ended_by = ""
+    raw_items = body.get("actionItems") or []
+    action_items = [_meeting_text(item, 1000) for item in raw_items[:50]] if isinstance(raw_items, list) else []
+    action_items = [item for item in action_items if item]
+    raw_responses = body.get("responses") or {}  # {agentKey: "what they said"}
+    responses = {}
+    if isinstance(raw_responses, dict):
+        for key, value in list(raw_responses.items())[:50]:
+            key = str(key).strip()
+            if _MEETING_AGENT_RE.match(key):
+                responses[key] = _meeting_text(value, 4000)
 
     if not summary:
         return {"error": "A meeting summary is required to end the meeting", "_status": 400}
 
-    data = _load_meetings_file()
+    data = _load_meetings_file(strict=True)
     meetings = data.get("_meetings", [])
     if not isinstance(meetings, list):
         meetings = []
@@ -12909,8 +14240,8 @@ def _handle_meeting_end(body):
     completed["endedBy"] = ended_by or completed.get("organizer", "unknown")
     completed["summary"] = summary
     completed["resolution"] = resolution
-    completed["actionItems"] = action_items if isinstance(action_items, list) else []
-    completed["responses"] = responses if isinstance(responses, dict) else {}
+    completed["actionItems"] = action_items
+    completed["responses"] = responses
     completed["endedAt"] = int(time.time())
 
     # Remove from active meetings
@@ -12918,34 +14249,57 @@ def _handle_meeting_end(body):
     data["_meetings"] = meetings
 
     # Store in meeting history
-    history = data.get("_meetingHistory", [])
-    if not isinstance(history, list):
-        history = []
-    history.append(completed)
-    # Keep last 50 meetings in history
-    if len(history) > 50:
-        history = history[-50:]
-    data["_meetingHistory"] = history
+    _append_meeting_history_record(data, completed)
 
     _save_meetings_file(data)
     gateway_presence.set_meetings(meetings)
     return {"ok": True, "id": meet_id, "completed": completed}
 
 
+def _append_meeting_history_record(data, record, replace=False):
+    """Append one completed meeting to ``data["_meetingHistory"]`` (keeps the last 50).
+    ``replace``: drop an older record with the same id first (idempotent writers)."""
+    history = data.get("_meetingHistory", [])
+    if not isinstance(history, list):
+        history = []
+    if replace and record.get("id"):
+        history = [m for m in history if not (isinstance(m, dict) and m.get("id") == record.get("id"))]
+    history.append(record)
+    # Keep last 50 meetings in history
+    if len(history) > 50:
+        history = history[-50:]
+    data["_meetingHistory"] = history
+    return history
+
+
+@_meetings_locked
+def append_meeting_history(record, replace=True):
+    """Add one completed meeting record to Meetings history without an active meeting
+    (Office life stand-ups). Same id again replaces the earlier record."""
+    if not isinstance(record, dict) or not record.get("id"):
+        return {"error": "Meeting record needs an id", "_status": 400}
+    data = _load_meetings_file(strict=True)
+    _append_meeting_history_record(data, dict(record), replace=replace)
+    _save_meetings_file(data)
+    return {"ok": True, "id": record.get("id")}
+
+
+@_meetings_locked
 def _handle_meeting_end_all():
     """End all meetings. Requires summaries per meeting or a bulk summary."""
-    data = _load_meetings_file()
+    data = _load_meetings_file(strict=True)
     data["_meetings"] = []
     _save_meetings_file(data)
     gateway_presence.set_meetings([])
     return {"ok": True}
 
 
+@_meetings_locked
 def _handle_meeting_history_delete(meet_id):
     """Delete a completed meeting from history."""
     if not meet_id:
         return {"error": "Meeting id is required", "_status": 400}
-    data = _load_meetings_file()
+    data = _load_meetings_file(strict=True)
     history = data.get("_meetingHistory", [])
     if not isinstance(history, list):
         history = []
@@ -12954,6 +14308,169 @@ def _handle_meeting_history_delete(meet_id):
     data["_meetingHistory"] = history
     _save_meetings_file(data)
     return {"ok": True, "removed": len(history) < before, "id": meet_id}
+
+
+##############################################################################
+# ─── OFFICE LIFE: server helpers injected into office_life (design 1.1) ──────
+# The package never imports server.py; these read office state and write only the
+# office's own files (meetings history, project-scores games). Zero inference.
+_LIFE_ROSTER_TTL_SEC = 10.0
+_life_roster_cache = {"at": 0.0, "rows": None, "source": None}
+_life_roster_lock = threading.Lock()
+
+
+def _life_hook(name, **fields):
+    """Tell Office life about an office write. Never raises into the request."""
+    try:
+        func = getattr(office_life.hooks, name, None)
+        if callable(func):
+            func(**fields)
+    except Exception as exc:
+        print(f"[office-life] hook {name} failed: {type(exc).__name__}: {exc}")
+
+
+def _life_roster_rows():
+    """The visible roster (what /agents-list shows after the demo limit), cached 10 s:
+    ``[{key, agentId, name, providerKind, createdAt, ...}]``. Read again at once when the discovered roster was
+    replaced (the background rediscovery after a start, an agent added or removed, the provider layer's agents
+    changed): Office Life drops events of agents it does not see, so an agent that just joined would lose its first
+    ones (the needs-you sign of an approval it asks for right away)."""
+    now = time.time()
+    with _life_roster_lock:
+        cached = _life_roster_cache["rows"]
+        if (cached is not None and now - _life_roster_cache["at"] < _LIFE_ROSTER_TTL_SEC and _discovered_at != 0
+                and _life_roster_cache.get("source") is _discovered_roster):
+            return [dict(row) for row in cached]
+    overrides = {}
+    try:
+        with open(os.path.join(STATUS_DIR, OFFICE_CONFIG_FILE_NAME), "r", encoding="utf-8") as handle:
+            for item in (json.load(handle) or {}).get("agents", []) or []:
+                if isinstance(item, dict) and item.get("id"):
+                    overrides[item["id"]] = item
+    except (OSError, ValueError, AttributeError):
+        pass
+    try:
+        roster = list(get_roster())
+        source = _discovered_roster   # (the discovered roster this copy follows: a replaced one is read again)
+    except Exception:
+        return [dict(row) for row in (_life_roster_cache["rows"] or [])] if _life_roster_cache["rows"] else None
+    rows = []
+    for agent in roster:
+        key = agent.get("statusKey") or agent.get("id")
+        if not key:
+            continue
+        override = overrides.get(key, {})
+        rows.append({
+            "key": key,
+            "agentId": agent.get("id"),
+            "name": override.get("name") or agent.get("name") or key,
+            "providerKind": agent.get("providerKind", "openclaw"),
+            "available": bool(agent.get("available", True)),
+            "apiAvailable": bool(agent.get("apiAvailable")),
+            "connectionModes": agent.get("connectionModes") if isinstance(agent.get("connectionModes"), list) else [],
+            "capabilities": agent.get("capabilities") if isinstance(agent.get("capabilities"), dict) else {},
+            "createdAt": agent.get("createdAt"),
+        })
+    rows = _apply_agent_limit_balanced(rows)
+    with _life_roster_lock:
+        _life_roster_cache["rows"] = rows
+        _life_roster_cache["at"] = now
+        _life_roster_cache["source"] = source
+    return [dict(row) for row in rows]
+
+
+def _life_presence():
+    """``{status key: {state, updated, activeRunCount, ...}}`` from the office presence (read only)."""
+    out = {}
+    for key, row in (_get_normalized_presence_state() or {}).items():
+        if isinstance(row, dict):
+            out[key] = {name: row.get(name) for name in (
+                "state", "updated", "providerKind", "source", "activeRunCount", "activeToolCount",
+                "waitingApprovalCount") if name in row}
+    return out
+
+
+def _life_layout_types():
+    """Furniture types of the saved layout, else of the bundled default layout."""
+    for path in (os.path.join(STATUS_DIR, OFFICE_CONFIG_FILE_NAME),
+                 os.path.join(os.path.dirname(__file__) or ".", "default-office-config.json")):
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        items = data.get("furniture") if isinstance(data, dict) else None
+        if isinstance(items, list):
+            return {str(item.get("type")) for item in items if isinstance(item, dict) and item.get("type")}
+    return set()
+
+
+def _life_config_path():
+    """The vo-config.json that /setup/save writes (the persistent volume when present)."""
+    cfg_path = _resolve_config_path()
+    data_dir = os.environ.get("VO_STATUS_DIR", "/data")
+    persistent_path = os.path.join(data_dir, "vo-config.json")
+    if os.path.isdir(data_dir) and cfg_path != persistent_path:
+        cfg_path = persistent_path
+    return cfg_path
+
+
+def _life_read_config_for_save(path):
+    """vo-config for a read-modify-write: raises when unreadable; a missing file starts from
+    the bundled config (as /setup/save does)."""
+    existing = _read_json_state(path, default=None)
+    if existing is None:
+        try:
+            existing = _read_json_state(os.path.join(os.path.dirname(__file__), "vo-config.json"), default={})
+        except JsonStateError:
+            existing = {}
+    return existing
+
+
+def _life_read_config():
+    try:
+        return _read_json_state(_life_config_path(), default={}) or {}
+    except JsonStateError:
+        return {}
+
+
+def _life_sms_owner():
+    sms_cfg = VO_CONFIG.get("sms", {}) or {}
+    return (sms_cfg.get("ownerAgentId") or sms_cfg.get("agentId") or "").strip() or None
+
+
+def _life_sms_paths():
+    """The live SMS logs inbound texts are appended to (owner workspace, then the data dir)."""
+    dirs = []
+    owner = _life_sms_owner()
+    if owner:
+        try:
+            candidate = os.path.join(WORKSPACE_BASE, get_agent_workspace_dir(WORKSPACE_BASE, owner))
+            if os.path.isdir(candidate):
+                dirs.append(candidate)
+        except Exception:
+            pass
+    if STATUS_DIR not in dirs:
+        dirs.append(STATUS_DIR)
+    return [os.path.join(folder, "sms-log.jsonl") for folder in dirs]
+
+
+def _life_start():
+    """Boot Office life (after gateway presence). A failure never stops the office."""
+    try:
+        office_life.start(
+            data_dir=STATUS_DIR, read_config=_life_read_config, config_path=_life_config_path,
+            config_lock=_json_file_lock, read_json=_life_read_config_for_save,
+            write_json=lambda path, data: _write_json_atomic(path, data, mode=0o600),
+            roster_rows=_life_roster_rows, presence=_life_presence, layout_types=_life_layout_types,
+            append_meeting_history=append_meeting_history, record_game=_record_game_result,
+            openclaw_start=_hp_openclaw_start, openclaw_adapter=_hp_openclaw_adapter,
+            openclaw_client=_get_openclaw_gateway_client, openclaw_configured=lambda: not _pl_owns() and bool(_get_gateway_token()),
+            sms_paths=_life_sms_paths, sms_owner=_life_sms_owner, status_key=_hp_status_key,
+            cron_job_name=_pl_cron_job_name,
+        )
+    except Exception as exc:
+        print(f"[office-life] not started: {type(exc).__name__}: {exc}")
 
 
 ##############################################################################
@@ -12974,16 +14491,36 @@ def _load_scores():
         return {"agents": {}}
 
 def _save_scores(data):
-    """Persist project-scores.json."""
-    os.makedirs(os.path.dirname(SCORES_FILE), exist_ok=True)
-    with open(SCORES_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    """Persist project-scores.json atomically."""
+    _write_json_atomic(SCORES_FILE, data)
+
+
+def _load_scores_for_write():
+    """Scores for a read-modify-write (caller holds the file lock): an unreadable
+    file raises JsonStateError instead of loading empty and wiping every agent."""
+    data = _read_json_state(SCORES_FILE, default={})
+    if not isinstance(data.get("agents"), dict):
+        data["agents"] = {}
+    return data
 
 def _award_points(agent_key, points, reason="task_completed"):
     """Award points to an agent and update streak."""
     if not agent_key or agent_key in ("null", "None", "unassigned", ""):
         return None
-    data = _load_scores()
+    with _json_file_lock(SCORES_FILE):
+        try:
+            result, now_str = _award_points_locked(agent_key, points, reason)
+        except JsonStateError as exc:
+            print(f"project-scores.json not updated: {exc}")
+            return None
+    _life_hook("xp_awarded", agent=agent_key, points=result["pointsAwarded"], total=result["totalScore"],
+               reason="task" if reason == "task_completed" or str(reason).startswith("Completed: ") else "manual",
+               at=now_str)
+    return result
+
+
+def _award_points_locked(agent_key, points, reason):
+    data = _load_scores_for_write()
     agent = data["agents"].get(agent_key, {"score": 0, "completed": 0, "streak": 0, "lastCompleted": None, "history": []})
 
     now = datetime.now(timezone.utc)
@@ -13019,19 +14556,51 @@ def _award_points(agent_key, points, reason="task_completed"):
 
     data["agents"][agent_key] = agent
     _save_scores(data)
-    return {"agent": agent_key, "pointsAwarded": points, "totalScore": agent["score"], "streak": agent["streak"], "completed": agent["completed"]}
+    return ({"agent": agent_key, "pointsAwarded": points, "totalScore": agent["score"], "streak": agent["streak"],
+             "completed": agent["completed"]}, now_str)
+
+
+def _record_game_result(agent_key, played=True, won=False, title=False):
+    """Office life tournament results in project-scores.json ``agents[key].games``
+    (played, wins, titles, lastTitleAt). Never touches score, completed, streak or history:
+    work XP stays work XP."""
+    if not agent_key or agent_key in ("null", "None", "unassigned", ""):
+        return None
+    with _json_file_lock(SCORES_FILE):
+        try:
+            data = _load_scores_for_write()
+        except JsonStateError as exc:
+            print(f"project-scores.json not updated: {exc}")
+            return None
+        agent = data["agents"].get(agent_key)
+        if not isinstance(agent, dict):
+            agent = {}
+        games = agent.get("games") if isinstance(agent.get("games"), dict) else {}
+        games = {
+            "played": int(games.get("played") or 0) + (1 if played else 0),
+            "wins": int(games.get("wins") or 0) + (1 if won else 0),
+            "titles": int(games.get("titles") or 0) + (1 if title else 0),
+            "lastTitleAt": datetime.now(timezone.utc).isoformat() if title else games.get("lastTitleAt"),
+        }
+        agent["games"] = games
+        data["agents"][agent_key] = agent
+        _save_scores(data)
+    return dict(games)
 
 def _handle_scores_leaderboard():
     """GET /api/projects/scores — returns top agents sorted by score."""
     data = _load_scores()
     agents = []
     for key, info in data.get("agents", {}).items():
-        agents.append({
+        row = {
             "agent": key,
             "score": info.get("score", 0),
             "completed": info.get("completed", 0),
             "streak": info.get("streak", 0),
-        })
+        }
+        if isinstance(info.get("games"), dict):
+            row["games"] = {k: info["games"].get(k) for k in ("played", "wins", "titles", "lastTitleAt")}
+        agents.append(row)
     agents.sort(key=lambda x: x["score"], reverse=True)
     return {"ok": True, "leaderboard": agents}
 
@@ -13060,16 +14629,85 @@ SCORE_CHECKLIST_BONUS = 2       # Per checklist item completed
 # ─── PROJECTS API ────────────────────────────────────────────────────────────
 ##############################################################################
 
-_PROJECTS_FILE_LOCK = threading.Lock()
+# One project read-modify-write at a time (v0.10.1 saves, P1): two requests in
+# one project used to both load it and the later save dropped the other's change
+# (activity, columns, comments, title). Held only around load..save, never while
+# calling out (gateway, agents); taken after _WORKFLOW_LOCK when both are needed.
+_PROJECTS_FILE_LOCK = threading.RLock()
+
+
+def _projects_locked(fn):
+    def wrapper(*args, **kwargs):
+        with _PROJECTS_FILE_LOCK:
+            return fn(*args, **kwargs)
+    wrapper.__name__ = fn.__name__
+    wrapper.__doc__ = fn.__doc__
+    wrapper.__wrapped__ = fn
+    return wrapper
+
+_PROJECTS_BASE = threading.local()
+
 
 def _load_projects():
-    """Load projects from the markdown-backed store."""
-    return PROJECT_STORE.load_all()
+    """Load projects from the markdown-backed store.
+
+    Remembers (per thread) what was loaded so the next save writes only what this
+    request or workflow changed, instead of rewriting every project (BE-05).
+    """
+    data = PROJECT_STORE.load_all()
+    _PROJECTS_BASE.snapshot = PROJECT_STORE.snapshot(data)
+    return data
+
+
+_PROJECT_STATUSES = {"active", "paused", "completed", "archived"}
+_PROJECT_PRIORITIES = {"low", "medium", "high", "critical", "urgent"}
+_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{3,8}$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}([T ][0-9:.]+(Z|[+-]\d{2}:?\d{2})?)?$")
+_COLUMN_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,80}$")
+
+
+def _clean_project_fields(project):
+    """CH-02 server side: fields that the board puts into attributes, styles and
+    handlers are allow-listed before they are stored."""
+    if not isinstance(project, dict):
+        return
+    if project.get("status") not in _PROJECT_STATUSES:
+        project["status"] = "active"
+    if project.get("priority") not in _PROJECT_PRIORITIES:
+        project["priority"] = "medium"
+    if project.get("dueDate") and not _DATE_RE.match(str(project.get("dueDate"))):
+        project["dueDate"] = None
+    if isinstance(project.get("tags"), list):
+        project["tags"] = [re.sub(r"[<>\"'`]", "", str(t))[:40] for t in project["tags"][:30] if str(t).strip()]
+    renamed = {}
+    for column in project.get("columns") or []:
+        if not isinstance(column, dict):
+            continue
+        if column.get("color") and not _COLOR_RE.match(str(column.get("color"))):
+            column["color"] = "#6c757d"
+        if column.get("id") and not _COLUMN_ID_RE.match(str(column.get("id"))):
+            new_id = uuid.uuid4().hex[:12]
+            renamed[column["id"]] = new_id
+            column["id"] = new_id
+    for task in project.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        if task.get("columnId") in renamed:
+            task["columnId"] = renamed[task["columnId"]]
+        if task.get("priority") not in _PROJECT_PRIORITIES:
+            task["priority"] = "medium"
+        if task.get("dueDate") and not _DATE_RE.match(str(task.get("dueDate"))):
+            task["dueDate"] = None
+        if isinstance(task.get("tags"), list):
+            task["tags"] = [re.sub(r"[<>\"'`]", "", str(t))[:40] for t in task["tags"][:30] if str(t).strip()]
 
 
 def _save_projects(data):
-    """Persist projects to the markdown-backed store."""
-    PROJECT_STORE.save_all(data)
+    """Persist projects to the markdown-backed store (only changed projects/tasks)."""
+    for project in (data or {}).get("projects", []) or []:
+        _clean_project_fields(project)
+    PROJECT_STORE.save_all(data, getattr(_PROJECTS_BASE, "snapshot", None))
+    _PROJECTS_BASE.snapshot = PROJECT_STORE.snapshot(data)
 
 
 def _proj_uuid():
@@ -13167,7 +14805,7 @@ _BUILTIN_TEMPLATES = [
 
 def _handle_projects_list(query_string=""):
     """GET /api/projects — return all projects (summaries)."""
-    data = _load_projects()
+    data = PROJECT_STORE.load_all_shared()  # read-only (perf v0.13)
     projects = data.get("projects", [])
     # Optional ?status= filter
     status_filter = None
@@ -13205,7 +14843,7 @@ def _handle_projects_list(query_string=""):
 
 def _handle_project_get(project_id):
     """GET /api/projects/{id} — return full project."""
-    data = _load_projects()
+    data = PROJECT_STORE.load_all_shared()  # read-only (perf v0.13)
     for p in data["projects"]:
         if p["id"] == project_id:
             return {"ok": True, "project": p}
@@ -13214,7 +14852,7 @@ def _handle_project_get(project_id):
 
 def _handle_projects_templates():
     """GET /api/projects/templates — list built-in + user templates."""
-    data = _load_projects()
+    data = PROJECT_STORE.load_all_shared()  # read-only (perf v0.13)
     all_templates = list(_BUILTIN_TEMPLATES) + data.get("templates", [])
     return {"ok": True, "templates": all_templates}
 
@@ -13270,6 +14908,7 @@ def _handle_project_report(project_id):
 
 # ── POST handlers ─────────────────────────────────────────────────────────────
 
+@_projects_locked
 def _handle_project_create(body):
     """POST /api/projects — create a new project."""
     title = (body.get("title") or "").strip()
@@ -13309,6 +14948,7 @@ def _handle_project_create(body):
     return {"ok": True, "project": project}
 
 
+@_projects_locked
 def _handle_task_create(project_id, body):
     """POST /api/projects/{id}/tasks — create a task."""
     data = _load_projects()
@@ -13354,6 +14994,7 @@ def _handle_task_create(project_id, body):
     return {"ok": True, "task": task}
 
 
+@_projects_locked
 def _handle_task_comment(project_id, task_id, body):
     """POST /api/projects/{id}/tasks/{taskId}/comments."""
     data = _load_projects()
@@ -13381,6 +15022,7 @@ def _handle_task_comment(project_id, task_id, body):
     return {"ok": True, "comment": comment}
 
 
+@_projects_locked
 def _handle_project_from_template(body):
     """POST /api/projects/from-template."""
     template_id = (body.get("templateId") or "").strip()
@@ -13450,6 +15092,7 @@ def _handle_project_from_template(body):
     return {"ok": True, "project": project}
 
 
+@_projects_locked
 def _handle_save_as_template(body):
     """POST /api/projects/templates — save a project as template."""
     project_id = (body.get("projectId") or "").strip()
@@ -13487,6 +15130,10 @@ def _handle_save_as_template(body):
 
 # ── PUT handlers ──────────────────────────────────────────────────────────────
 
+# Column titles that mark a project task as finished.
+_PROJECT_DONE_COLUMN_TITLES = ("done", "completed", "verified", "published", "fixed", "closed")
+
+@_projects_locked
 def _handle_project_update(project_id, body):
     """PUT /api/projects/{id} — update project metadata."""
     data = _load_projects()
@@ -13494,6 +15141,7 @@ def _handle_project_update(project_id, body):
     if not p:
         return {"error": "Project not found", "_status": 404}
     by = body.get("by", "user")
+    old_status = p.get("status")
     updatable = ["title", "description", "status", "priority", "dueDate", "tags", "branch"]
     for field in updatable:
         if field in body:
@@ -13503,9 +15151,22 @@ def _handle_project_update(project_id, body):
                 _log_activity(p, "project_updated", by, f"Changed {field}: {old} → {body[field]}")
     p["updatedAt"] = _proj_now()
     _save_projects(data)
+    if p.get("status") != old_status:
+        _life_hook("project_status", project_id=project_id, title=p.get("title", ""), old=old_status,
+                   new=p.get("status"), by=by, agents=_project_done_task_assignees(p))
     return {"ok": True, "project": p}
 
 
+def _project_done_task_assignees(project):
+    """Assignees of a project's DONE tasks (Office life design 3.5): a task counts when it sits
+    in a final column or carries completedAt; an assignee with no done task gets no credit."""
+    done_cols = {c.get("id") for c in project.get("columns", []) or []
+                 if str(c.get("title", "")).lower() in _PROJECT_DONE_COLUMN_TITLES}
+    return sorted({t.get("assignee") for t in project.get("tasks", []) or []
+                   if t.get("assignee") and (t.get("columnId") in done_cols or t.get("completedAt"))})
+
+
+@_projects_locked
 def _handle_task_update(project_id, task_id, body):
     """PUT /api/projects/{id}/tasks/{taskId} — update a task."""
     data = _load_projects()
@@ -13517,6 +15178,7 @@ def _handle_task_update(project_id, task_id, body):
         return {"error": "Task not found", "_status": 404}
     by = body.get("by", "user")
     now = _proj_now()
+    life_hooks = []
     # Track column move
     if "columnId" in body and body["columnId"] != task.get("columnId"):
         old_col = next((c["title"] for c in p.get("columns", []) if c["id"] == task.get("columnId")), task.get("columnId"))
@@ -13548,6 +15210,10 @@ def _handle_task_update(project_id, task_id, body):
                 pts += done_items * SCORE_CHECKLIST_BONUS
                 score_result = _award_points(assignee, pts, f"Completed: {task.get('title','')}")
                 task["_scoreAwarded"] = score_result  # Transient field for response
+            life_hooks.append(("task_done", {
+                "agent": assignee or "", "task_id": task_id, "title": task.get("title", ""),
+                "project_id": project_id, "points": (score_result or {}).get("pointsAwarded", 0) if assignee else 0,
+                "completed_at": now, "by": by}))
         elif body["columnId"] not in done_cols and task.get("completedAt"):
             task["completedAt"] = None
         _log_activity(p, "task_moved", by, f"Moved '{task['title']}' from {old_col} to {new_col}", task_id)
@@ -13557,6 +15223,9 @@ def _handle_task_update(project_id, task_id, body):
     # Track assignee change
     if "assignee" in body and body["assignee"] != task.get("assignee"):
         _log_activity(p, "task_assigned", by, f"Assigned to {body['assignee']}", task_id)
+        life_hooks.append(("task_assigned", {
+            "task_id": task_id, "title": body.get("title") or task.get("title", ""), "project_id": project_id,
+            "old": task.get("assignee"), "new": body["assignee"], "by": by}))
     updatable = ["title", "description", "columnId", "order", "priority", "assignee", "assigneeBranch", "dueDate", "tags", "checklist", "completedAt"]
     # Track which fields changed for md file update
     changed_fields = []
@@ -13568,6 +15237,8 @@ def _handle_task_update(project_id, task_id, body):
     task["updatedAt"] = now
     p["updatedAt"] = now
     _save_projects(data)
+    for life_name, life_fields in life_hooks:
+        _life_hook(life_name, **life_fields)
     # Update task markdown file on meaningful changes
     if changed_fields:
         current_col = next((c["title"] for c in p.get("columns", []) if c["id"] == task.get("columnId")), "unknown")
@@ -13587,6 +15258,7 @@ def _handle_task_update(project_id, task_id, body):
     return {"ok": True, "task": task}
 
 
+@_projects_locked
 def _handle_columns_update(project_id, body):
     """PUT /api/projects/{id}/columns — reorder/add/edit columns."""
     data = _load_projects()
@@ -13609,6 +15281,7 @@ def _handle_columns_update(project_id, body):
     return {"ok": True, "columns": columns}
 
 
+@_projects_locked
 def _handle_tasks_reorder(project_id, body):
     """PUT /api/projects/{id}/tasks/reorder — batch reorder."""
     data = _load_projects()
@@ -13643,8 +15316,11 @@ def _handle_tasks_reorder(project_id, body):
 
 # ── DELETE handlers ───────────────────────────────────────────────────────────
 
+@_projects_locked
 def _handle_project_delete(project_id):
     """DELETE /api/projects/{id}."""
+    if not is_safe_project_id(project_id):
+        return {"error": "Invalid project id", "_status": 400}
     # Delete through the store so both markdown-backed projects and legacy
     # JSON-only projects are removed correctly.
     deleted = PROJECT_STORE.delete_project(project_id)
@@ -13653,6 +15329,7 @@ def _handle_project_delete(project_id):
     return {"ok": True, "id": project_id}
 
 
+@_projects_locked
 def _handle_task_delete(project_id, task_id):
     """DELETE /api/projects/{id}/tasks/{taskId}."""
     data = _load_projects()
@@ -13788,6 +15465,7 @@ def _wf_get_active_task(project):
             return t
     return None
 
+@_projects_locked
 def _wf_move_task(project_id, task_id, target_col_id, by="workflow"):
     """Move a task to a target column and persist."""
     data = _load_projects()
@@ -13806,11 +15484,14 @@ def _wf_move_task(project_id, task_id, target_col_id, by="workflow"):
     task["updatedAt"] = _proj_now()
     p["updatedAt"] = _proj_now()
     # Handle done column — match common "final" column names
-    done_cols = [c["id"] for c in p.get("columns", []) if c.get("title", "").lower() in ("done", "completed", "verified", "published", "fixed", "closed")]
+    done_cols = [c["id"] for c in p.get("columns", []) if c.get("title", "").lower() in _PROJECT_DONE_COLUMN_TITLES]
+    life_done = None
     if target_col_id in done_cols and not task.get("completedAt"):
         task["completedAt"] = _proj_now()
         # Award points
         assignee = task.get("assignee")
+        life_done = {"agent": assignee or "", "task_id": task_id, "title": task.get("title", ""),
+                     "project_id": project_id, "points": 0, "completed_at": task["completedAt"], "by": by}
         if assignee:
             pts = SCORE_TASK_COMPLETED
             pri = task.get("priority", "medium")
@@ -13820,13 +15501,17 @@ def _wf_move_task(project_id, task_id, target_col_id, by="workflow"):
             chk = task.get("checklist", [])
             done_items = sum(1 for c in chk if c.get("done"))
             pts += done_items * SCORE_CHECKLIST_BONUS
-            _award_points(assignee, pts, f"Completed: {task.get('title','')}")
+            life_done["points"] = (_award_points(assignee, pts, f"Completed: {task.get('title','')}") or {}).get(
+                "pointsAwarded", 0)
     elif target_col_id not in done_cols:
         task["completedAt"] = None
     _log_activity(p, "task_moved", by, f"Moved '{task['title']}' from {old_col} to {new_col}", task_id)
     _save_projects(data)
+    if life_done:
+        _life_hook("task_done", **life_done)
     return task
 
+@_projects_locked
 def _wf_update_task_field(project_id, task_id, field, value):
     """Update a single field on a task and persist."""
     data = _load_projects()
@@ -13843,6 +15528,7 @@ def _wf_update_task_field(project_id, task_id, field, value):
     return task
 
 
+@_projects_locked
 def _wf_sync_project_workflow_meta(project_id, *, active=None, phase=None, current_task_id=None, active_agent=None):
     """Mirror live workflow metadata onto the project payload for UI consumers."""
     data = _load_projects()
@@ -13861,6 +15547,7 @@ def _wf_sync_project_workflow_meta(project_id, *, active=None, phase=None, curre
     _save_projects(data)
     return p
 
+@_projects_locked
 def _wf_write_task_file(project_id, task, status_text, review_results=None, work_log_entry=None):
     """Update canonical markdown-backed task state, preserving compatibility with workflow logging."""
     data = _load_projects()
@@ -14228,6 +15915,8 @@ def _wf_abort_task_session(session_key):
     similar to clicking Stop in the VO chat. Only targets the given session key —
     does not affect the agent's main session or other workflow sessions.
     """
+    if _pl_owns():   # (the layer has the gateway: through its link, wherever the office runs)
+        return bool(_gateway_rpc_call("chat.abort", {"sessionKey": session_key}, timeout=15).get("ok"))
     import asyncio as _asyncio
 
     async def _do_abort():
@@ -14246,7 +15935,6 @@ def _wf_abort_task_session(session_key):
                 ws = await _ws_connect(
                     gw_url,
                     max_size=1024 * 1024,
-                    additional_headers={"Origin": origin},
                     close_timeout=3,
                 )
                 async with ws:
@@ -14263,14 +15951,14 @@ def _wf_abort_task_session(session_key):
                         "method": "connect",
                         "params": {
                             "minProtocol": GATEWAY_PROTOCOL_VERSION, "maxProtocol": GATEWAY_PROTOCOL_VERSION,
-                            "client": {"id": "vo-workflow", "version": "1.0", "platform": "server", "mode": "webchat"},
+                            "client": {"id": "gateway-client", "version": "1.0", "platform": "server", "mode": "backend"},
                             "role": "operator",
                             "scopes": ["operator.read", "operator.write"],
                             "caps": [], "commands": [], "permissions": {},
                             "auth": {"token": token}
                         }
                     }
-                    await ws.send(json.dumps(connect_msg))
+                    await ws.send(json.dumps(_oc_with_device(connect_msg, gw_url, msg)))
                     raw2 = await _asyncio.wait_for(ws.recv(), timeout=5)
                     res = json.loads(raw2)
                     if not res.get("ok"):
@@ -14318,6 +16006,9 @@ def _wf_delete_session_via_gateway(session_key):
     and will keep retrying (with "Continue where you left off") on stale sessions.
     This sends a sessions.delete RPC to properly terminate the session.
     """
+    if _pl_owns():   # (the layer has the gateway: through its link, wherever the office runs)
+        return bool(_gateway_rpc_call("sessions.delete", {"key": session_key, "deleteTranscript": True,
+                                                          "emitLifecycleHooks": False}, timeout=15).get("ok"))
     import asyncio as _asyncio
 
     async def _do_delete():
@@ -14336,7 +16027,6 @@ def _wf_delete_session_via_gateway(session_key):
                 ws = await _ws_connect(
                     gw_url,
                     max_size=1024 * 1024,
-                    additional_headers={"Origin": origin},
                     close_timeout=3,
                 )
                 async with ws:
@@ -14353,14 +16043,14 @@ def _wf_delete_session_via_gateway(session_key):
                         "method": "connect",
                         "params": {
                             "minProtocol": GATEWAY_PROTOCOL_VERSION, "maxProtocol": GATEWAY_PROTOCOL_VERSION,
-                            "client": {"id": "vo-workflow", "version": "1.0", "platform": "server", "mode": "webchat"},
+                            "client": {"id": "gateway-client", "version": "1.0", "platform": "server", "mode": "backend"},
                             "role": "operator",
                             "scopes": ["operator.read", "operator.write"],
                             "caps": [], "commands": [], "permissions": {},
                             "auth": {"token": token}
                         }
                     }
-                    await ws.send(json.dumps(connect_msg))
+                    await ws.send(json.dumps(_oc_with_device(connect_msg, gw_url, msg)))
                     raw2 = await _asyncio.wait_for(ws.recv(), timeout=5)
                     res = json.loads(raw2)
                     if not res.get("ok"):
@@ -14442,12 +16132,10 @@ def _wf_cleanup_task_sessions(agent_id, project_id, task_id):
         if session_key not in sessions_data:
             return
 
-        # Get session ID to delete the JSONL file
+        # Get session ID to delete the JSONL file. The session entry itself belongs
+        # to the gateway (Phase 1 asked it to delete); never rewrite its
+        # sessions.json from here, that races the gateway's own writes (BE-20).
         session_id = sessions_data[session_key].get("sessionId", "")
-        del sessions_data[session_key]
-
-        with open(sessions_json_path, "w") as f:
-            json.dump(sessions_data, f)
 
         # Delete session JSONL and lock files
         if session_id:
@@ -14477,6 +16165,15 @@ def _wf_call_agent(agent_id, message, timeout=600, project_id=None, task_id=None
     """
     agent_record = _find_agent_record(agent_id) or {}
     provider_kind = str(agent_record.get("providerKind") or "openclaw")
+    office_id = agent_record.get("id") or agent_id
+    if _pl_owns() and provider_layer_turns.layer_agent(office_id):
+        # OpenClaw and Hermes agents work through the layer: one chat per task keeps its context
+        label = f"Task {task_id}" if task_id else "Office task"
+        result = provider_layer_turns.agent_turn(PROVIDER_LAYER, office_id, message, timeout=timeout, label=label)
+        _wf_record_provider_activity(office_id, project_id, task_id, result.get("tools") or [])
+        if result.get("ok"):
+            return result.get("reply", "")
+        return f"[ERROR] {provider_kind} agent failed: {result.get('error') or result}"
     if provider_kind != "openclaw":
         result = _handle_provider_chat({
             "agentId": agent_record.get("id") or agent_record.get("statusKey") or agent_id,
@@ -14544,6 +16241,12 @@ def _wf_call_agent_ws(agent_id, message, timeout, session_key=None):
     is unavailable/unhealthy and the openclaw CLI is not present in the Docker
     container.
     """
+    if _pl_owns():
+        # (the layer has the gateway: a turn through it, in the agent's chat for this session; never a second client)
+        office_id = (_find_agent_record(agent_id) or {}).get("id") or agent_id
+        result = provider_layer_turns.agent_turn(PROVIDER_LAYER, office_id, message, timeout=timeout,
+                                                 label=f"Office {session_key.rsplit(':', 1)[-1]}" if session_key else "Office chat")
+        return result.get("reply", "") if result.get("ok") else f"[ERROR] OpenClaw agent failed: {result.get('error') or result}"
     token = _get_gateway_token()
     if not token:
         return None
@@ -14555,20 +16258,19 @@ def _wf_call_agent_ws(agent_id, message, timeout, session_key=None):
         async with ws_connect(
             gw_url,
             max_size=1024 * 1024,
-            additional_headers={"Origin": origin},
             close_timeout=3,
         ) as ws:
             # Challenge
-            await asyncio.wait_for(ws.recv(), timeout=5)
+            challenge = await asyncio.wait_for(ws.recv(), timeout=5)
             connect_id = f"vo-ws-connect-{uuid.uuid4()}"
-            await ws.send(json.dumps({
+            await ws.send(json.dumps(_oc_with_device({
                 "type": "req",
                 "id": connect_id,
                 "method": "connect",
                 "params": {
                     "minProtocol": GATEWAY_PROTOCOL_VERSION,
                     "maxProtocol": GATEWAY_PROTOCOL_VERSION,
-                    "client": {"id": "openclaw-control-ui", "version": _get_openclaw_version(), "platform": "web", "mode": "webchat"},
+                    "client": {"id": "gateway-client", "version": _get_openclaw_version(), "platform": "server", "mode": "backend"},
                     "role": "operator",
                     "scopes": ["operator.read", "operator.write", "operator.admin"],
                     "caps": ["tool-events"],
@@ -14578,7 +16280,7 @@ def _wf_call_agent_ws(agent_id, message, timeout, session_key=None):
                     "locale": "en-US",
                     "userAgent": "virtual-office-server/1.0",
                 },
-            }))
+            }, gw_url, challenge)))
             # Wait for connect response, ignoring snapshot/events.
             while True:
                 raw = await asyncio.wait_for(ws.recv(), timeout=10)
@@ -15414,15 +17116,16 @@ def _wf_run_pipeline_inner(project_id, single_task, wf, stop_flag):
                 _wf_write_task_file(project_id, task, "done", work_log_entry=completion_entry)
 
                 # Mark all checklist items as done
-                data = _load_projects()
-                project = next((x for x in data["projects"] if x["id"] == project_id), None)
-                if project:
-                    task = next((t for t in project["tasks"] if t["id"] == task_id), None)
-                    if task and task.get("checklist"):
-                        for item in task["checklist"]:
-                            item["done"] = True
-                        task["updatedAt"] = _proj_now()
-                        _save_projects(data)
+                with _PROJECTS_FILE_LOCK:
+                    data = _load_projects()
+                    project = next((x for x in data["projects"] if x["id"] == project_id), None)
+                    if project:
+                        task = next((t for t in project["tasks"] if t["id"] == task_id), None)
+                        if task and task.get("checklist"):
+                            for item in task["checklist"]:
+                                item["done"] = True
+                            task["updatedAt"] = _proj_now()
+                            _save_projects(data)
 
             # Clean up workflow sessions for this task (AFTER activity extraction)
             _wf_cleanup_task_sessions(assignee, project_id, task_id)
@@ -15499,14 +17202,7 @@ def _wf_persist_state(project_id):
     """Persist workflow state to disk so it survives page refreshes and container restarts."""
     with _WORKFLOW_LOCK:
         wf = _WORKFLOW_STATE.get(project_id, {})
-    state_data = {}
-    try:
-        if os.path.isfile(WORKFLOW_STATE_FILE):
-            with open(WORKFLOW_STATE_FILE, "r") as f:
-                state_data = json.load(f)
-    except Exception:
-        state_data = {}
-    state_data[project_id] = {
+    entry = {
         "active": wf.get("active", False),
         "autoMode": wf.get("autoMode", False),
         "currentTaskId": wf.get("currentTaskId"),
@@ -15516,12 +17212,18 @@ def _wf_persist_state(project_id):
         "error": wf.get("error"),
         "reviewCycle": wf.get("reviewCycle", 0),
     }
-    try:
-        os.makedirs(os.path.dirname(WORKFLOW_STATE_FILE), exist_ok=True)
-        with open(WORKFLOW_STATE_FILE, "w") as f:
-            json.dump(state_data, f, indent=2)
-    except Exception:
-        pass
+    with _json_file_lock(WORKFLOW_STATE_FILE):
+        try:
+            state_data = _read_json_state(WORKFLOW_STATE_FILE, default={})
+        except JsonStateError as exc:
+            print(f"[WORKFLOW] state not saved: {exc}")
+            state_data = None
+        if state_data is not None:
+            state_data[project_id] = entry
+            try:
+                _write_json_atomic(WORKFLOW_STATE_FILE, state_data)
+            except OSError as exc:
+                print(f"[WORKFLOW] state not saved: {exc}")
     # Also write shared project-work signal file so other VO instances
     # can show project work indicators.
     # This file lives in ~/.openclaw/shared/ which is mounted by all VOs.
@@ -15549,9 +17251,7 @@ def _wf_update_shared_project_work():
             }
     try:
         shared_path = os.path.join(WORKSPACE_BASE, "shared", "project-work.json")
-        os.makedirs(os.path.dirname(shared_path), exist_ok=True)
-        with open(shared_path, "w") as f:
-            json.dump(shared, f)
+        _atomic_write_text(shared_path, json.dumps(shared))
     except Exception:
         pass
 
@@ -15569,15 +17269,18 @@ def _wf_load_persisted_state(project_id):
 
 def _wf_clear_persisted_state(project_id):
     """Clear persisted state when workflow ends."""
-    try:
-        if os.path.isfile(WORKFLOW_STATE_FILE):
-            with open(WORKFLOW_STATE_FILE, "r") as f:
-                state_data = json.load(f)
+    with _json_file_lock(WORKFLOW_STATE_FILE):
+        try:
+            state_data = _read_json_state(WORKFLOW_STATE_FILE, default=None)
+        except JsonStateError as exc:
+            print(f"[WORKFLOW] state not cleared: {exc}")
+            return
+        if isinstance(state_data, dict) and project_id in state_data:
             state_data.pop(project_id, None)
-            with open(WORKFLOW_STATE_FILE, "w") as f:
-                json.dump(state_data, f, indent=2)
-    except Exception:
-        pass
+            try:
+                _write_json_atomic(WORKFLOW_STATE_FILE, state_data)
+            except OSError:
+                pass
 
 
 def _handle_workflow_chat(project_id):
@@ -15705,8 +17408,9 @@ def _wf_get_task_session_messages(agent_id, project_id, task_id, max_messages=50
                         if c.get("type") == "text":
                             text += c.get("text", "")
                         elif c.get("type") == "toolCall":
-                            name = c.get("name", "?")
-                            args = c.get("arguments", {})
+                            # (a deferred tool's wrapper, tool_call / dispatch_action, is its inner tool)
+                            name, args = gateway_presence.unwrap_tool_call(c.get("name", "?"), c.get("arguments", {}))
+                            name = name or "?"
                             # Build a human-readable summary instead of bare tool name
                             summary = name
                             if isinstance(args, dict):
@@ -15800,15 +17504,19 @@ def _handle_workflow_start(project_id, body=None):
         }
         _WORKFLOW_STATE[project_id] = wf
 
-    # Update project workflow settings
-    p["workflowActive"] = True
-    p["workflowPhase"] = "starting"
-    p["activeTaskId"] = None
-    p["activeAgent"] = None
-    p["autoMode"] = auto_mode
-    p["updatedAt"] = _proj_now()
-    _save_projects(data)
-    _log_activity(p, "workflow_started", "user", f"Workflow started (autoMode: {auto_mode})")
+    # Update project workflow settings (fresh copy under the projects lock)
+    with _PROJECTS_FILE_LOCK:
+        data = _load_projects()
+        p = next((x for x in data["projects"] if x["id"] == project_id), None)
+        if p:
+            p["workflowActive"] = True
+            p["workflowPhase"] = "starting"
+            p["activeTaskId"] = None
+            p["activeAgent"] = None
+            p["autoMode"] = auto_mode
+            p["updatedAt"] = _proj_now()
+            _log_activity(p, "workflow_started", "user", f"Workflow started (autoMode: {auto_mode})")
+            _save_projects(data)
 
     _wf_persist_state(project_id)
 
@@ -15839,16 +17547,17 @@ def _handle_workflow_stop(project_id):
     _wf_clear_persisted_state(project_id)
 
     # Update project
-    data = _load_projects()
-    p = next((x for x in data["projects"] if x["id"] == project_id), None)
-    if p:
-        p["workflowActive"] = False
-        p["workflowPhase"] = "stopped"
-        p["activeTaskId"] = None
-        p["activeAgent"] = None
-        p["updatedAt"] = _proj_now()
-        _save_projects(data)
-        _log_activity(p, "workflow_stopped", "user", "Workflow stopped by user")
+    with _PROJECTS_FILE_LOCK:
+        data = _load_projects()
+        p = next((x for x in data["projects"] if x["id"] == project_id), None)
+        if p:
+            p["workflowActive"] = False
+            p["workflowPhase"] = "stopped"
+            p["activeTaskId"] = None
+            p["activeAgent"] = None
+            p["updatedAt"] = _proj_now()
+            _log_activity(p, "workflow_stopped", "user", "Workflow stopped by user")
+            _save_projects(data)
 
     # Abort the running agent session for the active task, then clean up.
     # This sends chat.abort to the gateway which immediately kills any in-flight
@@ -15867,13 +17576,14 @@ def _handle_workflow_stop(project_id):
 def _handle_workflow_auto_mode(project_id, body):
     """PUT /api/projects/{id}/workflow/auto-mode — toggle auto mode."""
     auto_mode = body.get("autoMode", False)
-    data = _load_projects()
-    p = next((x for x in data["projects"] if x["id"] == project_id), None)
-    if not p:
-        return {"error": "Project not found", "_status": 404}
-    p["autoMode"] = auto_mode
-    p["updatedAt"] = _proj_now()
-    _save_projects(data)
+    with _PROJECTS_FILE_LOCK:
+        data = _load_projects()
+        p = next((x for x in data["projects"] if x["id"] == project_id), None)
+        if not p:
+            return {"error": "Project not found", "_status": 404}
+        p["autoMode"] = auto_mode
+        p["updatedAt"] = _proj_now()
+        _save_projects(data)
 
     with _WORKFLOW_LOCK:
         wf = _WORKFLOW_STATE.get(project_id)
@@ -15885,7 +17595,7 @@ def _handle_workflow_auto_mode(project_id, body):
 
 def _handle_workflow_status(project_id):
     """GET /api/projects/{id}/workflow/status — get workflow state."""
-    data = _load_projects()
+    data = PROJECT_STORE.load_all_shared()  # read-only poll (perf v0.13)
     p = next((x for x in data["projects"] if x["id"] == project_id), None)
     if not p:
         return {"error": "Project not found", "_status": 404}
@@ -15945,6 +17655,7 @@ def _handle_workflow_status(project_id):
     }
 
 
+@_projects_locked
 def _handle_review_check_update(project_id, task_id, body):
     """PUT /api/projects/{id}/tasks/{taskId}/review-check — update review status."""
     data = _load_projects()
@@ -15968,12 +17679,18 @@ def _handle_review_check_update(project_id, task_id, body):
     return {"ok": True, "task": task}
 
 
+@_projects_locked
 def _handle_template_delete(template_id):
     """DELETE /api/projects/templates/{id}."""
     data = _load_projects()
-    before = len(data.get("templates", []))
-    data["templates"] = [t for t in data.get("templates", []) if t["id"] != template_id]
-    if len(data["templates"]) == before:
+    before = len(data.get("projects", []))
+    # Templates are stored as projects flagged "template"; remove that project.
+    data["projects"] = [
+        p for p in data.get("projects", [])
+        if not (p.get("id") == template_id and p.get("template"))
+    ]
+    data["templates"] = [t for t in data.get("templates", []) if t.get("id") != template_id]
+    if len(data["projects"]) == before:
         return {"error": "Template not found", "_status": 404}
     _save_projects(data)
     return {"ok": True, "id": template_id}
@@ -15999,10 +17716,13 @@ def _handle_agent_delete(body):
         agent = _office_agent_lookup(agent_id)
         if not agent:
             return {"error": f"Unknown agent '{agent_id}'", "_status": 404}
+        agent_pc_id = AGENT_PC_STORE.ensure_profile(agent)
         provider_kind = str(agent.get("providerKind") or "openclaw")
         profile = str(agent.get("providerAgentId") or agent.get("profile") or agent_id)
         if profile == "main" or (provider_kind == "openclaw" and agent_id == "main"):
             return {"error": "Cannot delete a provider's main agent", "_status": 403}
+        if provider_kind == "openclaw":
+            _hp_require_full("openclaw")
         manifest = _get_provider_registry().manifest(provider_kind)
         if not manifest:
             return {"error": f"Unknown provider '{provider_kind}'", "_status": 400}
@@ -16010,6 +17730,7 @@ def _handle_agent_delete(body):
             _forget_discovered_agent(provider_kind, profile)
             _discovered_at = 0
             refresh_agent_maps()
+            AGENT_PC_STORE.archive_profile(agent_pc_id)
             return {
                 "ok": True,
                 "agentId": agent_id,
@@ -16045,6 +17766,7 @@ def _handle_agent_delete(body):
         # Refresh discovery
         _discovered_at = 0
         refresh_agent_maps()
+        AGENT_PC_STORE.archive_profile(agent_pc_id)
 
         return {
             "ok": True,
@@ -16053,6 +17775,8 @@ def _handle_agent_delete(body):
             "message": f"Agent '{agent_id}' deleted successfully"
         }
 
+    except _RequestError:
+        raise
     except Exception as e:
         traceback.print_exc()
         return {"error": str(e), "_status": 500}
@@ -16182,8 +17906,9 @@ def get_agent_messages(agent_key, max_messages=500):
                                     src = item.get("source", {}).get("url") or item.get("source", {}).get("path")
                                 _add_media_url(src, item.get("mimeType") or item.get("media_type") or item.get("contentType") or "", item.get("name") or item.get("filename") or "")
                             elif item.get("type") == "toolCall":
-                                name = item.get("name", "")
-                                args = item.get("arguments", {})
+                                # (a deferred tool's wrapper, tool_call / dispatch_action, is its inner tool)
+                                name, args = gateway_presence.unwrap_tool_call(item.get("name", ""),
+                                                                               item.get("arguments", {}))
                                 if name == "exec":
                                     cmd = args.get("command", "")
                                     if "office.py" in cmd:
@@ -16586,11 +18311,18 @@ def _rekey_provider_session_history(provider_kind, profile, source_session_id, t
         return _load_provider_session_history(provider_kind, profile, target_session_id or source_session_id)
     current = _load_provider_active_session(provider_kind, profile)
     source_is_current = str(current.get("sessionId") or "") == source_session_id
-    messages = _load_provider_session_history(provider_kind, profile, source_session_id)
+    target_is_current = str(current.get("sessionId") or "") == target_session_id
+    # (the native id may already have a transcript, e.g. Antigravity's one conversation or a provider that resumed: the
+    # lazy chat's messages go after it, never over it; and when it is the active session its file gets them too, as
+    # every later read of it comes from there)
+    existing = _load_provider_session_history(provider_kind, profile, target_session_id)
+    moved = _load_provider_session_history(provider_kind, profile, source_session_id)
+    messages = list(existing) + [m for m in moved if m not in existing]
     messages = _save_chat_session_mirror(provider_kind, profile, target_session_id, messages)
     _delete_chat_session_mirror(provider_kind, profile, source_session_id)
     if source_is_current:
         _save_provider_active_session(provider_kind, profile, target_session_id, source="sdk-run")
+    if source_is_current or target_is_current:
         with PROVIDER_HISTORY_LOCK:
             _atomic_write_text(_provider_chat_history_path(provider_kind, profile), json.dumps(messages, indent=2, ensure_ascii=False))
     return messages
@@ -16677,7 +18409,7 @@ def _sync_provider_active_session(agent, force=False):
         return _load_provider_active_session(provider_kind, profile)
     if _provider_run_for_agent(provider_kind, profile):
         return _load_provider_active_session(provider_kind, profile)
-    interval = max(1, min(60, int(cfg.get("sessionSyncIntervalSec") or 3)))
+    interval = max(1, min(60, int(cfg.get("sessionSyncIntervalSec") or 20)))
     cache_key = f"{provider_kind}:{profile}"
     now = time.time()
     with _PROVIDER_SESSION_SYNC_LOCK:
@@ -16802,7 +18534,10 @@ def _save_provider_run_progress(meta, snapshot, terminal=False):
         and not history_session_id.startswith("@new:")
         and not str(_load_provider_active_session(provider_kind, profile).get("sessionId") or "")
     ):
-        _save_provider_active_session(provider_kind, profile, history_session_id, source="sdk-run")
+        # A new chat's native id becomes the active session: its mirror (the person's first message, re-keyed from
+        # @new: on an earlier snapshot) moves into the active history with it; only marking it active made the next
+        # read below return the empty active file and the first turn was lost.
+        _activate_provider_session(provider_kind, profile, history_session_id, source="sdk-run")
     if native_session_id:
         meta["sessionId"] = native_session_id
         if history_session_id and history_session_id != native_session_id:
@@ -16938,26 +18673,52 @@ def _handle_provider_run_start(body):
             "sessionKey": _provider_session_key(provider_kind, profile, history_session_id),
         }
 
-    now_ms = int(time.time() * 1000)
-    history = _load_provider_session_history(provider_kind, profile, history_session_id)
-    history.append({
-        "role": "user",
-        "text": message,
-        "ts": now_ms,
-        "epochMs": now_ms,
-        "from": body.get("fromDisplayName") or "You",
-        "fromType": body.get("fromType") or "human",
-        "source": provider_kind,
-        "sessionId": history_session_id,
-        "runId": run_id,
-        "attachments": body.get("attachments") if isinstance(body.get("attachments"), list) else [],
-    })
-    _save_provider_session_history(provider_kind, profile, history_session_id, history)
-    initial = _provider_progress_snapshot({"thinking": f"Starting {agent.get('name') or provider_kind}.", "sessionId": session_id}, meta)
-    _save_provider_run_progress(meta, initial)
-    _provider_run_emit(meta, "run.started", initial)
+    def _release_reservation(error_text):
+        # BE-30: a failure before or inside the worker must never leave the agent
+        # "busy" forever (every later message would get 409 until restart).
+        with meta["condition"]:
+            if not meta.get("done"):
+                meta["done"] = True
+                meta["result"] = {"ok": False, "error": error_text}
+            meta["condition"].notify_all()
+
+    try:
+        now_ms = int(time.time() * 1000)
+        history = _load_provider_session_history(provider_kind, profile, history_session_id)
+        history.append({
+            "role": "user",
+            "text": message,
+            "ts": now_ms,
+            "epochMs": now_ms,
+            "from": body.get("fromDisplayName") or "You",
+            "fromType": body.get("fromType") or "human",
+            "source": provider_kind,
+            "sessionId": history_session_id,
+            "runId": run_id,
+            "attachments": body.get("attachments") if isinstance(body.get("attachments"), list) else [],
+        })
+        _save_provider_session_history(provider_kind, profile, history_session_id, history)
+        initial = _provider_progress_snapshot({"thinking": f"Starting {agent.get('name') or provider_kind}.", "sessionId": session_id}, meta)
+        _save_provider_run_progress(meta, initial)
+        _provider_run_emit(meta, "run.started", initial)
+    except Exception as exc:
+        _release_reservation(str(exc))
+        with _PROVIDER_RUNS_LOCK:
+            _PROVIDER_RUNS.pop(run_id, None)
+        return {"ok": False, "error": f"Could not start the run: {exc}", "_status": 500}
 
     def worker():
+        try:
+            _worker_body()
+        except Exception as exc:
+            traceback.print_exc()
+            _release_reservation(str(exc))
+            try:
+                _provider_run_emit(meta, "run.failed", {"status": "failed", "error": str(exc)})
+            except Exception:
+                pass
+
+    def _worker_body():
         status_key = agent.get("statusKey") or agent.get("id") or profile
         gateway_presence.set_provider_event(status_key, provider_kind, {"event": "run.started", "run_id": run_id})
 
@@ -17007,7 +18768,11 @@ def _handle_provider_run_start(body):
             active_id = str(active_now.get("sessionId") or "")
             run_ids = {str(meta.get("historySessionId") or ""), str(meta.get("sessionId") or "")}
             if not active_id or active_id in run_ids:
-                _save_provider_active_session(
+                # (a new chat's native id becoming the active one brings its transcript with it: marking it active
+                # alone left the empty active file in front of the mirror the run just wrote, and its first turn
+                # was lost — the old window and the bridge alike)
+                remember = _save_provider_active_session if active_id == str(snapshot["sessionId"]) else _activate_provider_session
+                remember(
                     provider_kind,
                     profile,
                     snapshot["sessionId"],
@@ -17047,7 +18812,6 @@ def _handle_provider_run_events(handler, run_id):
     if not isinstance(meta, dict):
         handler.send_response(404)
         handler.send_header("Content-Type", "text/event-stream")
-        handler.send_header("Access-Control-Allow-Origin", "*")
         handler.end_headers()
         handler.wfile.write(b'event: run.failed\ndata: {"error":"Provider SDK run not found"}\n\n')
         return
@@ -17059,7 +18823,6 @@ def _handle_provider_run_events(handler, run_id):
     # leaving CLI clients and reverse proxies waiting indefinitely after a
     # completed retained/replayed stream.
     handler.send_header("Connection", "close")
-    handler.send_header("Access-Control-Allow-Origin", "*")
     handler.end_headers()
     handler.close_connection = True
     condition = meta["condition"]
@@ -17089,7 +18852,268 @@ def _handle_provider_run_events(handler, run_id):
         pass
 
 
-def get_provider_agent_messages(provider_kind, profile, max_messages=500, session_id=""):
+def _lite_chat_message(msg):
+    """Small version of a chat message for the office canvas (C5 lite=1)."""
+    if not isinstance(msg, dict):
+        return msg
+    item = dict(msg)
+    if item.get("thinking"):
+        item["thinking"] = True
+    else:
+        item.pop("thinking", None)
+    tools = item.get("tools")
+    if isinstance(tools, list) and tools:
+        trimmed = []
+        for tool in tools[-12:]:
+            if not isinstance(tool, dict):
+                continue
+            summary = tool.get("summary") or tool.get("arguments") or ""
+            if not isinstance(summary, str):
+                try:
+                    summary = json.dumps(summary)
+                except Exception:
+                    summary = str(summary)
+            trimmed.append({
+                "id": tool.get("id") or "",
+                "name": str(tool.get("name") or "")[:80],
+                "status": str(tool.get("status") or "")[:24],
+                "summary": summary[:160],
+                "error": bool(tool.get("error")),
+            })
+        item["tools"] = trimmed
+    text = item.get("text")
+    if isinstance(text, str) and len(text) > 4000:
+        item["text"] = text[:4000]
+        item["truncated"] = True
+    item.pop("tokenUsage", None)
+    return item
+
+
+_PROJECT_WORK_SHARED_LAST = {"key": None}
+
+
+def _write_shared_project_work(project_work):
+    """Mirror project work for other offices, only when it changed and atomically (BE-09)."""
+    shared = {}
+    for sk, info in project_work.items():
+        agent_id = AGENT_SESSION_IDS.get(sk, sk)
+        shared[agent_id] = {
+            "projectId": info.get("projectId", ""),
+            "taskId": info.get("taskId", ""),
+            "taskTitle": info.get("taskTitle", ""),
+            "phase": info.get("phase", ""),
+        }
+    key = json.dumps(shared, sort_keys=True)
+    if key == _PROJECT_WORK_SHARED_LAST["key"]:
+        return
+    now_ms = int(time.time() * 1000)
+    for value in shared.values():
+        value["updatedAt"] = now_ms
+    shared_path = os.path.join(WORKSPACE_BASE, "shared", "project-work.json")
+    try:
+        _atomic_write_text(shared_path, json.dumps(shared))
+        _PROJECT_WORK_SHARED_LAST["key"] = key
+    except OSError:
+        pass
+
+
+def _agent_chat_payload(agent_filter=None, max_messages=500, lite=False):
+    """Chat history for the office canvas: every agent, or only ``agent_filter`` status keys."""
+    result = {}
+    for agent_key in AGENT_SESSION_IDS:
+        if agent_filter and agent_key not in agent_filter:
+            continue
+        agent_record = _find_agent_record(agent_key) or {}
+        provider_kind = agent_record.get("providerKind") or "openclaw"
+        if provider_kind != "openclaw":
+            profile = agent_record.get("profile") or agent_record.get("providerAgentId") or "main"
+            msgs = get_provider_agent_messages(provider_kind, profile, max_messages=max_messages, background_sync=True)
+        else:
+            msgs = get_agent_messages(agent_key, max_messages=max_messages)
+        if msgs:
+            result[agent_key] = msgs
+    result = _merge_comm_events_into_agent_chat(result, per_agent_limit=max_messages)
+    # v0.12: the layer's agents (OpenClaw 2026.11 keeps no transcript files; the layer runs the chats): their runs from
+    # the layer's bus, whatever channel the session came from (layer_bubbles.py)
+    store = provider_layer_life.bubbles()
+    if store is not None:
+        for agent_key in store.agents():
+            if agent_filter and agent_key not in agent_filter:
+                continue
+            layer_msgs = store.messages(agent_key)
+            if layer_msgs:
+                result[agent_key] = layer_bubbles.merge(result.get(agent_key) or [], layer_msgs, max_messages)
+    if agent_filter:
+        result = {key: value for key, value in result.items() if key in agent_filter}
+    # Build project-work map: which agents are currently working on project tasks
+    # Primary detection: check each agent's most recently active session key
+    # for the "wf-" prefix (workflow sessions created by the project system).
+    # This works across all VO instances since they read the same session files.
+    project_work = {}
+    for agent_key, agent_id in AGENT_SESSION_IDS.items():
+        agent_record = _find_agent_record(agent_key) or {}
+        if agent_record.get("providerKind", "openclaw") != "openclaw":
+            continue
+        try:
+            sdir = os.path.join(WORKSPACE_BASE, f"agents/{agent_id}/sessions")
+            sjson = os.path.join(sdir, "sessions.json")
+            with open(sjson, "r") as _sf:
+                sdata = json.load(_sf)
+            best_ts = 0
+            best_key = ""
+            for skey, sval in sdata.items():
+                if not isinstance(sval, dict):
+                    continue
+                sts = sval.get("updatedAt", 0)
+                if sts > best_ts:
+                    best_ts = sts
+                    best_key = skey
+            # Detect workflow session: key contains ":wf-"
+            if best_key and ":wf-" in best_key:
+                if time.time() - best_ts / 1000 < 300:
+                    project_work[agent_key] = {
+                        "projectId": "",
+                        "taskId": "",
+                        "taskTitle": "Project task",
+                        "phase": "in_progress",
+                    }
+        except Exception:
+            pass
+    # Enrich with in-memory workflow state / persisted state (has task titles etc.)
+    active_phases = ("in_progress", "dispatching", "reviewing", "rework")
+    # 1) Collect from in-memory workflow state
+    wf_entries = {}
+    with _WORKFLOW_LOCK:
+        for pid, wf in _WORKFLOW_STATE.items():
+            wf_entries[pid] = dict(wf)
+    # 2) Merge persisted state for workflows not in memory
+    try:
+        if os.path.isfile(WORKFLOW_STATE_FILE):
+            with open(WORKFLOW_STATE_FILE, "r") as _pwf:
+                persisted_wfs = json.load(_pwf)
+            for pid, pwf in persisted_wfs.items():
+                if pid not in wf_entries:
+                    wf_entries[pid] = pwf
+                else:
+                    for k in ("currentAssignee", "currentTaskTitle", "currentTaskId"):
+                        if not wf_entries[pid].get(k) and pwf.get(k):
+                            wf_entries[pid][k] = pwf[k]
+    except Exception:
+        pass
+    # Build from workflow entries
+    proj_data = None
+    for pid, wf in wf_entries.items():
+        if not wf.get("active") or wf.get("phase") not in active_phases:
+            continue
+        agent_id = wf.get("currentAssignee")
+        task_title = wf.get("currentTaskTitle", "")
+        task_id = wf.get("currentTaskId", "")
+        if not agent_id and task_id:
+            if not proj_data:
+                proj_data = PROJECT_STORE.load_all_shared()  # read-only (perf v0.13)
+            p = next((x for x in proj_data.get("projects", []) if x["id"] == pid), None)
+            if p:
+                task = next((t for t in p.get("tasks", []) if t["id"] == task_id), None)
+                if task:
+                    agent_id = task.get("assignee")
+                    if not task_title:
+                        task_title = task.get("title", "")
+        if not agent_id:
+            continue
+        for sk, aid in AGENT_SESSION_IDS.items():
+            if aid == agent_id:
+                project_work[sk] = {
+                    "projectId": pid,
+                    "taskId": task_id,
+                    "taskTitle": task_title,
+                    "phase": wf.get("phase", ""),
+                }
+                break
+    # 3) Fallback: scan projects.json for workflowActive projects with
+    #    tasks sitting in "In Progress" or "Review" columns — covers the
+    #    case where the workflow thread died or the container restarted
+    #    but the task was never moved back.
+    if not proj_data:
+        proj_data = PROJECT_STORE.load_all_shared()  # read-only (perf v0.13)
+    for p in proj_data.get("projects", []):
+        pid = p["id"]
+        if pid in project_work:
+            continue  # already found via workflow state
+        if not p.get("workflowActive"):
+            continue
+        active_col_ids = set()
+        for c in p.get("columns", []):
+            ct = c.get("title", "").lower()
+            if ct in ("in progress", "review"):
+                active_col_ids.add(c["id"])
+        if not active_col_ids:
+            continue
+        for task in p.get("tasks", []):
+            if task.get("columnId") not in active_col_ids:
+                continue
+            assignee = task.get("assignee")
+            if not assignee:
+                continue
+            col_title = ""
+            for c in p.get("columns", []):
+                if c["id"] == task.get("columnId"):
+                    col_title = c.get("title", "")
+                    break
+            phase = "in_progress" if col_title.lower() == "in progress" else "reviewing"
+            for sk, aid in AGENT_SESSION_IDS.items():
+                if aid == assignee and sk not in project_work:
+                    project_work[sk] = {
+                        "projectId": pid,
+                        "taskId": task["id"],
+                        "taskTitle": task.get("title", ""),
+                        "phase": phase,
+                    }
+                    break
+    # Update shared file so other VO instances can see project work
+    if project_work:
+        _write_shared_project_work(project_work)
+    if agent_filter:
+        project_work = {key: value for key, value in project_work.items() if key in agent_filter}
+    if lite:
+        for key in list(result.keys()):
+            if isinstance(result[key], list):
+                result[key] = [_lite_chat_message(msg) for msg in result[key]]
+    result["_projectWork"] = project_work
+    return result
+
+
+_PROVIDER_SYNC_BACKGROUND = set()
+
+
+def _sync_provider_active_session_background(agent):
+    """Session sync for the polled office routes, off the request thread (BE-09)."""
+    provider_kind = str(agent.get("providerKind") or "openclaw")
+    if provider_kind == "openclaw":
+        return
+    profile = str(agent.get("providerAgentId") or agent.get("profile") or agent.get("id") or "main")
+    cfg = VO_CONFIG.get(_provider_config_key(provider_kind)) or {}
+    interval = max(1, min(60, int(cfg.get("sessionSyncIntervalSec") or 20)))
+    cache_key = f"{provider_kind}:{profile}"
+    with _PROVIDER_SESSION_SYNC_LOCK:
+        if cache_key in _PROVIDER_SYNC_BACKGROUND:
+            return
+        if time.time() - float(_PROVIDER_SESSION_SYNC_AT.get(cache_key) or 0) < interval:
+            return
+        _PROVIDER_SYNC_BACKGROUND.add(cache_key)
+
+    def _run():
+        try:
+            _sync_provider_active_session(agent)
+        except Exception:
+            traceback.print_exc()
+        finally:
+            with _PROVIDER_SESSION_SYNC_LOCK:
+                _PROVIDER_SYNC_BACKGROUND.discard(cache_key)
+
+    threading.Thread(target=_run, name=f"session-sync-{cache_key}", daemon=True).start()
+
+
+def get_provider_agent_messages(provider_kind, profile, max_messages=500, session_id="", background_sync=False):
     requested_session_id = str(session_id or "").strip()
     agent = next((
         row for row in get_roster()
@@ -17097,7 +19121,10 @@ def get_provider_agent_messages(provider_kind, profile, max_messages=500, sessio
         and str(row.get("providerAgentId") or row.get("profile") or row.get("id") or "") == str(profile or "")
     ), None)
     if agent and not requested_session_id:
-        _sync_provider_active_session(agent)
+        if background_sync:
+            _sync_provider_active_session_background(agent)
+        else:
+            _sync_provider_active_session(agent)
     active_session_id = str(_load_provider_active_session(provider_kind, profile).get("sessionId") or "")
     source_messages = (
         _load_provider_session_history(provider_kind, profile, requested_session_id)
@@ -17146,6 +19173,16 @@ def _handle_provider_chat(body):
     provider_kind = str(agent.get("providerKind") or "openclaw")
     profile = str(agent.get("providerAgentId") or agent.get("profile") or agent.get("id"))
     capabilities = agent.get("capabilities") if isinstance(agent.get("capabilities"), dict) else {}
+    if _pl_owns() and provider_layer_turns.layer_agent(agent.get("id")):
+        # (OpenClaw and Hermes: a turn through the layer, in a chat named for whoever asked)
+        message = str(body.get("message") or "").strip()
+        if not message:
+            return {"ok": False, "error": "message is required", "_status": 400}
+        who = str(body.get("fromDisplayName") or body.get("from") or "the office")[:40]
+        result = provider_layer_turns.agent_turn(PROVIDER_LAYER, agent.get("id"), message,
+                                                 timeout=float(body.get("timeoutSec") or 600), label=f"From {who}")
+        return {**result, "providerKind": provider_kind, "profile": profile, "agentId": agent.get("id"),
+                "_status": result.get("_status") or (200 if result.get("ok") else 502)}
     if provider_kind == "openclaw":
         return {"ok": False, "error": "OpenClaw chat uses its native Gateway stream", "_status": 400}
     if not capabilities.get("chat"):
@@ -17297,79 +19334,27 @@ def _get_gateway_token():
         return ""
 
 
-def _auto_configure_gateway_origin():
-    """Auto-configure the OpenClaw gateway to accept connections from this VO instance.
-
-    Adds the VO's origin to gateway.controlUi.allowedOrigins in openclaw.json
-    and signals the gateway to reload. This makes Docker bridge networking
-    work without any manual gateway configuration — truly plug and play.
-
-    Safe for all setups:
-    - --network host: gateway treats connection as local, skips origin check (no-op)
-    - Docker bridge: origin gets added to allowlist on first boot
-    - Already configured: detects existing entry, skips
-    """
-    origin = f"http://127.0.0.1:{PORT}"
-    try:
-        try:
-            with open(CONFIG_PATH, "r") as f:
-                cfg = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            print(f"⚠️  Gateway auto-config: cannot read {CONFIG_PATH}")
-            return
-
-        gateway_cfg = cfg.setdefault("gateway", {})
-        control_ui = gateway_cfg.setdefault("controlUi", {})
-
-        origins = control_ui.get("allowedOrigins", [])
-        if not isinstance(origins, list):
-            origins = []
-
-        if origin in origins:
-            return  # already configured
-
-        origins.append(origin)
-        control_ui["allowedOrigins"] = origins
-        control_ui["allowInsecureAuth"] = True
-        control_ui["dangerouslyDisableDeviceAuth"] = True
-
-        with open(CONFIG_PATH, "w") as f:
-            json.dump(cfg, f, indent=2)
-
-        # Signal gateway to reload config
-        try:
-            r = subprocess.run(["systemctl", "--user", "kill", "-s", "USR1", "openclaw-gateway.service"],
-                               capture_output=True, timeout=5)
-            if r.returncode == 0:
-                print(f"✅ Gateway auto-config: added origin {origin}, gateway reloaded")
-                return
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-
-        # Fallback: scan /proc for gateway process and send SIGUSR1
-        try:
-            for entry in os.listdir("/proc"):
-                if not entry.isdigit():
-                    continue
-                try:
-                    with open(f"/proc/{entry}/cmdline", "r") as f:
-                        cmdline = f.read()
-                    if "openclaw" in cmdline and "gateway" in cmdline:
-                        os.kill(int(entry), signal.SIGUSR1)
-                        print(f"✅ Gateway auto-config: added origin {origin}, signaled PID {entry}")
-                        return
-                except (PermissionError, FileNotFoundError, ProcessLookupError):
-                    continue
-        except FileNotFoundError:
-            pass  # not on Linux
-
-        print(f"✅ Gateway auto-config: added origin {origin} (gateway will pick up on next restart)")
-    except Exception as e:
-        print(f"⚠️  Gateway auto-config failed: {e}")
 GATEWAY_HTTP = VO_CONFIG["openclaw"]["gatewayHttp"]
 CONFIG_PATH = os.path.join(WORKSPACE_BASE, "openclaw.json")
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 LAYOUT_LIBRARY = LayoutLibrary(STATUS_DIR, os.path.join(APP_DIR, "default-office-config.json"))
+UPDATE_CHECKER = version_check.UpdateChecker(VO_VERSION)
+# Release notes for "What's new": docs/ in a checkout, app/release-notes/ in the Docker image
+# (the image is built from app/ only; tests keep the copy equal to docs/).
+RELEASE_NOTES_DIRS = (os.path.join(os.path.dirname(APP_DIR), "docs"), os.path.join(APP_DIR, "release-notes"))
+
+
+def _release_notes_answer(version):
+    if not re.fullmatch(r"\d{1,4}\.\d{1,4}\.\d{1,4}", str(version or "")):
+        return {"ok": False, "error": "bad_version"}, 400
+    for folder in RELEASE_NOTES_DIRS:
+        path = os.path.join(folder, f"RELEASE-NOTES-{version}.md")
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                return {"ok": True, "version": version, "markdown": fh.read(200_000)}, 200
+        except OSError:
+            continue
+    return {"ok": False, "error": "not_found", "version": version}, 404
 
 
 def _reload_gateway_globals():
@@ -17785,8 +19770,71 @@ class ApiUsageCollector:
 _api_usage_collector = ApiUsageCollector(AUTH_PROFILES_PATH)
 
 
+# ── Weather proxy ────────────────────────────────────────────────
+# wttr.in j1 is ~40 KB, mostly hourly forecasts the office never reads. The
+# office uses current_condition, nearest_area[0].latitude/longitude and
+# weather[0].astronomy[0].sunrise/sunset (day/night), so pass exactly those.
+_WEATHER_CACHE_TTL = 600
+_WEATHER_CACHE = {"location": None, "at": 0.0, "body": None}
+_WEATHER_CACHE_LOCK = threading.Lock()
+_WEATHER_CURRENT_KEYS = (
+    "FeelsLikeC", "FeelsLikeF", "cloudcover", "humidity", "observation_time", "precipInches", "precipMM",
+    "pressure", "temp_C", "temp_F", "uvIndex", "visibility", "visibilityMiles", "weatherCode", "weatherDesc",
+    "winddir16Point", "winddirDegree", "windspeedKmph", "windspeedMiles",
+)
+_WEATHER_AREA_KEYS = ("areaName", "country", "region", "latitude", "longitude")
+_WEATHER_DAY_KEYS = ("date", "maxtempC", "maxtempF", "mintempC", "mintempF", "avgtempC", "avgtempF", "sunHour", "uvIndex")
+_WEATHER_ASTRO_KEYS = ("sunrise", "sunset", "moonrise", "moonset", "moon_phase", "moon_illumination")
+
+
+def _shape_weather_payload(raw):
+    """Trim a wttr.in j1 payload to what the office reads. Raises ValueError when
+    the upstream answer is not a j1 object (wttr.in answers some errors as text)."""
+    data = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
+    if not isinstance(data, dict) or not isinstance(data.get("current_condition"), list):
+        raise ValueError("weather service returned an unexpected answer")
+
+    def pick(obj, keys):
+        return {k: obj[k] for k in keys if isinstance(obj, dict) and k in obj}
+
+    out = {"configured": True, "current_condition": [pick(c, _WEATHER_CURRENT_KEYS) for c in data["current_condition"][:1]]}
+    areas = data.get("nearest_area") if isinstance(data.get("nearest_area"), list) else []
+    out["nearest_area"] = [pick(a, _WEATHER_AREA_KEYS) for a in areas[:1]]
+    days = data.get("weather") if isinstance(data.get("weather"), list) else []
+    shaped_days = []
+    for day in days[:3]:
+        if not isinstance(day, dict):
+            continue
+        item = pick(day, _WEATHER_DAY_KEYS)
+        astro = day.get("astronomy") if isinstance(day.get("astronomy"), list) else []
+        item["astronomy"] = [pick(a, _WEATHER_ASTRO_KEYS) for a in astro[:1]]
+        shaped_days.append(item)
+    out["weather"] = shaped_days
+    return out
+
+
+def _fetch_weather_payload(location, now=None):
+    """Shaped weather for `location`, cached for 10 minutes across all clients."""
+    now = time.time() if now is None else now
+    with _WEATHER_CACHE_LOCK:
+        if _WEATHER_CACHE["location"] == location and _WEATHER_CACHE["body"] is not None and now - _WEATHER_CACHE["at"] < _WEATHER_CACHE_TTL:
+            return _WEATHER_CACHE["body"]
+    encoded = urllib.parse.quote(location, safe='')
+    req = urllib.request.Request(f"https://wttr.in/{encoded}?format=j1", headers={"User-Agent": "curl/7.68"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        raw = resp.read(2 * 1024 * 1024)
+    body = _shape_weather_payload(raw)
+    with _WEATHER_CACHE_LOCK:
+        _WEATHER_CACHE.update(location=location, at=now, body=body)
+    return body
+
+
 class VirtualOfficeThreadingHTTPServer(http.server.ThreadingHTTPServer):
     """Threading server that keeps routine client disconnects out of logs."""
+
+    # Page load plus pollers from several tabs arrive in bursts; the default
+    # backlog of 5 caused 1 s SYN-retry stalls (BE-25).
+    request_queue_size = 128
 
     def handle_error(self, request, client_address):
         error = sys.exc_info()[1]
@@ -17797,17 +19845,1047 @@ class VirtualOfficeThreadingHTTPServer(http.server.ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+class _BufferedResponseWriter:
+    """File-like stand-in for ``handler.wfile`` that holds the response until the
+    route finishes, so a crash can still become a JSON 500 and finished bodies can
+    be compressed and tagged. ``flush()`` (used by event streams) or a body over
+    the buffer limit switches to pass-through streaming."""
+
+    def __init__(self, handler, raw):
+        self._handler = handler
+        self._raw = raw
+
+    def write(self, data):
+        handler = self._handler
+        if handler._vo_committed:
+            return self._raw.write(data)
+        chunk = bytes(data)
+        handler._vo_body.append(chunk)
+        handler._vo_body_size += len(chunk)
+        if handler._vo_body_size > _RESPONSE_BUFFER_LIMIT:
+            handler._vo_commit(final=False)
+        return len(chunk)
+
+    def writelines(self, lines):
+        for line in lines:
+            self.write(line)
+
+    def flush(self):
+        handler = self._handler
+        if not handler._vo_committed and handler._vo_headers_done:
+            handler._vo_commit(final=False)
+        if handler._vo_committed:
+            self._raw.flush()
+
+    def writable(self):
+        return True
+
+    @property
+    def closed(self):
+        return getattr(self._raw, "closed", False)
+
+
+class _RequestError(Exception):
+    """Raised by request helpers; becomes a JSON error response (BE-23)."""
+
+    def __init__(self, status, error, message="", fix=None):
+        super().__init__(message or error)
+        self.status = status
+        self.error = error
+        self.message = message or error
+        self.fix = fix
+
+
+_JSON_BODY_MAX_BYTES = _env_int("VO_JSON_BODY_MAX_BYTES", 16 * 1024 * 1024, minimum=64 * 1024, maximum=256 * 1024 * 1024)
+_RESPONSE_BUFFER_LIMIT = 6 * 1024 * 1024
+_GZIP_MIN_BYTES = 1024
+_GZIP_CONTENT_TYPES = (
+    "text/", "application/json", "application/javascript", "application/x-javascript",
+    "image/svg+xml", "application/manifest+json", "application/xml",
+)
+_GZIP_CACHE = OrderedDict()
+_GZIP_CACHE_BYTES = 0
+_GZIP_CACHE_MAX_BYTES = 24 * 1024 * 1024
+_GZIP_CACHE_LOCK = threading.Lock()
+
+
+def _gzip_cached(body):
+    """gzip ``body``; large repeated bodies (static files) are compressed once."""
+    global _GZIP_CACHE_BYTES
+    key = hashlib.sha1(body).digest()
+    with _GZIP_CACHE_LOCK:
+        hit = _GZIP_CACHE.get(key)
+        if hit is not None:
+            _GZIP_CACHE.move_to_end(key)
+            return hit
+    packed = gzip.compress(body, compresslevel=6, mtime=0)
+    if len(body) >= 32 * 1024:
+        with _GZIP_CACHE_LOCK:
+            if key not in _GZIP_CACHE:
+                _GZIP_CACHE[key] = packed
+                _GZIP_CACHE_BYTES += len(packed)
+            while _GZIP_CACHE_BYTES > _GZIP_CACHE_MAX_BYTES and _GZIP_CACHE:
+                _old_key, old = _GZIP_CACHE.popitem(last=False)
+                _GZIP_CACHE_BYTES -= len(old)
+    return packed
+
+
+# Routes polled by every open tab: successful hits are not access-logged (BE-26).
+_QUIET_LOG_PATHS = {
+    "/status", "/agents-list", "/agent-chat", "/vo-config", "/browser-status", "/browser-screenshot",
+    "/api/previews", "/session-info", "/api/office/presence", "/pc-metrics", "/gateway-info",
+    "/api/meetings/active", "/api/access/status", "/health", "/api/codex/approval/pending",
+    "/api/hermes/approval/pending", "/api/hermes/approval/stream", "/sms-unread", "/api/api-usage",
+    "/weather", "/api/office/chat-sessions", "/api/hermes/history", "/api/codex/history",
+    "/api/claude-code/history", "/api/openclaw/rpc", "/api/session-progress", "/api-usage",
+}
+_QUIET_LOG_PREFIXES = (
+    "/api/projects", "/api/hermes/runs/", "/api/codex/runs/", "/api/claude-code/runs/",
+    "/api/provider-runs/", "/api/openclaw/events", "/api/agent-pc/", "/api/previews/",
+    "/api/office-life/state", "/api/office-life/stream", "/api/office-life/journal",
+)
+_STATIC_EXTENSIONS = {
+    ".html", ".js", ".mjs", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico",
+    ".woff", ".woff2", ".ttf", ".otf", ".mp3", ".wav", ".ogg", ".webm", ".mp4", ".txt",
+}
+_STATIC_ALLOWED_JSON = {"manifest.json"}
+_STATIC_DENIED_PARTS = {"tests", "providers", "__pycache__", "backups", "node_modules", "provider-layer"}
+_ASSET_TOKEN_CACHE = {}
+_ASSET_TOKEN_LOCK = threading.Lock()
+_ASSET_REF_RE = re.compile(r"""((?:src|href)\s*=\s*["'])([^"'?#]+)\?v=[^"'#]*""")
+
+
+def _static_file_for_path(url_path):
+    """Map a URL path to a servable file under APP_DIR, or None (allowlist, BE-28/DL-06)."""
+    rel = urllib.parse.unquote(str(url_path or "/")).split("?", 1)[0].split("#", 1)[0]
+    if rel in {"", "/"}:
+        rel = "/index.html"
+    if "\\" in rel or "\x00" in rel:
+        return None
+    parts = [part for part in rel.split("/") if part not in {"", "."}]
+    if not parts or any(part == ".." or part.startswith(".") for part in parts):
+        return None
+    if any(part in _STATIC_DENIED_PARTS for part in parts[:-1]):
+        return None
+    name = parts[-1]
+    ext = os.path.splitext(name)[1].lower()
+    if ext not in _STATIC_EXTENSIONS and not (len(parts) == 1 and name in _STATIC_ALLOWED_JSON):
+        return None
+    root = os.path.realpath(APP_DIR)
+    full = os.path.realpath(os.path.join(root, *parts))
+    if not full.startswith(root + os.sep) or not os.path.isfile(full):
+        return None
+    return full
+
+
+def _asset_token(full_path, _seen=None):
+    """Short cache-busting token for a file, derived from its mtime and size (C7). A module or style
+    sheet with ``?v=`` references of its own (I7) also covers its targets' tokens: a changed target
+    gives every file that names it a new URL too, so an immutable copy is never stale."""
+    try:
+        st = os.stat(full_path)
+    except OSError:
+        return ""
+    deps = ""
+    if full_path.endswith(_NESTED_REF_EXTENSIONS):
+        seen = (_seen or frozenset()) | {full_path}
+        deps = ",".join(_asset_token(target, seen) for target in _nested_ref_targets(full_path) if target not in seen)
+    key = (st.st_mtime_ns, st.st_size, deps)
+    with _ASSET_TOKEN_LOCK:
+        cached = _ASSET_TOKEN_CACHE.get(full_path)
+        if cached and cached[0] == key:
+            return cached[1]
+        seed = f"{full_path}:{st.st_mtime_ns}:{st.st_size}" + (f":{deps}" if deps else "")
+        token = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
+        _ASSET_TOKEN_CACHE[full_path] = (key, token)
+        return token
+
+
+# ``?v=`` references inside served modules and style sheets (I7): ``from './x.mjs?v=..'``,
+# ``import('./x.mjs?v=..')``, ``url("x.woff2?v=..")``. Served rewritten to their targets' tokens.
+_NESTED_REF_RE = re.compile(r"""((?:\bfrom|\bimport\s*\(|\burl\()\s*["'])([^"'?#\s()]+)\?v=[^"'#\s()]*""")
+_NESTED_REF_EXTENSIONS = (".mjs", ".css")
+_NESTED_REF_CACHE = {}
+
+
+def _resolve_asset_ref(ref, base_dir):
+    """The real path of a local reference under APP_DIR, or ''."""
+    if "://" in ref or ref.startswith("//") or ref.startswith("data:"):
+        return ""
+    root = os.path.realpath(APP_DIR)
+    target = os.path.realpath(os.path.join(root, ref.lstrip("/")) if ref.startswith("/") else os.path.join(base_dir, ref))
+    return target if target.startswith(root + os.sep) and os.path.isfile(target) else ""
+
+
+def _nested_ref_targets(full_path):
+    """Files a .mjs/.css names with ``?v=`` (cached by mtime and size)."""
+    try:
+        st = os.stat(full_path)
+        key = (st.st_mtime_ns, st.st_size)
+        cached = _NESTED_REF_CACHE.get(full_path)
+        if cached and cached[0] == key:
+            return cached[1]
+        with open(full_path, "r", encoding="utf-8", errors="replace") as handle:
+            text = handle.read()
+    except OSError:
+        return ()
+    base = os.path.dirname(full_path)
+    targets = tuple(t for t in (_resolve_asset_ref(m.group(2), base) for m in _NESTED_REF_RE.finditer(text)) if t)
+    _NESTED_REF_CACHE[full_path] = (key, targets)
+    return targets
+
+
+def _rewrite_asset_tokens(html_text, base_dir=None, pattern=None):
+    """Replace every ``?v=...`` on a local src/href (or ``pattern``) with the target file's token."""
+    root = os.path.realpath(APP_DIR)
+    base_dir = base_dir or root
+
+    def _sub(match):
+        prefix, ref = match.group(1), match.group(2)
+        if "://" in ref or ref.startswith("//") or ref.startswith("data:"):
+            return match.group(0)
+        target = os.path.realpath(os.path.join(root, ref.lstrip("/")) if ref.startswith("/") else os.path.join(base_dir, ref))
+        token = _asset_token(target) if target.startswith(root + os.sep) else ""
+        return f"{prefix}{ref}?v={token}" if token else match.group(0)
+
+    return (pattern or _ASSET_REF_RE).sub(_sub, html_text)
+
+
+ACCESS_STORE = vo_access.AccessStore(STATUS_DIR)
+
+
+# ── Agent Providers (Hermes / OpenClaw connections, hp port) ─────────────
+def _hp_vo_config_path():
+    """The vo-config.json the settings writers use (same rule as _save_provider_settings)."""
+    data_dir = os.environ.get("VO_STATUS_DIR", "/data")
+    if os.path.isdir(data_dir):
+        return os.path.join(data_dir, "vo-config.json")
+    return _resolve_config_path()
+
+
+def _hp_read_vo_config():
+    return VO_CONFIG if isinstance(VO_CONFIG, dict) else {}
+
+
+def _hp_update_vo_config(fn):
+    cfg_path = _hp_vo_config_path()
+    with _json_file_lock(cfg_path):
+        try:
+            root = _read_json_state(cfg_path, default=None)
+        except JsonStateError as exc:
+            raise agent_providers.ProviderError("store_unreadable", f"Settings were not saved: {exc}", status=409)
+        if root is None:
+            try:
+                root = _read_json_state(os.path.join(os.path.dirname(__file__), "vo-config.json"), default={})
+            except JsonStateError:
+                root = {}
+        result = fn(root)
+        _write_json_atomic(cfg_path, root, mode=0o600)
+        agent_providers.chmod_private(cfg_path + ".bak")
+    return result
+
+
+_HP_LEGACY_STATUS = {}
+_HP_LEGACY_STATUS_LOCK = threading.Lock()
+_HP_LEGACY_STATUS_TTL = 30
+
+
+def _hp_probe_legacy(key, row):
+    try:
+        resolution = _resolve_hermes_api_endpoint(row, force_probe=False)
+        if resolution.get("ok"):
+            endpoint = resolution.get("endpoint") or {}
+            result = _test_hermes_api(api_url=endpoint.get("url") or row.get("apiUrl") or row.get("url"),
+                                      api_key=row.get("apiKey") or "")
+        else:
+            result = resolution
+    except Exception as exc:
+        result = {"ok": False, "error": str(exc)}
+    if result.get("ok"):
+        status = {"state": "connected", "code": "", "detail": "Connected to Hermes' API server.", "fix": "",
+                  "version": ""}
+    else:
+        status = {"state": "offline", "code": "unreachable", "detail": "Hermes' API server is not answering.",
+                  "fix": "Check that the API server is running at this address; the office keeps trying by itself.",
+                  "version": "", "reason": str(result.get("error") or "")[:200]}
+    # Design 2.10: the first /v1/models id names the profile this server reaches ("hermes-agent" = default).
+    models = result.get("models") if isinstance(result.get("models"), list) else []
+    model_id = str(models[0] or "").strip()[:128] if models else ""
+    if model_id:
+        status["modelId"] = model_id
+    with _HP_LEGACY_STATUS_LOCK:
+        _HP_LEGACY_STATUS[key] = {"at": time.time(), "status": status, "busy": False}
+    if model_id:
+        try:
+            if agent_providers.remember_legacy_model(key[0], key[1], model_id) \
+                    and agent_providers.serve_connections_enabled():
+                _hp_refresh_discovery()
+        except Exception as exc:
+            print(f"[agent-providers] legacy model id not kept: {exc}")
+
+
+def _hp_legacy_model_ids(rows):
+    """{legacy connection id: first /v1/models id} from the status probe's cache (design 2.10's guess); a
+    stale row is probed again in the background, so this never blocks discovery or a page."""
+    out = {}
+    for row in rows or []:
+        status = _hp_legacy_status(row) or {}
+        if status.get("modelId"):
+            out[str(row.get("id") or "").strip()] = str(status["modelId"])
+    return out
+
+
+def _hp_legacy_status(row):
+    """Last known status of an API-server Hermes row; refreshed in the background (never blocks a page)."""
+    key = (str(row.get("id") or ""), str(row.get("apiUrl") or row.get("url") or ""))
+    with _HP_LEGACY_STATUS_LOCK:
+        entry = _HP_LEGACY_STATUS.get(key) or {}
+        stale = time.time() - float(entry.get("at") or 0) > _HP_LEGACY_STATUS_TTL
+        if stale and not entry.get("busy"):
+            _HP_LEGACY_STATUS[key] = dict(entry, busy=True)
+            threading.Thread(target=_hp_probe_legacy, args=(key, dict(row)), daemon=True,
+                             name="hp-legacy-status").start()
+    return entry.get("status")
+
+
+def _hp_openclaw_info():
+    oc = VO_CONFIG.get("openclaw") if isinstance(VO_CONFIG.get("openclaw"), dict) else {}
+    try:
+        token = _get_gateway_token()
+    except Exception:
+        token = ""
+    source = "office" if str(oc.get("gatewayToken") or "").strip() else ("openclaw" if token else "")
+    try:
+        client_status = _get_openclaw_gateway_client().status()
+    except Exception as exc:
+        client_status = {"connected": False, "lastError": str(exc)}
+    if client_status.get("connected"):
+        version = str(client_status.get("version") or "")
+        status = {"state": "connected", "code": "", "version": version,
+                  "detail": f"Connected to OpenClaw {version}.".replace(" .", ".") if version else "Connected to OpenClaw.",
+                  "fix": ""}
+        # Up but short of scopes (a token-only client from outside the gateway's computer gets none): say so.
+        status.update(scope_problem(client_status.get("missingScopes")) or {})
+    elif token and pairing_status(client_status.get("device")):
+        status = dict(pairing_status(client_status.get("device")), version="")
+    elif not token:
+        status = {"state": "error", "code": "not_configured", "detail": "The gateway token is not set.",
+                  "fix": "Enter the gateway token (Edit).", "version": ""}
+    elif not client_status.get("lastError") and not client_status.get("generation"):
+        # The client connects on first use (a chat or the events stream); nothing failed yet.
+        status = {"state": "connecting", "code": "idle", "version": "",
+                  "detail": "Not connected yet: the office connects to the gateway when an OpenClaw agent is used.",
+                  "fix": ""}
+    else:
+        last = str(client_status.get("lastError") or "")
+        refused = any(word in last.lower() for word in ("unauthorized", "auth", "token"))
+        status = ({"state": "error", "code": "auth_rejected", "detail": "The gateway refused the token.",
+                   "fix": "Enter the gateway token again (Edit).", "version": ""} if refused else
+                  {"state": "offline", "code": "unreachable", "detail": "The gateway is not answering.",
+                   "fix": "Check that OpenClaw's gateway is running at this address; the office keeps trying by itself.",
+                   "version": ""})
+    agents = []
+    try:
+        for agent in get_roster():
+            if agent.get("providerKind") == "openclaw":
+                agents.append({"id": agent.get("id"), "name": agent.get("name") or agent.get("id"),
+                               "emoji": agent.get("emoji") or "",
+                               "nativeId": agent.get("providerAgentId") or agent.get("profile") or agent.get("id")})
+    except Exception:
+        pass
+    return {"url": GATEWAY_URL, "tokenSet": bool(token), "tokenSource": source, "status": status, "agents": agents,
+            "device": client_status.get("device") or {"state": "off"}}
+
+
+def _hp_legacy_agents():
+    out = {}
+    try:
+        for agent in get_roster():
+            if agent.get("providerKind") == "hermes" and agent.get("providerConnectionId"):
+                out.setdefault(str(agent["providerConnectionId"]), []).append(
+                    {"id": agent.get("id"), "name": agent.get("name") or "", "emoji": agent.get("emoji") or ""})
+    except Exception:
+        pass
+    return out
+
+
+def _hp_roster_agent(agent_id):
+    """The roster row of an office agent (id or status key), or None."""
+    agent_id = str(agent_id or "")
+    try:
+        for agent in get_roster():
+            if agent_id in (agent.get("id"), agent.get("statusKey")):
+                return dict(agent)
+    except Exception:
+        pass
+    return None
+
+
+def _hp_refresh_discovery():
+    global _discovered_at
+    _discovered_at = 0
+    threading.Thread(target=_background_discovery_worker_forced, name="hp-roster-refresh", daemon=True).start()
+
+
+def _background_discovery_worker_forced():
+    try:
+        _refresh_discovery(force=True)
+    except Exception:
+        traceback.print_exc()
+
+
+def _hp_legacy_test(values):
+    result = _test_hermes_api(api_url=values.get("apiUrl") or values.get("url") or "", api_key=values.get("apiKey") or "")
+    if result.get("ok"):
+        return {"ok": True, "state": "connected", "detail": "Hermes' API server answers.", "version": ""}
+    return {"ok": False, "code": "unreachable", "detail": "Hermes' API server is not answering.",
+            "fix": "Check that the API server is running at this address."}
+
+
+def _hp_legacy_reset_status(cid):
+    with _HP_LEGACY_STATUS_LOCK:
+        for key in [k for k in _HP_LEGACY_STATUS if k[0] == cid]:
+            _HP_LEGACY_STATUS.pop(key, None)
+
+
+def _hp_resolve_upload(ref):
+    """An attachment ref from /upload -> ``{path, name, mime, size}``; only files in <data>/uploads."""
+    item = ref if isinstance(ref, dict) else {"path": ref}
+    path = str(item.get("path") or "")
+    if not path and str(item.get("url") or "").startswith("/chat-media?path="):
+        path = urllib.parse.unquote(str(item["url"]).split("path=", 1)[1])
+    root = os.path.realpath(os.path.join(STATUS_DIR, "uploads"))
+    real = os.path.realpath(path) if path else ""
+    if not real.startswith(root + os.sep) or not os.path.isfile(real):
+        return None
+    name = os.path.basename(str(item.get("name") or real))[:200]
+    mime = str(item.get("mime") or item.get("mimeType") or mimetypes.guess_type(name)[0] or "application/octet-stream")
+    return {"path": real, "name": name, "mime": mime[:120], "size": os.path.getsize(real)}
+
+
+_HP_OPENCLAW = {"adapter": None}
+_HP_OPENCLAW_LOCK = threading.Lock()
+
+
+def _hp_openclaw_adapter():
+    """The OpenClaw adapter (design 2.9), built once and registered; it connects only when used."""
+    with _HP_OPENCLAW_LOCK:
+        if _HP_OPENCLAW["adapter"] is None:
+            import openclaw_adapter
+            adapter = openclaw_adapter.OpenClawAdapter(
+                _get_openclaw_gateway_client, config_key_getter=_gateway_config_key,
+                access_getter=lambda: agent_providers.connection_access("openclaw"),
+                media_roots=[os.path.join(OPENCLAW_HOME, "media")], logger=print)
+            _HP_OPENCLAW["adapter"] = adapter
+            agent_providers.register_adapter("openclaw", adapter)
+        return _HP_OPENCLAW["adapter"]
+
+
+def _hp_openclaw_start():
+    """Start (or restart after a config change closed it) the adapter's event subscription."""
+    adapter = _hp_openclaw_adapter()
+    try:
+        subscription = getattr(adapter, "_subscription", None)
+        if subscription is not None and getattr(subscription, "_closed", False):
+            adapter.close()
+        adapter.start()
+    except Exception as exc:
+        print(f"[openclaw-adapter] not started: {exc}")
+
+
+def _hp_openclaw_reconnect():
+    adapter = _hp_openclaw_adapter()
+    try:
+        adapter.close()
+    except Exception:
+        pass
+    _refresh_openclaw_gateway_client_config()
+    _hp_openclaw_start()
+
+
+def _hp_openclaw_device(action):
+    """Agent Providers: pair again (same key) or forget the device (new key), then connect again at once."""
+    device = _openclaw_device()
+    if action == "forget":
+        device.forget()
+    else:
+        device.repair()
+    _get_openclaw_gateway_client().reconnect()
+    return device.public()
+
+
+def _hp_configure(data_dir=None):
+    provider_hub.configure_media(data_dir or STATUS_DIR)
+    state = agent_providers.configure(
+        data_dir or STATUS_DIR,
+        access_store=ACCESS_STORE,
+        read_vo_config=_hp_read_vo_config,
+        update_vo_config=_hp_update_vo_config,
+        after_vo_config_change=_reload_provider_settings_runtime,
+        legacy_status=_hp_legacy_status,
+        legacy_model_ids=_hp_legacy_model_ids,
+        openclaw_info=_hp_openclaw_info,
+        legacy_agents=_hp_legacy_agents,
+        roster_agent=_hp_roster_agent,
+        refresh_discovery=_hp_refresh_discovery,
+        legacy_test=_hp_legacy_test,
+        legacy_reset_status=_hp_legacy_reset_status,
+        resolve_upload=_hp_resolve_upload,
+        openclaw_start=_hp_openclaw_start,
+        openclaw_reconnect=_hp_openclaw_reconnect,
+        openclaw_device=_hp_openclaw_device,
+    )
+    _hp_openclaw_adapter()
+    _hp_hermes_adapter()
+    return state
+
+
+_HP_HERMES = {"adapter": None}
+
+
+def _hp_hermes_adapter():
+    """The `hermes serve` adapter (design 2.4), built once; a connection's link starts on first use (status/agents).
+    It reads connection records and secrets through agent_providers.STATE, so a reconfigure keeps the same object."""
+    with _HP_OPENCLAW_LOCK:
+        if _HP_HERMES["adapter"] is None:
+            try:
+                from providers.hermes_adapter import HermesAdapter
+            except Exception as exc:  # noqa: BLE001 - legacy Hermes keeps working without it
+                print(f"[hermes-adapter] not available: {exc}")
+                return None
+            _HP_HERMES["adapter"] = HermesAdapter(agent_providers.STATE)
+        adapter = _HP_HERMES["adapter"]
+        if agent_providers.adapter("hermes") is not adapter:
+            agent_providers.register_adapter("hermes", adapter)
+        return adapter
+
+
+# ── secrets never reach the server log (design 5.2 C3) ──
+_HP_LOG_SECRETS = {"at": 0.0, "values": ()}
+_HP_LOG_SECRETS_TTL = 10.0
+
+
+def _hp_log_secret_values():
+    """Stored provider secrets + office config keys/tokens, refreshed at most every 10 s."""
+    now = time.time()
+    if now - _HP_LOG_SECRETS["at"] < _HP_LOG_SECRETS_TTL:
+        return _HP_LOG_SECRETS["values"]
+    _HP_LOG_SECRETS["at"] = now
+    values = set()
+    store = getattr(agent_providers.STATE, "secrets", None)
+    if store is not None:
+        try:
+            values.update(store.values())
+        except Exception:
+            pass
+    wanted = {re.sub(r"[^a-z0-9]+", "", key) for key in _PROVIDER_SECRET_KEYS}
+
+    def walk(node, depth=0):
+        if depth > 6:
+            return
+        if isinstance(node, dict):
+            for key, item in node.items():
+                if isinstance(item, str) and re.sub(r"[^a-z0-9]+", "", str(key).lower()) in wanted:
+                    values.add(item)
+                else:
+                    walk(item, depth + 1)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item, depth + 1)
+    walk(VO_CONFIG if isinstance(VO_CONFIG, dict) else {})
+    _HP_LOG_SECRETS["values"] = tuple(sorted((v for v in values if len(v) >= 6), key=len, reverse=True))
+    return _HP_LOG_SECRETS["values"]
+
+
+def _hp_redact_log(text):
+    import provider_secrets
+    return provider_secrets.redact_text(text, _hp_log_secret_values())
+
+
+class _RedactingStream:
+    """stdout/stderr of the server process: print() diagnostics, tracebacks and the access log pass
+    through _hp_redact_log, so a token or key never lands in `docker logs`."""
+
+    def __init__(self, stream):
+        self._stream = stream
+
+    def write(self, text):
+        try:
+            text = _hp_redact_log(text)
+        except Exception:
+            pass
+        return self._stream.write(text)
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+# ── what needs Full access (design 2.7; the census is in the hp-core build log) ──
+_HP_OPENCLAW_PROXY_WRITES = frozenset({"cron.add", "cron.update", "cron.remove", "cron.run"})
+
+
+def _hp_require_full(kind="openclaw", cid=None, area="settings"):
+    """403 ``chat_only`` with the 3.6 text + fix when the connection has Chat only access."""
+    if agent_providers.agent_access(kind, cid) == "full":
+        return
+    raise _RequestError(403, "chat_only", agent_providers.chat_only_reason(kind, area),
+                        fix=agent_providers.FIX_FULL_ACCESS)
+
+
+def _hp_require_full_for_agent(agent, area="settings"):
+    """An agent's own skills, files and settings follow the access level of its connection."""
+    if not isinstance(agent, dict):
+        return
+    kind = str(agent.get("providerKind") or "openclaw")
+    if kind == "openclaw":
+        _hp_require_full("openclaw", None, area)
+    elif kind == "hermes":
+        _hp_require_full("hermes", str(agent.get("providerConnectionId") or ""), area)
+
+
+# ── presence -> office status (design 2.12) ──────────────────────────────
+_HP_PRESENCE_KINDS = frozenset({"agent.activity", "run.start", "tool.start", "tool.end", "approval.requested",
+                                "approval.resolved", "run.end"})
+
+
+def _hp_status_key(office_id):
+    """The presence key of an office agent: its roster statusKey (a switched legacy agent keeps its
+    own), else the id. Reads the cached roster only: this runs on the adapter's event thread."""
+    office_id = str(office_id or "")
+    for agent in list(_discovered_roster or []):
+        if isinstance(agent, dict) and agent.get("id") == office_id:
+            return str(agent.get("statusKey") or office_id)
+    return office_id
+
+
+def _hp_presence_listener(key, frame):
+    """Hermes serve activity and our own runs move the office character like the legacy monitor
+    does (OpenClaw keeps its gateway presence path)."""
+    cid, native, _session = key
+    if cid == "openclaw" or native == provider_hub.STAR:
+        return
+    event = frame.get("event") or {}
+    kind = event.get("type")
+    if kind not in _HP_PRESENCE_KINDS:
+        return
+    office_id = _hp_status_key(agent_providers.office_id_for(cid, native))
+    if not office_id:
+        return
+    run_id = frame.get("run") or ""
+    try:
+        if kind == "agent.activity":
+            presence_run = f"presence:{cid}"
+            if event.get("active"):
+                gateway_presence.lifecycle_run_started(office_id, presence_run, "hermes",
+                                                       str(event.get("task") or "Working")[:120])
+            else:
+                gateway_presence.lifecycle_run_finished(office_id, presence_run, "hermes", "completed")
+        elif kind == "run.start" and run_id:
+            gateway_presence.lifecycle_run_started(office_id, run_id, "hermes", "Working")
+        elif kind == "tool.start" and run_id:
+            gateway_presence.lifecycle_tool_started(office_id, run_id, str(event.get("toolId") or ""),
+                                                    str(event.get("name") or ""), "hermes",
+                                                    str(event.get("title") or "")[:120])
+        elif kind == "tool.end" and run_id:
+            gateway_presence.lifecycle_tool_finished(office_id, run_id, str(event.get("toolId") or ""), "hermes",
+                                                     "completed" if event.get("ok", True) else "failed")
+        elif kind == "approval.requested" and run_id:
+            gateway_presence.lifecycle_approval_requested(office_id, run_id, str(event.get("approvalId") or ""),
+                                                          "hermes")
+        elif kind == "approval.resolved" and run_id:
+            gateway_presence.lifecycle_approval_resolved(office_id, run_id, str(event.get("approvalId") or ""),
+                                                         "hermes")
+        elif kind == "run.end" and run_id:
+            status = event.get("status") or "ok"
+            gateway_presence.lifecycle_run_finished(office_id, run_id, "hermes",
+                                                    "completed" if status == "ok" else str(status),
+                                                    str(event.get("error") or "")[:200])
+    except Exception:
+        pass
+
+
+provider_hub.HUB.add_listener(_hp_presence_listener)
+
+
+def _hp_boot_migration():
+    """Design 2.2: back up vo-config.json once, add the access levels, make the config files 0600."""
+    # Every secret file of the data folder, its backups and the folders holding them private again (a trip back to 0.7.x
+    # opens them all to everyone; UPDATING.md "File permissions").
+    try:
+        tightened = private_files.tighten_data_secrets(STATUS_DIR, log=print)
+        if tightened:
+            print(f"🔐 Made private again (an older office had opened them): {', '.join(tightened)}")
+    except Exception as exc:
+        print(f"⚠️ Could not check the data folder's secret files: {exc}")
+    try:
+        report = agent_providers.migrate(STATUS_DIR, _hp_vo_config_path())
+        added = ", ".join(report.get("legacyAdded") or []) or "none"
+        print(f"🔐 Agent Providers ready (legacy access added: {added}; private files: "
+              f"{', '.join(report.get('chmod') or []) or 'none'})"
+              + (f"; problems: {'; '.join(report['errors'])}" if report.get("errors") else ""))
+    except Exception as exc:
+        print(f"⚠️ Agent Providers migration failed: {exc}")
+
+
+_hp_configure()
+
+_ALLOWED_HOSTS =[h.strip() for h in str(os.environ.get("VO_ALLOWED_HOSTS") or "").split(",") if h.strip()]
+# Reachable without the office passcode: logging in, health, and routes with their own token auth.
+_PUBLIC_API_PATHS = {"/health", "/api/version", "/api/access/status", "/api/access/login", "/api/access/logout"}
+# The Hermes platform plugin routes check their own platform token (_hermes_platform_auth_error);
+# /api/hermes-platform/status has no token check, so it stays behind the passcode.
+_PUBLIC_API_PATHS |= {
+    "/api/hermes-platform/poll", "/api/hermes-platform/enqueue", "/api/hermes-platform/ack",
+    "/api/hermes-platform/reply", "/api/hermes-platform/heartbeat",
+}
+_PUBLIC_PAGES = {"/login.html", "/login", "/favicon.ico"}
+# For a person, not an agent: with a passcode set, the agent API token cannot use these (vo_access.as_agent).
+# They change what the office runs or where it connects (a CLI's Executable or home, the gateway's address and
+# token, model providers' addresses and keys), test such drafts, add or delete agents, the licence, or take
+# over SMS. The Agent Providers, Office Life and passcode routes check the same rule themselves. Agents keep
+# everything else they do through the API: status, chat, meetings, tasks, files, skills, previews.
+PEOPLE_ONLY_ROUTES = {
+    "POST": frozenset({
+        "/api/provider-settings/save", "/setup/save", "/api/provider-test", "/api/browser/test",
+        "/api/pc-metrics/test", "/api/hermes/test", "/api/agent/create", "/set-model",
+        "/api/gateway/configure", "/api/openclaw/leftovers/cleanup",
+        "/config/providers/save-key", "/config/providers/delete-key", "/config/providers/save-custom",
+        "/api/license/activate", "/api/license/deactivate", "/sms-mode", "/sms-thread-mode", "/sms-send",
+    }),
+    "DELETE": frozenset({"/api/agent/delete"}),
+}
+_PEOPLE_ONLY_PREFIXES = ("/api/native-models/",)  # every write: agent models, provider addresses, keys
+PEOPLE_ONLY_TEXT = ("Agents cannot do this through the office API token. "
+                    "Sign in to the office in a browser to change settings, providers or agents.")
+
+
+def _people_only_route(method, path):
+    """True for a write only a person may make (PEOPLE_ONLY_ROUTES); reads stay open to the token."""
+    if method in {"GET", "HEAD", "OPTIONS"}:
+        return False
+    if path in PEOPLE_ONLY_ROUTES.get(method, ()):
+        return True
+    return method == "POST" and path.startswith(_PEOPLE_ONLY_PREFIXES)
+
+
+_HTML_PAGE_ROUTES = {"/", "/setup", "/cron", "/models", "/providers", "/login"}
+
+
 class OfficeHandler(http.server.SimpleHTTPRequestHandler):
+    server_version = "VirtualOffice/" + VO_VERSION
+    sys_version = ""
+
+    def version_string(self):
+        return self.server_version
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=APP_DIR, **kwargs)
 
-    def _send_json(self, data, status=200):
+    # ── response buffering (BE-22, C5, C7) ───────────────────────────────
+    def _vo_buffering(self):
+        return getattr(self, "_vo_raw_wfile", None) is not None and not self._vo_committed
+
+    def _vo_begin(self):
+        self._vo_raw_wfile = self.wfile
+        self._vo_status = None
+        self._vo_headers = []
+        self._vo_headers_done = False
+        self._vo_committed = False
+        self._vo_body = []
+        self._vo_body_size = 0
+        self.wfile = _BufferedResponseWriter(self, self._vo_raw_wfile)
+
+    def _vo_discard(self):
+        self._vo_status = None
+        self._vo_headers = []
+        self._vo_headers_done = False
+        self._vo_body = []
+        self._vo_body_size = 0
+
+    def send_response(self, code, message=None):
+        if not self._vo_buffering():
+            return super().send_response(code, message)
+        self._vo_status = (int(code), message)
+        self._vo_headers = []
+        self._vo_headers_done = False
+
+    def send_header(self, keyword, value):
+        if not self._vo_buffering():
+            return super().send_header(keyword, value)
+        # Same-origin only: never advertise cross-site access (BE-01, CH-04).
+        if str(keyword).lower().startswith("access-control-allow-"):
+            return
+        self._vo_headers.append((str(keyword), str(value)))
+
+    def end_headers(self):
+        if not self._vo_buffering():
+            return super().end_headers()
+        self._vo_headers_done = True
+        if (self._vo_header("Content-Type") or "").lower().startswith("text/event-stream"):
+            # Event streams must reach the browser at once (EventSource "open").
+            self._vo_commit(final=False)
+            self._vo_raw_wfile.flush()
+
+    def _vo_header(self, name):
+        lower = name.lower()
+        for key, value in self._vo_headers:
+            if key.lower() == lower:
+                return value
+        return None
+
+    def _vo_drop_header(self, name):
+        lower = name.lower()
+        self._vo_headers = [(k, v) for k, v in self._vo_headers if k.lower() != lower]
+
+    def _vo_commit(self, final):
+        if self._vo_committed:
+            return
+        self._vo_committed = True
+        raw = self._vo_raw_wfile
+        body = b"".join(self._vo_body)
+        self._vo_body = []
+        if self._vo_status is None:
+            if body:
+                raw.write(body)
+            return
+        code, message = self._vo_status
+        content_type = (self._vo_header("Content-Type") or "").lower()
+        if final and self.command in {"GET", "HEAD"} and code == 200 and not self._vo_header("Content-Range"):
+            etag = self._vo_header("ETag")
+            if not etag and body:
+                etag = '"' + hashlib.sha1(body).hexdigest()[:24] + '"'
+                self._vo_headers.append(("ETag", etag))
+            match = str(self.headers.get("If-None-Match") or "")
+            if etag and match and etag.strip('"') in match.replace("-gz", ""):
+                code, message, body = 304, None, b""
+                for name in ("Content-Length", "Content-Type", "Content-Encoding", "Content-Disposition"):
+                    self._vo_drop_header(name)
+        if (final and body and code not in (204, 206, 304) and len(body) >= _GZIP_MIN_BYTES
+                and self.command != "HEAD"
+                and not self._vo_header("Content-Encoding")
+                and content_type.startswith(_GZIP_CONTENT_TYPES)
+                and "gzip" in str(self.headers.get("Accept-Encoding") or "").lower()):
+            body = _gzip_cached(body)
+            self._vo_drop_header("Content-Length")
+            self._vo_headers.append(("Content-Encoding", "gzip"))
+            self._vo_headers.append(("Content-Length", str(len(body))))
+            if self._vo_header("Vary") is None:
+                self._vo_headers.append(("Vary", "Accept-Encoding"))
+            etag = self._vo_header("ETag")
+            if etag and etag.endswith('"') and "-gz" not in etag:
+                self._vo_drop_header("ETag")
+                self._vo_headers.append(("ETag", etag[:-1] + '-gz"'))
+        elif (final and code != 304 and self.command != "HEAD" and self._vo_header("Content-Length") is None
+              and not content_type.startswith("text/event-stream")):
+            self._vo_headers.append(("Content-Length", str(len(body))))
+        if self._vo_header("X-Content-Type-Options") is None:
+            self._vo_headers.append(("X-Content-Type-Options", "nosniff"))
+        if content_type.startswith("application/json") and self._vo_header("Cache-Control") is None:
+            # API answers are never reused without asking (the ETag still makes asking cheap) (I7).
+            self._vo_headers.append(("Cache-Control", "no-cache"))
+        if content_type.startswith("text/html"):
+            # No other site may frame an office page (clickjacking); the office's own frames stay allowed.
+            if self._vo_header("X-Frame-Options") is None:
+                self._vo_headers.append(("X-Frame-Options", "SAMEORIGIN"))
+            if self._vo_header("Content-Security-Policy") is None:
+                self._vo_headers.append(("Content-Security-Policy", "frame-ancestors 'self'"))
+        self.log_request(code)
+        self._headers_buffer = []
+        http.server.BaseHTTPRequestHandler.send_response_only(self, code, message)
+        http.server.BaseHTTPRequestHandler.send_header(self, "Server", self.version_string())
+        http.server.BaseHTTPRequestHandler.send_header(self, "Date", self.date_time_string())
+        for key, value in self._vo_headers:
+            http.server.BaseHTTPRequestHandler.send_header(self, key, value)
+        self._headers_buffer.append(b"\r\n")
+        raw.write(b"".join(self._headers_buffer))
+        self._headers_buffer = []
+        if body and self.command != "HEAD":
+            raw.write(body)
+
+    def _vo_finish(self):
+        try:
+            if not self._vo_committed:
+                self._vo_commit(final=True)
+        finally:
+            raw = self._vo_raw_wfile
+            self._vo_raw_wfile = None
+            if raw is not None:
+                self.wfile = raw
+
+    def log_request(self, code="-", size="-"):
+        try:
+            numeric = int(code)
+        except (TypeError, ValueError):
+            numeric = 0
+        path = urllib.parse.urlsplit(self.path or "").path
+        if numeric and numeric < 400 and (
+            path in _QUIET_LOG_PATHS or path.startswith(_QUIET_LOG_PREFIXES) or _static_file_for_path(path)
+        ):
+            return
+        super().log_request(code, size)
+
+    def _content_length(self):
+        raw = str(self.headers.get("Content-Length") or "0").strip()
+        try:
+            length = int(raw)
+        except ValueError:
+            raise _RequestError(400, "bad_content_length", "Content-Length is not a number.")
+        if length < 0:
+            raise _RequestError(400, "bad_content_length", "Content-Length is negative.")
+        return length
+
+    def _read_json_body(self, length=None, max_bytes=None):
+        """Parse a JSON request body with a size cap; errors become 400/413 (BE-23)."""
+        length = self._content_length() if length is None else int(length or 0)
+        if length < 0:
+            raise _RequestError(400, "bad_content_length", "Content-Length is negative.")
+        limit = max_bytes or _JSON_BODY_MAX_BYTES
+        if length > limit:
+            raise _RequestError(413, "body_too_large", f"Request body is larger than {limit} bytes.")
+        if not length:
+            return {}
+        raw = self.rfile.read(length)
+        try:
+            return json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            raise _RequestError(400, "invalid_json", "Request body is not valid JSON.")
+
+    def _vo_dispatch(self, route):
+        self._vo_begin()
+        try:
+            if self._vo_gate() and not self._provider_layer_route():
+                route()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            raise
+        except _RequestError as exc:
+            if not self._vo_committed:
+                self._vo_discard()
+                answer = {"ok": False, "error": exc.error, "message": exc.message}
+                if getattr(exc, "fix", None):
+                    answer["fix"] = exc.fix
+                self._send_json(answer, exc.status)
+        except Exception as exc:
+            traceback.print_exc()
+            if not self._vo_committed:
+                self._vo_discard()
+                self._send_json({"ok": False, "error": "internal_error",
+                                 "message": f"{type(exc).__name__}: {str(exc)[:300]}"}, 500)
+        finally:
+            self._vo_finish()
+
+    def do_GET(self):
+        self._vo_dispatch(self._route_GET)
+
+    def _provider_layer_route(self):
+        """The OpenClaw and Hermes layer's paths (on unless VO_PROVIDER_LAYER=0): relayed to vo-host; True when answered."""
+        layer = PROVIDER_LAYER
+        if layer is None:
+            return False
+        path = urllib.parse.urlsplit(self.path).path
+        if office_chat_bridge.is_bridge_path(path):   # (the office's own providers for the copied window: OFFICE_BRIDGE)
+            return OFFICE_BRIDGE.handle(self)
+        if path in provider_layer_proxy.WS_PATHS and str(self.headers.get("Upgrade") or "").lower() == "websocket":
+            layer.relay_ws(self, self._vo_access(), ACCESS_STORE)
+            return True
+        if provider_layer_proxy.is_layer_path(path):
+            layer.proxy(self, self._vo_access(), ACCESS_STORE)
+            return True
+        if self.command in {"GET", "HEAD"}:
+            full = provider_layer_proxy.static_file(path)
+            if full:
+                layer.serve_static(self, full)
+                return True
+        return False
+
+    def do_HEAD(self):
+        self._vo_dispatch(self._route_HEAD)
+
+    def do_POST(self):
+        self._vo_dispatch(self._route_POST)
+
+    def do_PUT(self):
+        self._vo_dispatch(self._route_PUT)
+
+    def do_DELETE(self):
+        self._vo_dispatch(self._route_DELETE)
+
+    def do_OPTIONS(self):
+        self._vo_dispatch(self._route_OPTIONS)
+
+    def _route_HEAD(self):
+        path = urllib.parse.urlsplit(self.path).path
+        if path == "/health":
+            return self._send_json({"ok": True, "version": VO_VERSION})
+        if path.startswith("/api/") or not _static_file_for_path(path):
+            return self._send_json({"ok": False, "error": "not_found"}, 404)
+        return self._serve_static(path, urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query))
+
+    # ── access gate (C1) ─────────────────────────────────────────────────
+    def _vo_client_ip(self):
+        try:
+            return str(self.client_address[0])
+        except Exception:
+            return ""
+
+    def _vo_access(self):
+        cached = getattr(self, "_vo_access_cache", None)
+        if cached is None:
+            cached = vo_access.evaluate(ACCESS_STORE, self._vo_client_ip(), self.headers)
+            self._vo_access_cache = cached
+        return cached
+
+    def _vo_gate(self):
+        """True when the request may proceed; otherwise an error response was queued."""
+        self._vo_access_cache = None
+        path = urllib.parse.urlsplit(self.path).path
+        protected = ACCESS_STORE.protected
+        if not vo_access.host_allowed(self.headers.get("Host"), _ALLOWED_HOSTS, protected=protected):
+            self._send_json({
+                "ok": False, "error": "host_not_allowed",
+                "message": "This office does not answer to that host name. Add it to VO_ALLOWED_HOSTS or set an office passcode.",
+            }, 403)
+            return False
+        if not vo_access.same_origin_request(self.headers, self.command):
+            self._send_json({"ok": False, "error": "cross_site_blocked",
+                             "message": "Changes to the office must come from the office page itself."}, 403)
+            return False
+        if path in _PUBLIC_API_PATHS or path in _PUBLIC_PAGES:
+            return True
+        static_file = _static_file_for_path(path) if self.command in {"GET", "HEAD"} else None
+        if static_file and not static_file.endswith(".html"):
+            return True  # scripts, styles, fonts and images hold no office data
+        access = self._vo_access()
+        if access.authenticated:
+            if access.as_agent and _people_only_route(self.command, path):
+                self._send_json({"ok": False, "error": "forbidden", "message": PEOPLE_ONLY_TEXT}, 403)
+                return False
+            return True
+        if self.command == "OPTIONS":
+            self.send_response(204)
+            self.end_headers()
+            return False
+        is_page = self.command in {"GET", "HEAD"} and (
+            bool(static_file) or path in _HTML_PAGE_ROUTES
+        )
+        if is_page:
+            target = vo_access.safe_next_path(self.path)
+            self.send_response(302)
+            self.send_header("Location", "/login.html?next=" + urllib.parse.quote(target, safe=""))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return False
+        self._send_json({"ok": False, "error": "auth_required", "message": "Enter the office passcode to continue."}, 401)
+        return False
+
+    def _send_json(self, data, status=200, headers=None):
         body = json.dumps(data).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -17888,10 +20966,223 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(chunk)
                 remaining -= len(chunk)
 
-    def do_GET(self):
+    def _serve_agent_pc_content(self, agent_id, query):
+        try:
+            params = urllib.parse.parse_qs(query)
+            root_id = (params.get("rootId") or ["home"])[0]
+            relative = (params.get("path") or [""])[0]
+            saved_id = (params.get("savedId") or [""])[0]
+            canonical_id, _agent, home_path = _agent_pc_context(agent_id)
+            if saved_id:
+                full, descriptor = AGENT_PC_STORE.resolve_saved(canonical_id, saved_id)
+            else:
+                full, descriptor = AGENT_PC_STORE.resolve_file(canonical_id, root_id, relative, home_path=home_path)
+        except Exception as exc:
+            result, status = _agent_pc_api_error(exc)
+            return self._send_json(result, status)
+
+        if full is None:
+            try:
+                with AGENT_PC_STORE.open_remote_content(
+                    canonical_id, root_id, relative, home_path=home_path,
+                    range_header=str(self.headers.get("Range") or ""),
+                ) as response:
+                    status = int(getattr(response, "status", 200) or 200)
+                    self.send_response(status)
+                    self.send_header("Content-Type", response.headers.get("Content-Type") or descriptor.get("mimeType") or "application/octet-stream")
+                    if response.headers.get("Content-Length"):
+                        self.send_header("Content-Length", response.headers["Content-Length"])
+                    self.send_header("Accept-Ranges", "bytes")
+                    if response.headers.get("Content-Range"):
+                        self.send_header("Content-Range", response.headers["Content-Range"])
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Content-Type-Options", "nosniff")
+                    self.send_header("Content-Security-Policy", "sandbox; default-src 'none'; img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; font-src data:")
+                    self.end_headers()
+                    while True:
+                        chunk = response.read(64 * 1024)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                return
+            except Exception as exc:
+                result, status = _agent_pc_api_error(exc)
+                return self._send_json(result, status)
+
+        size = int(descriptor.get("size") or os.path.getsize(full))
+        start, end, status = 0, max(0, size - 1), 200
+        range_header = str(self.headers.get("Range") or "").strip()
+        if range_header and range_header.startswith("bytes=") and size > 0:
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header)
+            if not match:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            first, last = match.groups()
+            if first:
+                start = int(first)
+                end = int(last) if last else end
+            elif last:
+                suffix = min(size, int(last))
+                start = size - suffix
+            if start >= size or start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.end_headers()
+                return
+            end = min(end, size - 1)
+            status = 206
+        length = max(0, end - start + 1) if size else 0
+        self.send_response(status)
+        self.send_header("Content-Type", descriptor.get("mimeType") or "application/octet-stream")
+        self.send_header("Content-Length", str(length))
+        self.send_header("Accept-Ranges", "bytes")
+        if status == 206:
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", "sandbox; default-src 'none'; img-src data: blob:; media-src data: blob:; style-src 'unsafe-inline'; font-src data:")
+        safe_name = str(descriptor.get("name") or "agent-pc-file").replace('"', "")
+        self.send_header("Content-Disposition", f'inline; filename="{safe_name}"')
+        self.end_headers()
+        if not length:
+            return
+        with open(full, "rb") as handle:
+            handle.seek(start)
+            remaining = length
+            while remaining > 0:
+                chunk = handle.read(min(64 * 1024, remaining))
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                remaining -= len(chunk)
+
+    # ── access API (C1) ──────────────────────────────────────────────────
+    def _vo_is_https(self):
+        proto = str(self.headers.get("X-Forwarded-Proto") or "").split(",", 1)[0].strip().lower()
+        return proto == "https"
+
+    def _handle_access_get(self, request_path):
+        access = self._vo_access()
+        if request_path == "/api/access/status":
+            return self._send_json(access.status())
+        if request_path == "/api/access/agent-token":
+            if not access.can_manage:
+                return self._send_json({"ok": False, "error": "forbidden"}, 403)
+            return self._send_json({"ok": True, "token": ACCESS_STORE.agent_token()})
+        return self._send_json({"ok": False, "error": "not_found"}, 404)
+
+    def _handle_access_post(self, request_path):
+        access = self._vo_access()
+        client = self._vo_client_ip()
+        if request_path == "/api/access/login":
+            body = self._read_json_body(max_bytes=4096)
+            wait = ACCESS_STORE.login_blocked(client)
+            if wait:
+                return self._send_json({"ok": False, "error": "too_many_attempts", "retryAfter": wait}, 429)
+            if not ACCESS_STORE.protected:
+                return self._send_json({"ok": True, "protected": False})
+            passcode = body.get("passcode") if isinstance(body, dict) else None
+            if not isinstance(passcode, str) or not ACCESS_STORE.check_passcode(passcode):
+                ACCESS_STORE.note_login_failure(client)
+                return self._send_json({"ok": False, "error": "bad_passcode"}, 401)
+            ACCESS_STORE.note_login_success(client)
+            token = ACCESS_STORE.create_session()
+            body_bytes = json.dumps({"ok": True}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Set-Cookie", vo_access.session_cookie_header(token, secure=self._vo_is_https()))
+            self.end_headers()
+            self.wfile.write(body_bytes)
+            return
+        if request_path == "/api/access/logout":
+            ACCESS_STORE.drop_session(access.session_token)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Set-Cookie", vo_access.session_cookie_header("", secure=self._vo_is_https(), clear=True))
+            self.end_headers()
+            self.wfile.write(b'{"ok": true}')
+            return
+        if request_path == "/api/access/confirm":
+            # Recent passcode for agent-platform setting changes (hp design 3.8): a browser
+            # session types it again; shares the login rate limit.
+            body = self._read_json_body(max_bytes=4096)
+            body = body if isinstance(body, dict) else {}
+            if not access.authenticated:
+                return self._send_json({"ok": False, "error": "auth_required",
+                                        "message": "Enter the office passcode to continue."}, 401)
+            if access.via_token and not access.via_session:
+                return self._send_json({"ok": False, "error": "forbidden",
+                                        "message": agent_providers.FORBIDDEN_TEXT}, 403)
+            if not ACCESS_STORE.protected:
+                return self._send_json({"ok": True, "protected": False, "until": 0})
+            if not access.via_session:
+                return self._send_json({"ok": False, "error": "session_required",
+                                        "message": "Sign in to the office in this browser first."}, 403)
+            wait = ACCESS_STORE.login_blocked(client)
+            if wait:
+                return self._send_json({"ok": False, "error": "too_many_attempts", "retryAfter": wait}, 429)
+            passcode = body.get("passcode")
+            until = ACCESS_STORE.confirm(access.session_token, passcode) if isinstance(passcode, str) else 0
+            if not until:
+                ACCESS_STORE.note_login_failure(client)
+                return self._send_json({"ok": False, "error": "bad_passcode",
+                                        "message": "That is not the office passcode."}, 401)
+            ACCESS_STORE.note_login_success(client)
+            return self._send_json({"ok": True, "until": until})
+        if request_path == "/api/access/passcode":
+            body = self._read_json_body(max_bytes=4096)
+            body = body if isinstance(body, dict) else {}
+            if not access.can_manage:
+                return self._send_json({"ok": False, "error": "forbidden"}, 403)
+            wait = ACCESS_STORE.login_blocked(client)
+            if wait:
+                return self._send_json({"ok": False, "error": "too_many_attempts", "retryAfter": wait}, 429)
+            if ACCESS_STORE.protected and not access.via_loopback:
+                current = body.get("current")
+                if not isinstance(current, str) or not ACCESS_STORE.check_passcode(current):
+                    ACCESS_STORE.note_login_failure(client)
+                    return self._send_json({"ok": False, "error": "bad_passcode"}, 401)
+            next_value = body.get("next", "")
+            problem = vo_access.AccessStore.validate_new_passcode(next_value)
+            if problem:
+                return self._send_json({"ok": False, "error": "invalid_passcode", "message": problem}, 400)
+            ACCESS_STORE.set_passcode(next_value)
+            headers = []
+            if next_value and not access.via_loopback:
+                # Keep the person who changed it signed in on this browser.
+                headers.append(("Set-Cookie", vo_access.session_cookie_header(ACCESS_STORE.create_session(), secure=self._vo_is_https())))
+            payload = json.dumps({"ok": True, "protected": bool(next_value)}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            for key, value in headers:
+                self.send_header(key, value)
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        return self._send_json({"ok": False, "error": "not_found"}, 404)
+
+    def _route_GET(self):
         parsed_url = urllib.parse.urlparse(self.path)
         request_path = parsed_url.path
         query_params = urllib.parse.parse_qs(parsed_url.query)
+        if request_path.startswith("/api/access/"):
+            return self._handle_access_get(request_path)
+        # (v0.11: the layer's agents only; Hermes API-server agents and VO's other providers keep 0.10's routes)
+        if request_path.startswith("/api/agent-chat/") and _pl_layer_chat((query_params.get("agent") or [""])[0]):
+            return _pl_agent_chat_answer(self, request_path, query_params)
+        if agent_providers.legacy_handles(request_path):   # (v0.11: Hermes API-server rows beside the layer)
+            return agent_providers.legacy_dispatch(self, "GET", request_path, query_params)
+        if agent_providers.handles(request_path):
+            return agent_providers.dispatch(self, "GET", request_path, query_params)
+        if office_life_routes.handles(request_path):
+            return office_life_routes.dispatch(self, "GET", request_path, query_params)
+        if request_path == "/login":
+            return self._serve_static("/login.html", query_params)
         if request_path == "/api/previews":
             return self._send_json(list_agent_previews((query_params.get("after") or [0])[0]))
         if request_path == "/api/previews/descriptor":
@@ -17902,42 +21193,50 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             return self._send_json(result, status)
         if request_path == "/api/previews/content":
             return self._serve_agent_preview_content(parsed_url.query)
+        agent_pc_parts = _agent_pc_route_parts(request_path)
+        if agent_pc_parts:
+            agent_id = agent_pc_parts[0]
+            action = agent_pc_parts[1] if len(agent_pc_parts) > 1 else ""
+            if action == "content":
+                return self._serve_agent_pc_content(agent_id, parsed_url.query)
+            if action == "tree":
+                result, status = _agent_pc_tree(agent_id, parsed_url.query)
+            elif action == "descriptor":
+                result, status = _agent_pc_descriptor(agent_id, parsed_url.query)
+            elif not action:
+                result, status = _agent_pc_summary(agent_id)
+            else:
+                result, status = ({"ok": False, "error": {"code": "route_not_found", "message": "Agent PC endpoint was not found."}}, 404)
+            return self._send_json(result, status)
         # Setup wizard page
-        if self.path == "/setup":
-            setup_path = os.path.join(os.path.dirname(__file__), "setup.html")
-            try:
-                with open(setup_path, "rb") as f:
-                    content = f.read()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html")
-                self.end_headers()
-                self.wfile.write(content)
-            except FileNotFoundError:
-                self.send_response(404)
-                self.end_headers()
-                self.wfile.write(b"Setup page not found")
-            return
-        elif self.path == "/health":
+        if request_path in {"/setup", "/cron", "/models", "/providers"}:
+            return self._serve_static(request_path + ".html", query_params)
+        if request_path == "/favicon.ico":
+            return self._serve_static("/favicon.png", query_params)
+        elif request_path in {"/health", "/api/version"}:
+            answer = {"ok": True, "status": "running", "version": VO_VERSION, "current": VO_VERSION}
+            if request_path == "/health" and PROVIDER_LAYER is not None:
+                answer["providerLayer"] = PROVIDER_LAYER.status()  # (the office stays healthy without it)
+            return self._send_json(answer)
+        elif request_path == "/api/office/provider-layer":
+            # OpenClaw and Hermes from the copied layer: on or off, running, and what is missing (Node.js) if anything
+            return self._send_json(PROVIDER_LAYER.status() if PROVIDER_LAYER is not None else {
+                "enabled": False, "running": False, "message": ""})
+        elif request_path == "/api/version/updates":
+            refresh = (query_params.get("refresh") or [""])[0] in {"1", "true"}
+            enabled = (VO_CONFIG.get("features") or {}).get("updateCheck", True) is not False
+            return self._send_json(UPDATE_CHECKER.status(setting_enabled=enabled, refresh=refresh))
+        elif request_path == "/api/version/notes":
+            return self._send_json(*_release_notes_answer(VO_VERSION))
+        elif request_path == "/status":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"ok": True, "status": "running"}).encode())
-        elif self.path == "/e2e-health":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "ok", "test": "e2e"}).encode())
-        elif self.path == "/status":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             state = _get_normalized_presence_state()
             self.wfile.write(json.dumps(state).encode())
-        elif self.path == "/agents-list":
+        elif request_path == "/agents-list":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             # Return dynamically discovered agent roster
             refresh_agent_maps()
@@ -18007,11 +21306,14 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif request_path == "/gateway-info":
             self._send_gateway_info()
         elif request_path == "/api/openclaw/events":
-            _handle_openclaw_proxy_events(self)
+            if _pl_owns():   # (no raw gateway feed with the layer: 204 tells an EventSource not to retry)
+                self.send_response(204)
+                self.end_headers()
+            else:
+                _handle_openclaw_proxy_events(self)
         elif request_path == "/api/session-activity":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             session_key = (query_params.get("sessionKey") or [""])[0]
             try:
@@ -18028,187 +21330,36 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 commentary_only=commentary_only,
             )
             self.wfile.write(json.dumps({"ok": True, "messages": messages}).encode())
-        elif request_path == "/api/chat-sessions":
+        elif request_path == "/api/office/chat-sessions":
             agent_id = (query_params.get("agentId") or query_params.get("agent") or query_params.get("key") or ["main"])[0]
             try:
                 limit = int((query_params.get("limit") or ["40"])[0])
             except Exception:
                 limit = 40
             limit = max(1, min(100, limit))
-            payload, status = handle_chat_sessions_list(agent_id, limit=limit)
+            manage = agent_providers._can_manage(self._vo_access())
+            payload, status = handle_chat_sessions_list(agent_id, limit=limit, manage=manage)
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode())
-        elif self.path == "/agent-chat":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            result = {}
-            for agent_key in AGENT_SESSION_IDS:
-                agent_record = _find_agent_record(agent_key) or {}
-                provider_kind = agent_record.get("providerKind") or "openclaw"
-                if provider_kind != "openclaw":
-                    profile = agent_record.get("profile") or agent_record.get("providerAgentId") or "main"
-                    msgs = get_provider_agent_messages(provider_kind, profile, max_messages=500)
-                else:
-                    msgs = get_agent_messages(agent_key, max_messages=500)
-                if msgs:
-                    result[agent_key] = msgs
-            result = _merge_comm_events_into_agent_chat(result)
-            # Build project-work map: which agents are currently working on project tasks
-            # Primary detection: check each agent's most recently active session key
-            # for the "wf-" prefix (workflow sessions created by the project system).
-            # This works across all VO instances since they read the same session files.
-            project_work = {}
-            for agent_key, agent_id in AGENT_SESSION_IDS.items():
-                agent_record = _find_agent_record(agent_key) or {}
-                if agent_record.get("providerKind", "openclaw") != "openclaw":
-                    continue
-                try:
-                    sdir = os.path.join(WORKSPACE_BASE, f"agents/{agent_id}/sessions")
-                    sjson = os.path.join(sdir, "sessions.json")
-                    with open(sjson, "r") as _sf:
-                        sdata = json.load(_sf)
-                    best_ts = 0
-                    best_key = ""
-                    for skey, sval in sdata.items():
-                        if not isinstance(sval, dict):
-                            continue
-                        sts = sval.get("updatedAt", 0)
-                        if sts > best_ts:
-                            best_ts = sts
-                            best_key = skey
-                    # Detect workflow session: key contains ":wf-"
-                    if best_key and ":wf-" in best_key:
-                        if time.time() - best_ts / 1000 < 300:
-                            project_work[agent_key] = {
-                                "projectId": "",
-                                "taskId": "",
-                                "taskTitle": "Project task",
-                                "phase": "in_progress",
-                            }
-                except Exception:
-                    pass
-            # Enrich with in-memory workflow state / persisted state (has task titles etc.)
-            active_phases = ("in_progress", "dispatching", "reviewing", "rework")
-            # 1) Collect from in-memory workflow state
-            wf_entries = {}
-            with _WORKFLOW_LOCK:
-                for pid, wf in _WORKFLOW_STATE.items():
-                    wf_entries[pid] = dict(wf)
-            # 2) Merge persisted state for workflows not in memory
+        elif request_path == "/agent-chat":
+            # C5: optional agents=<status keys>, limit=<per agent>, lite=1. The response
+            # layer adds a strong ETag and answers If-None-Match with 304.
+            wanted = {
+                part.strip() for raw in (query_params.get("agents") or []) for part in raw.split(",") if part.strip()
+            }
             try:
-                if os.path.isfile(WORKFLOW_STATE_FILE):
-                    with open(WORKFLOW_STATE_FILE, "r") as _pwf:
-                        persisted_wfs = json.load(_pwf)
-                    for pid, pwf in persisted_wfs.items():
-                        if pid not in wf_entries:
-                            wf_entries[pid] = pwf
-                        else:
-                            for k in ("currentAssignee", "currentTaskTitle", "currentTaskId"):
-                                if not wf_entries[pid].get(k) and pwf.get(k):
-                                    wf_entries[pid][k] = pwf[k]
-            except Exception:
-                pass
-            # Build from workflow entries
-            proj_data = None
-            for pid, wf in wf_entries.items():
-                if not wf.get("active") or wf.get("phase") not in active_phases:
-                    continue
-                agent_id = wf.get("currentAssignee")
-                task_title = wf.get("currentTaskTitle", "")
-                task_id = wf.get("currentTaskId", "")
-                if not agent_id and task_id:
-                    if not proj_data:
-                        proj_data = _load_projects()
-                    p = next((x for x in proj_data.get("projects", []) if x["id"] == pid), None)
-                    if p:
-                        task = next((t for t in p.get("tasks", []) if t["id"] == task_id), None)
-                        if task:
-                            agent_id = task.get("assignee")
-                            if not task_title:
-                                task_title = task.get("title", "")
-                if not agent_id:
-                    continue
-                for sk, aid in AGENT_SESSION_IDS.items():
-                    if aid == agent_id:
-                        project_work[sk] = {
-                            "projectId": pid,
-                            "taskId": task_id,
-                            "taskTitle": task_title,
-                            "phase": wf.get("phase", ""),
-                        }
-                        break
-            # 3) Fallback: scan projects.json for workflowActive projects with
-            #    tasks sitting in "In Progress" or "Review" columns — covers the
-            #    case where the workflow thread died or the container restarted
-            #    but the task was never moved back.
-            if not proj_data:
-                proj_data = _load_projects()
-            for p in proj_data.get("projects", []):
-                pid = p["id"]
-                if pid in project_work:
-                    continue  # already found via workflow state
-                if not p.get("workflowActive"):
-                    continue
-                active_col_ids = set()
-                for c in p.get("columns", []):
-                    ct = c.get("title", "").lower()
-                    if ct in ("in progress", "review"):
-                        active_col_ids.add(c["id"])
-                if not active_col_ids:
-                    continue
-                for task in p.get("tasks", []):
-                    if task.get("columnId") not in active_col_ids:
-                        continue
-                    assignee = task.get("assignee")
-                    if not assignee:
-                        continue
-                    col_title = ""
-                    for c in p.get("columns", []):
-                        if c["id"] == task.get("columnId"):
-                            col_title = c.get("title", "")
-                            break
-                    phase = "in_progress" if col_title.lower() == "in progress" else "reviewing"
-                    for sk, aid in AGENT_SESSION_IDS.items():
-                        if aid == assignee and sk not in project_work:
-                            project_work[sk] = {
-                                "projectId": pid,
-                                "taskId": task["id"],
-                                "taskTitle": task.get("title", ""),
-                                "phase": phase,
-                            }
-                            break
-            # Update shared file so other VO instances can see project work
-            if project_work:
-                try:
-                    shared = {}
-                    now_ms = int(time.time() * 1000)
-                    for sk, info in project_work.items():
-                        agent_id = AGENT_SESSION_IDS.get(sk, sk)
-                        shared[agent_id] = {
-                            "projectId": info.get("projectId", ""),
-                            "taskId": info.get("taskId", ""),
-                            "taskTitle": info.get("taskTitle", ""),
-                            "phase": info.get("phase", ""),
-                            "updatedAt": now_ms,
-                        }
-                    shared_path = os.path.join(WORKSPACE_BASE, "shared", "project-work.json")
-                    os.makedirs(os.path.dirname(shared_path), exist_ok=True)
-                    with open(shared_path, "w") as _spf:
-                        json.dump(shared, _spf)
-                except Exception:
-                    pass
-            result["_projectWork"] = project_work
-            self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/browser-controller":
+                limit = int((query_params.get("limit") or ["500"])[0])
+            except ValueError:
+                limit = 500
+            lite = str((query_params.get("lite") or ["0"])[0]).lower() in {"1", "true", "yes"}
+            result = _agent_chat_payload(wanted or None, max(1, min(500, limit)), lite)
+            return self._send_json(result)
+        elif request_path == "/browser-controller":
             # Return which agent currently has browser control
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             try:
                 with open(os.path.join(STATUS_DIR, "browser-controller.json"), "r") as f:
@@ -18219,11 +21370,10 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(json.dumps(data).encode())
             except Exception:
                 self.wfile.write(json.dumps({"agent": None}).encode())
-        elif self.path == "/browser-status":
+        elif request_path == "/browser-status":
             # Health check for browser feature
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             enabled = VO_CONFIG.get("features", {}).get("browserPanel", False) and check_feature("browserPanel")
             cdp_url = VO_CONFIG.get("browser", {}).get("cdpUrl")
@@ -18241,11 +21391,10 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 "viewerUrl": viewer_url,
                 "cdpUrl": cdp_url
             }).encode())
-        elif self.path == "/browser-tabs":
+        elif request_path == "/browser-tabs":
             # Proxy CDP tab list for browser URL bar
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             cdp_url = VO_CONFIG.get("browser", {}).get("cdpUrl")
             if not cdp_url:
@@ -18257,10 +21406,9 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     self.wfile.write(json.dumps(tabs).encode())
                 except Exception as e:
                     self.wfile.write(json.dumps({"available": False, "error": str(e)}).encode())
-        elif self.path == "/session-info" or self.path.startswith("/session-info?"):
+        elif request_path == "/session-info" or self.path.startswith("/session-info?"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             parsed = urllib.parse.urlparse(self.path)
             query = urllib.parse.parse_qs(parsed.query)
@@ -18270,55 +21418,46 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             )
             info = self._get_session_info(agent_id=agent_id)
             self.wfile.write(json.dumps(info).encode())
-        elif self.path == "/models":
+        elif request_path == "/models":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             models = self._get_models()
             self.wfile.write(json.dumps(models).encode())
-        elif self.path == "/api/native-models" or self.path.startswith("/api/native-models?"):
+        elif request_path == "/api/native-models" or self.path.startswith("/api/native-models?"):
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             parsed = urllib.parse.urlparse(self.path)
             query = urllib.parse.parse_qs(parsed.query)
             agent_id = (query.get("agent") or query.get("agentId") or ["main"])[0]
             self.wfile.write(json.dumps(_get_native_model_state(agent_id)).encode())
-        elif self.path == "/config/providers":
+        elif request_path == "/config/providers":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             data = self._get_providers()
             self.wfile.write(json.dumps(data).encode())
-        elif self.path == "/pc-metrics":
+        elif request_path == "/pc-metrics":
             # Proxy PC metrics from remote machine (configurable)
-            _pc_url = VO_CONFIG["pcMetrics"].get("url")
+            _pc_url = _pc_metrics_url()
             if not _pc_url or not VO_CONFIG["features"]["pcMetrics"]:
-                self.send_response(404)
-                self.end_headers()
-                self.wfile.write(b'{"error":"PC metrics not configured"}')
-                return
+                return self._send_json({"ok": False, "error": "PC metrics not configured", "configured": False}, 404)
             try:
                 req = urllib.request.urlopen(_pc_url, timeout=4)
                 data = req.read()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(data)
             except Exception as e:
                 self.send_response(502)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode())
-        elif self.path == "/api-usage":
+        elif request_path == "/api-usage":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             data = self._get_api_usage()
             self.wfile.write(json.dumps(data).encode())
@@ -18326,7 +21465,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             agent_key = self.path.split("/agent-bio/")[1]
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             bio = self._read_agent_bio(agent_key)
             self.wfile.write(json.dumps(bio).encode())
@@ -18334,7 +21472,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             # SMS feature health/config check
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             sms_cfg = VO_CONFIG.get("sms", {})
             enabled = VO_CONFIG.get("features", {}).get("smsPanel", False) and check_feature("smsPanel")
@@ -18349,14 +21486,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif request_path == "/sms-log":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             sms_log = self._get_sms_log()
             self.wfile.write(json.dumps(sms_log).encode())
         elif request_path == "/sms-threads":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             limit = query_params.get("limit", ["200"])[0]
             try:
@@ -18367,7 +21502,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif request_path == "/sms-thread":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             phone = (query_params.get("phone", [""])[0] or "").strip()
             limit = query_params.get("limit", ["250"])[0]
@@ -18383,23 +21517,20 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif request_path == "/sms-mode":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             mode = self._read_global_sms_mode()
             self.wfile.write(json.dumps(mode).encode())
         elif request_path == "/sms-contacts":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             contacts = self._get_sms_contacts()
             self.wfile.write(json.dumps(contacts).encode())
-        elif self.path == "/api/agents":
+        elif request_path == "/api/agents":
             # Full discovered agent roster
             refresh_agent_maps()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             roster = []
             for a in get_roster():
@@ -18449,32 +21580,28 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _get_agent_workspace_payload(agent_key)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/agent-platforms":
+        elif request_path == "/api/agent-platforms":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(_handle_agent_platforms()).encode())
-        elif request_path == "/api/providers":
+        elif request_path == "/api/office/providers":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({
                 "ok": True,
                 "contractVersion": PROVIDER_CONTRACT_VERSION,
-                "providers": _get_provider_registry().manifests(include_health=True),
+                "providers": _registry_health_manifests(_get_provider_registry()),
                 "conformance": _get_provider_registry().conformance(),
             }).encode())
-        elif request_path == "/api/providers/conformance":
+        elif request_path == "/api/office/providers/conformance":
             result = _get_provider_registry().conformance()
             self.send_response(200 if result.get("ok") else 503)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
         elif request_path == "/api/provider-settings":
@@ -18482,7 +21609,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             payload = _provider_settings_payload(str(provider_id or "").strip().lower())
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode())
         elif request_path == "/api/provider-history":
@@ -18513,10 +21639,9 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     "messages": provider_messages,
                 }
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(payload).encode())
-        elif self.path == "/api/hermes/history" or self.path.startswith("/api/hermes/history?"):
+        elif request_path == "/api/hermes/history" or self.path.startswith("/api/hermes/history?"):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             agent_key = (qs.get("agentId") or qs.get("key") or ["hermes-default"])[0]
             agent = _get_hermes_agent(agent_key)
@@ -18526,7 +21651,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             response_session_id = requested_session_id or active_session_id
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({
                 "ok": True,
@@ -18537,7 +21661,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 "sessionKey": f"hermes:{profile}:{response_session_id}" if response_session_id else f"hermes:{profile}",
                 "messages": _load_hermes_session_history(profile, requested_session_id),
             }).encode())
-        elif self.path == "/api/codex/history" or self.path.startswith("/api/codex/history?"):
+        elif request_path == "/api/codex/history" or self.path.startswith("/api/codex/history?"):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             agent_key = (qs.get("agentId") or qs.get("key") or ["codex-default"])[0]
             agent = _get_codex_agent(agent_key)
@@ -18549,7 +21673,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             token_usage = _get_codex_token_usage(profile)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({
                 "ok": True,
@@ -18562,7 +21685,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 "contextUsed": _codex_context_used_from_token_usage(token_usage) or _codex_int(state.get("contextUsed"), 0),
                 "contextWindow": _codex_context_window_from_token_usage(token_usage) or _codex_int(state.get("contextWindow"), 0),
             }).encode())
-        elif self.path == "/api/claude-code/history" or self.path.startswith("/api/claude-code/history?"):
+        elif request_path == "/api/claude-code/history" or self.path.startswith("/api/claude-code/history?"):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             agent_key = (qs.get("agentId") or qs.get("key") or ["claude-code-main"])[0]
             agent = _get_claude_code_agent(agent_key)
@@ -18574,7 +21697,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             token_usage = _get_claude_code_token_usage(profile)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({
                 "ok": True,
@@ -18593,7 +21715,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _get_hermes_approval_pending(agent_key, session_id)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
         elif request_path == "/api/hermes/approval/stream":
@@ -18603,7 +21724,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.send_header("Cache-Control", "no-cache")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             event_name = "approval" if result.get("pending") else "idle"
             payload = json.dumps(result)
@@ -18625,50 +21745,48 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_codex_approval_pending(agent_key)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/hermes/test":
+        elif request_path == "/api/hermes/test":
+            if not agent_providers._can_manage(self._vo_access()):  # design 2.6: M (it answered without login)
+                return self._send_json({"ok": False, "error": "forbidden",
+                                        "message": agent_providers.FORBIDDEN_TEXT}, 403)
             result = _handle_hermes_test()
             self.send_response(200 if result.get("ok") else 503)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/codex/test":
+        elif request_path == "/api/codex/test":
             result = _handle_codex_test()
-            self.send_response(200 if result.get("ok") else 503)
+            # (a test answers 200 also when the CLI is not reachable: ok false and the reason are the result)
+            self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/claude-code/test":
+        elif request_path == "/api/claude-code/test":
             result = _handle_claude_code_test()
-            self.send_response(200 if result.get("ok") else 503)
+            # (a test answers 200 also when the CLI is not reachable: ok false and the reason are the result)
+            self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/agent-platform-communications/skill":
+        elif request_path == "/api/agent-platform-communications/skill":
             self.send_response(200)
             self.send_header("Content-Type", "text/markdown; charset=utf-8")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(_agent_platform_comm_skill_content().encode("utf-8"))
-        elif self.path == "/api/agent-platform-communications/history" or self.path.startswith("/api/agent-platform-communications/history?"):
+        elif request_path == "/api/agent-platform-communications/history" or self.path.startswith("/api/agent-platform-communications/history?"):
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             result = _handle_agent_platform_comm_history(qs)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
         elif request_path == "/api/hermes-platform/status":
             result = _handle_hermes_platform_status()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
         elif request_path == "/api/hermes-platform/poll":
@@ -18676,7 +21794,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = auth_error or _handle_hermes_platform_poll(query_params)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -18687,33 +21804,29 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_skill_list(agent_key)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/meetings" or self.path == "/api/meetings/active":
+        elif request_path == "/api/meetings" or request_path == "/api/meetings/active":
             # Return active meetings
             data = _load_meetings_file()
             active = data.get("_meetings", [])
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True, "meetings": active}).encode())
-        elif self.path == "/api/meetings/history":
+        elif request_path == "/api/meetings/history":
             # Return meeting history
             data = _load_meetings_file()
             history = data.get("_meetingHistory", [])
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True, "history": history}).encode())
         elif request_path == "/api/layouts":
             result = {"ok": True, "layouts": LAYOUT_LIBRARY.list()}
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode("utf-8"))
         elif request_path.startswith("/api/layouts/"):
@@ -18722,7 +21835,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 asset = LAYOUT_LIBRARY.get(layout_id)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 if query_params.get("download") == ["1"]:
                     filename = re.sub(r"[^a-zA-Z0-9_.-]+", "-", asset.get("name") or layout_id).strip("-") or "office-layout"
                     self.send_header("Content-Disposition", f'attachment; filename="{filename}.mvo-layout.json"')
@@ -18738,30 +21850,44 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"ok": False, "error": str(exc)}).encode("utf-8"))
-        elif self.path == "/api/presence" or self.path.startswith("/api/presence/"):
+        elif request_path == "/api/presence" or self.path.startswith("/api/presence/"):
             # Presence API — read from gateway_presence in-memory state
-            if self.path == "/api/presence":
+            if request_path == "/api/presence":
                 result = _get_normalized_presence_state()
-            elif self.path == "/api/presence/debug":
+            elif request_path == "/api/presence/debug":
                 result = gateway_presence.get_connection_status()
             else:
                 agent_id = self.path.split("/api/presence/")[1].strip("/")
                 result = _normalize_presence_entry(gateway_presence.get_agent_state(agent_id))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/office-config":
+        elif request_path == "/api/office-config":
             # Load saved office config (layout, furniture, agents, branches, etc.)
             _oc_path = os.path.join(STATUS_DIR, "office-config.json")
+            # The revision of the bytes served here: the browser sends it back with
+            # its next save, so a stale copy can not overwrite a newer one (409).
+            _oc_rev = "0"
             try:
-                with open(_oc_path, "r") as f:
-                    data = f.read()
+                with open(_oc_path, "rb") as f:
+                    raw = f.read()
+                _oc_rev = _office_config_rev_of(raw)
+                data = raw.decode("utf-8", errors="replace")
                 try:
                     parsed = json.loads(data or "{}")
                 except Exception:
                     parsed = {}
+                    # Unreadable saved layout: serve the last good copy rather than
+                    # the default (which the browser would then save over it, BE-18).
+                    try:
+                        with open(_oc_path + ".bak", "r") as bf:
+                            backup_text = bf.read()
+                        backup = json.loads(backup_text)
+                        if isinstance(backup, dict) and backup:
+                            data, parsed = backup_text, backup
+                    except (OSError, ValueError):
+                        pass
                 meaningful = bool(
                     (isinstance(parsed, dict) and (
                         parsed.get("canvasWidth") or parsed.get("canvasHeight") or
@@ -18783,19 +21909,18 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                         ddata = _patch_default_config_agents(ddata)
                         self.send_response(200)
                         self.send_header('Content-Type', 'application/json')
-                        self.send_header('Access-Control-Allow-Origin', '*')
+                        self.send_header('X-VO-Rev', _oc_rev)
                         self.end_headers()
                         self.wfile.write(ddata.encode())
                     except FileNotFoundError:
                         self.send_response(404)
                         self.send_header('Content-Type', 'application/json')
-                        self.send_header('Access-Control-Allow-Origin', '*')
                         self.end_headers()
                         self.wfile.write(b'{"error":"No saved config"}')
                     return
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("X-VO-Rev", _oc_rev)
                 self.end_headers()
                 self.wfile.write(data.encode())
             except FileNotFoundError:
@@ -18807,30 +21932,45 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     data = _patch_default_config_agents(data)
                     self.send_response(200)
                     self.send_header('Content-Type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.send_header('X-VO-Rev', _oc_rev)
                     self.end_headers()
                     self.wfile.write(data.encode())
                 except FileNotFoundError:
                     self.send_response(404)
                     self.send_header('Content-Type', 'application/json')
-                    self.send_header('Access-Control-Allow-Origin', '*')
                     self.end_headers()
                     self.wfile.write(b'{"error":"No saved config"}')
-        elif self.path == "/api/license":
+        elif request_path == "/api/license":
             # License status endpoint
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             status = get_license_status()
             self.wfile.write(json.dumps(status).encode())
-        elif self.path == "/vo-config":
+        elif request_path == "/vo-config":
             # Expose config to frontend
             lic = get_license_status()
+            features = dict(VO_CONFIG.get("features") or {})
+            # Only advertise the PC monitor when it can work (a URL is configured),
+            # otherwise the browser polls a disabled endpoint forever (DL-09).
+            features["pcMetrics"] = bool(features.get("pcMetrics") and _pc_metrics_url())
+            sms_cfg = VO_CONFIG.get("sms") or {}
             safe_config = {
+                "version": VO_VERSION,
+                "setupComplete": bool(VO_CONFIG.get("setupComplete")),
                 "office": VO_CONFIG["office"],
-                "features": VO_CONFIG["features"],
+                "features": features,
                 "weather": VO_CONFIG["weather"],
+                # Office life settings (validated by office_life.settings; no secrets).
+                "officeLife": office_life.settings.public(office_life.CTX.settings),
+                # Summaries only: never the Twilio SID/token or the metrics URL itself.
+                "sms": {
+                    "ownerAgentId": sms_cfg.get("ownerAgentId") or sms_cfg.get("agentId") or None,
+                    "fromNumber": sms_cfg.get("fromNumber") or None,
+                    "accountSidConfigured": bool(sms_cfg.get("twilioAccountSid")),
+                    "authTokenConfigured": bool(sms_cfg.get("twilioAuthToken")),
+                },
+                "pcMetrics": {"urlConfigured": bool(_pc_metrics_url())},
                 "openclaw": {
                     "gatewayUrl": VO_CONFIG["openclaw"]["gatewayUrl"],
                     "gatewayHttp": VO_CONFIG["openclaw"]["gatewayHttp"],
@@ -18861,7 +22001,8 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     "platformTokenConfigured": bool(VO_CONFIG.get("hermes", {}).get("platformToken")),
                     "platformAgentId": VO_CONFIG.get("hermes", {}).get("platformAgentId", "hermes-gateway"),
                     "platformPollLeaseSec": VO_CONFIG.get("hermes", {}).get("platformPollLeaseSec", 120),
-                    "detected": bool(_handle_hermes_test().get("ok")),
+                    # Never probe connections inside this frequently polled route (BE-24).
+                    "detected": bool(_swr_cached("hermes-test", 90, lambda: bool(_handle_hermes_test().get("ok")), default=False)),
                 },
                 "codex": {
                     "enabled": VO_CONFIG.get("codex", {}).get("enabled", True),
@@ -18901,17 +22042,19 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             }
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(safe_config).encode())
-        elif self.path == "/api/gateway/test":
+        elif request_path == "/api/openclaw/leftovers":
+            return self._send_json(_openclaw_leftovers_status(str(self.headers.get("Host") or "").strip()))
+        elif request_path == "/api/setup/openclaw-folder":
+            return self._send_json(_setup_openclaw_folder())
+        elif request_path == "/api/gateway/test":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result = self._test_gateway_connection()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/weather-proxy":
+        elif request_path == "/weather-proxy":
             _wloc = VO_CONFIG["weather"].get("location")
             if not _wloc:
                 # An unset optional weather location is a valid product state,
@@ -18919,29 +22062,24 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 # fresh deployment stays console-clean.
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(b'{"current_condition":[],"configured":false}')
                 return
             try:
-                _wloc_encoded = urllib.parse.quote(_wloc, safe='')
-                req = urllib.request.Request(f"https://wttr.in/{_wloc_encoded}?format=j1", headers={"User-Agent": "curl/7.68"})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = resp.read()
+                data = json.dumps(_fetch_weather_payload(str(_wloc))).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(data)
             except Exception as e:
                 self.send_response(502)
+                self.send_header("Content-Type", "application/json")
                 self.end_headers()
-                self.wfile.write(json.dumps({"error": str(e)}).encode())
-        elif self.path == "/api/skills-library":
+                self.wfile.write(json.dumps({"error": f"Weather service unavailable: {e}"[:300]}).encode())
+        elif request_path == "/api/skills-library":
             result = _handle_skills_library_list()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
         elif request_path == "/api/skills-workshop":
@@ -18949,7 +22087,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_skill_workshop_list(qs)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -18958,7 +22095,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_skill_workshop_inspect(qs)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -18967,31 +22103,27 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_skills_library_get(skill_name)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
         # ── PROJECTS API ────────────────────────────────────────────
-        elif self.path == "/api/projects" or self.path.startswith("/api/projects?"):
+        elif request_path == "/api/projects" or self.path.startswith("/api/projects?"):
             qs = self.path.split("?", 1)[1] if "?" in self.path else ""
             result = _handle_projects_list(qs)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/projects/scores":
+        elif request_path == "/api/projects/scores":
             result = _handle_scores_leaderboard()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/projects/templates":
+        elif request_path == "/api/projects/templates":
             result = _handle_projects_templates()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
         elif self.path.startswith("/api/projects/") and self.path.endswith("/workflow/chat"):
@@ -18999,7 +22131,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_workflow_chat(proj_id)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
         elif self.path.startswith("/api/projects/") and self.path.endswith("/workflow/status"):
@@ -19007,7 +22138,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_workflow_status(proj_id)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -19016,7 +22146,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_project_report(proj_id)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -19026,7 +22155,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 result = _handle_project_get(proj_id)
                 self.send_response(result.get("_status", 200))
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 result.pop("_status", None)
                 self.wfile.write(json.dumps(result).encode())
@@ -19034,7 +22162,62 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_response(404)
                 self.end_headers()
         else:
-            super().do_GET()
+            self._serve_static(request_path, query_params)
+
+    def _serve_static(self, request_path, query_params=None):
+        """Serve allow-listed app files only (BE-28, DL-06) with cache tokens (C7)."""
+        if request_path.startswith("/api/") or request_path == "/api":
+            return self._send_json({"ok": False, "error": "not_found", "path": request_path}, 404)
+        full = _static_file_for_path(request_path)
+        if not full:
+            return self._send_json({"ok": False, "error": "not_found"}, 404)
+        if full.endswith(".html"):
+            try:
+                with open(full, "r", encoding="utf-8") as handle:
+                    text = handle.read()
+            except OSError:
+                return self._send_json({"ok": False, "error": "not_found"}, 404)
+            body = _rewrite_asset_tokens(text, os.path.dirname(full)).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        requested = ((query_params or {}).get("v") or [""])[0]
+        if full.endswith(_NESTED_REF_EXTENSIONS) and _nested_ref_targets(full):
+            # A module / style sheet naming other files with ?v=: sent with their tokens (I7).
+            try:
+                with open(full, "r", encoding="utf-8") as handle:
+                    text = handle.read()
+                st = os.stat(full)
+            except (OSError, UnicodeDecodeError):
+                return self._send_json({"ok": False, "error": "not_found"}, 404)
+            body = _rewrite_asset_tokens(text, os.path.dirname(full), _NESTED_REF_RE).encode("utf-8")
+            immutable = bool(requested) and requested == _asset_token(full)
+            self.send_response(200)
+            self.send_header("Content-Type", self.guess_type(full))
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Last-Modified", self.date_time_string(st.st_mtime))
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable" if immutable else "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        try:
+            handle = open(full, "rb")
+        except OSError:
+            return self._send_json({"ok": False, "error": "not_found"}, 404)
+        with handle:
+            st = os.fstat(handle.fileno())
+            immutable = bool(requested) and requested == _asset_token(full)
+            self.send_response(200)
+            self.send_header("Content-Type", self.guess_type(full))
+            self.send_header("Content-Length", str(st.st_size))
+            self.send_header("Last-Modified", self.date_time_string(st.st_mtime))
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable" if immutable else "no-cache")
+            self.end_headers()
+            shutil.copyfileobj(handle, self.wfile)
 
     def _chat_media_allowed_roots(self):
         roots = []
@@ -19045,6 +22228,42 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             except Exception:
                 pass
         return roots
+
+    _CHAT_MEDIA_INLINE_TYPES = ("image/", "audio/", "video/", "application/pdf")
+    _CHAT_MEDIA_EXTENSIONS = {
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".avif", ".ico", ".svg",
+        ".mp3", ".wav", ".ogg", ".oga", ".m4a", ".aac", ".flac", ".opus", ".weba",
+        ".mp4", ".webm", ".mov", ".m4v", ".ogv", ".pdf",
+    }
+
+    def _chat_media_upload_roots(self):
+        roots = []
+        for candidate in (os.path.join(STATUS_DIR, "uploads"), "/tmp/vo-data/uploads"):
+            try:
+                if os.path.isdir(candidate):
+                    roots.append(os.path.realpath(candidate))
+            except OSError:
+                pass
+        return roots
+
+    @staticmethod
+    def _inside(path, root):
+        return path == root or path.startswith(root + os.sep)
+
+    def _chat_media_permitted(self, real_path):
+        """BE-02/CH-03: uploads may be any type; anywhere else in the agent homes only
+        media files (images, audio, video, PDF) are served, never config, keys,
+        databases or dot-folders."""
+        if any(self._inside(real_path, root) for root in self._chat_media_upload_roots()):
+            return True
+        allowed_roots = self._chat_media_allowed_roots()
+        root = next((r for r in allowed_roots if self._inside(real_path, r)), None)
+        if not root:
+            return False
+        relative = os.path.relpath(real_path, root)
+        if any(part.startswith(".") for part in relative.split(os.sep)):
+            return False
+        return os.path.splitext(real_path)[1].lower() in self._CHAT_MEDIA_EXTENSIONS
 
     def _resolve_chat_media_path(self, raw_path):
         """Resolve chat media paths across VO instances without assuming one data dir.
@@ -19059,6 +22278,8 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         if raw_path.startswith("file://"):
             raw_path = urllib.parse.urlparse(raw_path).path
         raw_path = urllib.parse.unquote(raw_path)
+        if "\x00" in raw_path:
+            return None
         candidates = []
         if raw_path.startswith("/tmp/vo-data/"):
             candidates.append(os.path.join(STATUS_DIR, raw_path[len("/tmp/vo-data/"):]))
@@ -19077,11 +22298,10 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             # product generic while still supporting multiple VO instances.
             for base in [WORKSPACE_BASE, os.path.expanduser("~/.openclaw")]:
                 try:
-                    candidates.extend(glob.glob(os.path.join(base, "*", upload_suffix)))
+                    candidates.extend(glob.glob(os.path.join(glob.escape(base), "*", glob.escape(upload_suffix))))
                 except Exception:
                     pass
 
-        allowed_roots = self._chat_media_allowed_roots()
         seen = set()
         for candidate in candidates:
             if not candidate:
@@ -19092,36 +22312,37 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             if real_path in seen:
                 continue
             seen.add(real_path)
-            allowed = any(real_path == root or real_path.startswith(root + os.sep) for root in allowed_roots)
-            if allowed and os.path.isfile(real_path):
+            if os.path.isfile(real_path) and self._chat_media_permitted(real_path):
                 return real_path
         return None
 
     def _serve_chat_media(self, query_params):
         raw_path = (query_params.get("path", [""])[0] or "").strip()
         if not raw_path:
-            self.send_response(400)
-            self.send_header("Content-Type", "text/plain")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(b"Missing media path")
-            return
+            return self._send_json({"ok": False, "error": "Missing media path"}, 400)
         real_path = self._resolve_chat_media_path(raw_path)
         if not real_path:
-            self.send_response(404)
-            self.send_header("Content-Type", "text/plain")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(b"Media not found")
-            return
+            return self._send_json({"ok": False, "error": "Media not found"}, 404)
         content_type = mimetypes.guess_type(real_path)[0] or "application/octet-stream"
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "private, max-age=3600")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.end_headers()
-        with open(real_path, "rb") as f:
-            shutil.copyfileobj(f, self.wfile)
+        inline = content_type.startswith(self._CHAT_MEDIA_INLINE_TYPES)
+        try:
+            handle = open(real_path, "rb")
+        except OSError:
+            return self._send_json({"ok": False, "error": "Media not found"}, 404)
+        with handle:
+            size = os.fstat(handle.fileno()).st_size
+            safe_name = re.sub(r'[^A-Za-z0-9._ -]+', "_", os.path.basename(real_path))[:120] or "file"
+            self.send_response(200)
+            self.send_header("Content-Type", content_type if inline else "application/octet-stream")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Cache-Control", "private, max-age=3600")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            # Agent-written files never run as the office (BE-12): sandboxed, and
+            # anything that is not media downloads instead of rendering.
+            self.send_header("Content-Security-Policy", "sandbox; default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'")
+            self.send_header("Content-Disposition", f'{"inline" if inline else "attachment"}; filename="{safe_name}"')
+            self.end_headers()
+            shutil.copyfileobj(handle, self.wfile)
 
     def _get_api_usage(self):
         """Return the latest API usage data collected by the background thread."""
@@ -19288,10 +22509,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         Adds entries for discovered models not yet in config.
         Does NOT touch models from other providers.
         """
-        try:
-            with open(CONFIG_PATH, "r") as f:
-                cfg = json.load(f)
-
+        def mutate(cfg):
             models_cfg = cfg.get("agents", {}).get("defaults", {}).get("models", {})
             prefix = f"{provider}/"
             discovered_set = set(discovered_models)
@@ -19308,9 +22526,10 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 if m not in models_cfg:
                     models_cfg[m] = {}
                     changed = True
+            return changed
 
-            if changed:
-                _atomic_write_text(CONFIG_PATH, json.dumps(cfg, indent=2) + "\n")
+        try:
+            _edit_openclaw_config(mutate, CONFIG_PATH)
         except Exception:
             pass  # Config sync is best-effort
 
@@ -19362,11 +22581,11 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
 
     def _default_config_model(self, cfg):
         cfg = cfg if isinstance(cfg, dict) else {}
-        default_model = cfg.get("agents", {}).get("defaults", {}).get("model", {}).get("primary", "")
-        for a in cfg.get("agents", {}).get("list", []):
-            if a.get("default") and a.get("model"):
-                return a["model"]
-        return default_model or "unknown"
+        for _agent_id, a in _iter_openclaw_agent_entries(cfg):
+            model = _model_ref_primary(a.get("model"))
+            if a.get("default") and model:
+                return model
+        return _default_model_id(cfg) or "unknown"
 
     def _context_window_for_model(self, model, cfg):
         model = str(model or "")
@@ -19496,10 +22715,10 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
 
         # If a specific agent was requested, look up its model override
         if agent_id:
-            for a in cfg.get("agents", {}).get("list", []):
-                if a.get("id") == agent_id:
-                    if a.get("model"):
-                        model = a["model"]
+            for entry_id, a in _iter_openclaw_agent_entries(cfg):
+                if entry_id == agent_id:
+                    if _model_ref_primary(a.get("model")):
+                        model = _model_ref_primary(a.get("model"))
                     break
 
         return {"model": model, "contextWindow": self._context_window_for_model(model, cfg)}
@@ -19671,25 +22890,22 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         agent_id = req["agent_id"]
         model_id = req.get("model", "")
 
-        with open(CONFIG_PATH) as f:
-            cfg = json.load(f)
+        found = []
 
-        found = False
-        for a in cfg.get("agents", {}).get("list", []):
-            if a["id"] == agent_id:
-                if model_id:
-                    a["model"] = model_id
-                elif "model" in a:
-                    del a["model"]
-                found = True
-                break
+        def mutate(cfg):
+            del found[:]
+            for entry_id, a in _iter_openclaw_agent_entries(cfg):
+                if entry_id == agent_id:
+                    _set_openclaw_entry_model(a, model_id)
+                    found.append(entry_id)
+                    return True
+            return False
 
+        _changed, err = _edit_openclaw_config(mutate, CONFIG_PATH)
+        if err:
+            return {"ok": False, "error": err}
         if not found:
             return {"ok": False, "error": f"Agent {agent_id} not found in config"}
-
-        ok, err = self._write_openclaw_config(cfg)
-        if not ok:
-            return {"ok": False, "error": err}
 
         gateway_signal = self._signal_gateway(restart=True)
         return {"ok": True, "agent": agent_id, "model": model_id or "(default)", "defaulted": not bool(model_id), "gatewaySignal": gateway_signal}
@@ -19725,8 +22941,9 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         if not models:
             return {"ok": False, "error": "at least one model is required"}
 
-        with open(CONFIG_PATH) as f:
-            cfg = json.load(f)
+        cfg, _raw, err = _read_openclaw_config_plain(CONFIG_PATH)
+        if err:
+            return {"ok": False, "error": err}
 
         cfg.setdefault("models", {}).setdefault("providers", {})
         existing = cfg["models"]["providers"].get(provider, {})
@@ -19780,17 +22997,20 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         if merge_error:
             return {"ok": False, "error": merge_error}
         existing["models"] = new_models
-        cfg["models"]["providers"][provider] = existing
-
-        # Save inference params
         params = req.get("params", {})
-        if params:
-            defaults_models = cfg.setdefault("agents", {}).setdefault("defaults", {}).setdefault("models", {})
-            for model_id, model_params in params.items():
-                defaults_models.setdefault(model_id, {})["params"] = model_params
 
-        ok, err = self._write_openclaw_config(cfg)
-        if not ok:
+        # Written onto the file as it is now (the model lookup above can take a while).
+        def mutate(fresh):
+            fresh.setdefault("models", {}).setdefault("providers", {})[provider] = existing
+            # Save inference params
+            if params:
+                defaults_models = fresh.setdefault("agents", {}).setdefault("defaults", {}).setdefault("models", {})
+                for model_id, model_params in params.items():
+                    defaults_models.setdefault(model_id, {})["params"] = model_params
+            return True
+
+        _changed, err = _edit_openclaw_config(mutate, CONFIG_PATH)
+        if err:
             return {"ok": False, "error": err}
 
         self._signal_gateway(restart=False)
@@ -19815,29 +23035,64 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         provider = _safe_provider_id(req.get("provider", ""))
         if not provider:
             return {"ok": False, "error": "provider is required"}
-        with open(CONFIG_PATH) as f:
-            cfg = json.load(f)
-        providers = cfg.setdefault("models", {}).setdefault("providers", {})
-        if provider not in providers:
+        missing = []
+
+        def mutate(cfg):
+            del missing[:]
+            providers = cfg.setdefault("models", {}).setdefault("providers", {})
+            if provider not in providers:
+                missing.append(provider)
+                return False
+            self._drop_provider_from_config(cfg, providers, provider)
+            return True
+
+        _changed, err = _edit_openclaw_config(mutate, CONFIG_PATH)
+        if err:
+            return {"ok": False, "error": err}
+        if missing:
             return {"ok": False, "error": f"Provider {provider} is not configured"}
+        self._signal_gateway(restart=False)
+        return {"ok": True, "provider": provider}
+
+    @staticmethod
+    def _drop_provider_from_config(cfg, providers, provider):
         providers.pop(provider, None)
         defaults_models = cfg.setdefault("agents", {}).setdefault("defaults", {}).setdefault("models", {})
         for model_id in list(defaults_models.keys()):
             if model_id.startswith(provider + "/"):
                 defaults_models.pop(model_id, None)
-        for agent in cfg.get("agents", {}).get("list", []):
-            if str(agent.get("model") or "").startswith(provider + "/"):
+        prefix = provider + "/"
+        for _agent_id, agent in _iter_openclaw_agent_entries(cfg):
+            ref = agent.get("model")
+            if _model_ref_primary(ref).startswith(prefix):
                 agent.pop("model", None)
-        ok, err = self._write_openclaw_config(cfg)
-        if not ok:
-            return {"ok": False, "error": err}
-        self._signal_gateway(restart=False)
-        return {"ok": True, "provider": provider}
+            elif isinstance(ref, dict) and isinstance(ref.get("fallbacks"), list):
+                ref["fallbacks"] = [m for m in ref["fallbacks"] if not str(m or "").startswith(prefix)]
+        defaults = cfg.get("agents", {}).get("defaults", {})
+        default_ref = defaults.get("model")
+        if isinstance(default_ref, dict) and isinstance(default_ref.get("fallbacks"), list):
+            default_ref["fallbacks"] = [m for m in default_ref["fallbacks"] if not str(m or "").startswith(prefix)]
 
     @staticmethod
     def _signal_gateway(restart=False):
         """Ask the OpenClaw Gateway to reload/restart through its admin RPC."""
         return _signal_openclaw_gateway(restart=restart)
+
+    def _gateway_save(self, body, action):
+        """Run one model/provider save with at most one gateway restart (CH-34).
+        `restart: false` in the body (or ?restart=0) writes the files and skips it."""
+        _hp_require_full("openclaw")
+        flag = body.get("restart") if isinstance(body, dict) else None
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("restart", [""])[0].strip().lower()
+        allow = not (flag is False or str(flag).strip().lower() in ("0", "false", "no") or query in ("0", "false", "no"))
+        with _gateway_restart_batch(allow=allow) as batch:
+            result = action()
+        if isinstance(result, dict):
+            summary = batch.summary()
+            result["gatewayRestart"] = summary
+            if isinstance(result.get("gatewaySignal"), dict) and result["gatewaySignal"].get("deferred"):
+                result["gatewaySignal"] = summary
+        return result
 
     def _get_models(self):
         """Read available models from openclaw.json."""
@@ -19855,7 +23110,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
 
         models = []
         # Default model
-        default_model = cfg.get("agents", {}).get("defaults", {}).get("model", {}).get("primary", "")
+        default_model = _default_model_id(cfg)
         if default_model:
             models.append({"id": default_model, "label": default_model + " (default)", "provider": default_model.split("/")[0] if "/" in default_model else ""})
 
@@ -19934,14 +23189,15 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
 
         # Per-agent current models
         agents = {}
-        for a in cfg.get("agents", {}).get("list", []):
-            agents[a["id"]] = a.get("model", "")
+        agent_rows = _openclaw_agent_rows(cfg)
+        for a in agent_rows:
+            agents[a["id"]] = a["model"]
         # Map statusKey to agent id
         status_to_agent = {}
         for sk, ws in AGENT_WORKSPACES.items():
             # Find matching agent id
-            for a in cfg.get("agents", {}).get("list", []):
-                if a.get("workspace", "").endswith(ws) or a["id"] == sk or a["id"] == AGENT_SESSION_IDS.get(sk, ""):
+            for a in agent_rows:
+                if (ws and a["workspace"].endswith(ws)) or a["id"] == sk or a["id"] == AGENT_SESSION_IDS.get(sk, ""):
                     status_to_agent[sk] = a["id"]
                     break
 
@@ -19987,8 +23243,8 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         agent_id = None
         for sk, ws in AGENT_WORKSPACES.items():
             if sk == status_key:
-                for a in cfg.get("agents", {}).get("list", []):
-                    if a.get("workspace", "").endswith(ws) or a["id"] == sk or a["id"] == AGENT_SESSION_IDS.get(sk, ""):
+                for a in _openclaw_agent_rows(cfg):
+                    if (ws and a["workspace"].endswith(ws)) or a["id"] == sk or a["id"] == AGENT_SESSION_IDS.get(sk, ""):
                         agent_id = a["id"]
                         break
                 break
@@ -20003,16 +23259,19 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         request = {"type": "set-model", "agent_id": agent_id, "model": model_id, "status_key": status_key}
         return self._send_watcher_request(request)
 
-    def do_PUT(self):
+    def _route_PUT(self):
         length = int(self.headers.get('Content-Length', 0))
-        body = json.loads(self.rfile.read(length)) if length else {}
+        body = self._read_json_body(length)
+        agent_pc_parts = _agent_pc_route_parts(urllib.parse.urlparse(self.path).path)
+        if len(agent_pc_parts) == 2 and agent_pc_parts[1] == "state":
+            result, status = _agent_pc_mutation(agent_pc_parts[0], "state", body)
+            return self._send_json(result, status)
         # ── PROJECTS PUT ─────────────────────────────────────────────
         if self.path.startswith("/api/projects/") and self.path.endswith("/workflow/auto-mode"):
             proj_id = self.path.split("/api/projects/")[1].rsplit("/workflow/auto-mode", 1)[0]
             result = _handle_workflow_auto_mode(proj_id, body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20024,7 +23283,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_review_check_update(proj_id, task_id, body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20047,7 +23305,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 result = {"error": "Not found", "_status": 404}
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20055,14 +23312,17 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def do_DELETE(self):
-        if self.path == "/api/agent/delete":
+    def _route_DELETE(self):
+        agent_pc_parts = _agent_pc_route_parts(urllib.parse.urlparse(self.path).path)
+        if len(agent_pc_parts) == 3 and agent_pc_parts[1] in {"roots", "saved"}:
+            result, status = _agent_pc_delete(agent_pc_parts[0], agent_pc_parts[1], agent_pc_parts[2])
+            return self._send_json(result, status)
+        if urllib.parse.urlsplit(self.path).path == "/api/agent/delete":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_agent_delete(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20073,7 +23333,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 LAYOUT_LIBRARY.delete(layout_id)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(b'{"ok":true}')
             except FileNotFoundError:
@@ -20093,7 +23352,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_meeting_history_delete(meet_id)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20106,7 +23364,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_skill_delete(agent_key, skill_name)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20115,7 +23372,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_skills_library_delete(skill_name)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20125,7 +23381,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_template_delete(tpl_id)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20138,7 +23393,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_task_delete(proj_id, task_id)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20147,7 +23401,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_project_delete(proj_id)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20155,16 +23408,42 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
 
-    def do_OPTIONS(self):
-        self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Virtual-Office-Token, X-My-Virtual-Office-Token, X-Hermes-Platform-Token")
+    def _route_OPTIONS(self):
+        # Same-origin only: no CORS preflight approvals.
+        self.send_response(204)
         self.end_headers()
 
-    def do_POST(self):
+    def _route_POST(self):
         parsed_url = urllib.parse.urlparse(self.path)
         request_path = parsed_url.path
+        if request_path.startswith("/api/access/"):
+            return self._handle_access_post(request_path)
+        # (v0.11: the agent is in the JSON body, read once and handed on unchanged; see the GET gate)
+        if _pl_owns() and request_path.startswith("/api/agent-chat/") and _pl_layer_chat(_pl_body_agent(self)):
+            return _pl_agent_chat_answer(self, request_path, urllib.parse.parse_qs(parsed_url.query))
+        if agent_providers.legacy_handles(request_path):
+            return agent_providers.legacy_dispatch(self, "POST", request_path)
+        if agent_providers.handles(request_path):
+            return agent_providers.dispatch(self, "POST", request_path,
+                                            urllib.parse.parse_qs(parsed_url.query))
+        if office_life_routes.handles(request_path):
+            return office_life_routes.dispatch(self, "POST", request_path,
+                                               urllib.parse.parse_qs(parsed_url.query))
+        agent_pc_parts = _agent_pc_route_parts(request_path)
+        if len(agent_pc_parts) == 2 and agent_pc_parts[1] in {"activity", "roots", "saved"}:
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                if length <= 0 or length > 256 * 1024:
+                    raise AgentPCError("invalid_payload", "Request body must be a non-empty JSON object.")
+                body = self._read_json_body(length)
+                if not isinstance(body, dict):
+                    raise AgentPCError("invalid_payload", "Request body must be a JSON object.")
+                result, status = _agent_pc_mutation(agent_pc_parts[0], agent_pc_parts[1], body)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                result, status = ({"ok": False, "error": {"code": "invalid_json", "message": "Request body must be valid JSON."}}, 400)
+            except Exception as exc:
+                result, status = _agent_pc_api_error(exc)
+            return self._send_json(result, status)
         if request_path in {"/api/previews", "/api/previews/open"}:
             try:
                 length = int(self.headers.get("Content-Length", 0))
@@ -20172,12 +23451,35 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     error = _agent_preview_error("invalid_payload", "Preview payload must be a non-empty object.", 400)
                     error.pop("_status", None)
                     return self._send_json(error, 400)
-                body = json.loads(self.rfile.read(length))
+                body = self._read_json_body(length)
             except (TypeError, ValueError, json.JSONDecodeError):
                 error = _agent_preview_error("invalid_json", "Request body must be valid JSON.", 400)
                 error.pop("_status", None)
                 return self._send_json(error, 400)
             _ok, result, status = publish_agent_preview(body)
+            return self._send_json(result, status)
+        if request_path == "/api/openclaw/task-progress":
+            if not _openclaw_proxy_authorized(self):
+                return self._send_json({"availability": "denied", "card": None, "code": "proxy_unauthorized"}, 403)
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if not 0 < length <= 8192 or self.headers.get("Transfer-Encoding"):
+                    return self._send_json({"availability": "unavailable", "card": None, "code": "request_too_large"}, 413)
+                body = self._read_json_body(length)
+            except (ValueError, TypeError, RecursionError):
+                return self._send_json({"availability": "unavailable", "card": None, "code": "invalid_json"}, 400)
+            return self._send_json(_handle_session_progress(body))
+
+        if request_path == "/api/openclaw/rpc" and _pl_owns():
+            # (the Automations page: its gateway calls go through the layer's OpenClaw sub-menu, same gating)
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = self._read_json_body(length) if 0 < length <= 1_000_000 else None
+            except (TypeError, ValueError, json.JSONDecodeError):
+                body = None
+            if not isinstance(body, dict) or not _openclaw_proxy_same_origin(self):
+                return self._send_json({"ok": False, "error": "Invalid request"}, 400)
+            result, status = _pl_openclaw_rpc(self, body)
             return self._send_json(result, status)
         if request_path == "/api/openclaw/rpc":
             if not _openclaw_proxy_authorized(self):
@@ -20186,19 +23488,18 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", 0))
                 if length <= 0 or length > 1_000_000:
                     return self._send_json({"ok": False, "error": "Invalid request body"}, 400)
-                body = json.loads(self.rfile.read(length))
+                body = self._read_json_body(length)
             except (TypeError, ValueError, json.JSONDecodeError):
                 return self._send_json({"ok": False, "error": "Invalid JSON request body"}, 400)
             result = _handle_openclaw_proxy_rpc(body)
             status = int(result.pop("_status", 200))
             return self._send_json(result, status)
         # --- SETUP WIZARD ---
-        if request_path == "/api/providers/refresh":
+        if request_path == "/api/office/providers/refresh":
             refresh_agent_maps(force_discovery=True)
             roster = get_roster()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({
                 "ok": True,
@@ -20212,49 +23513,70 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             return
         if request_path == "/api/provider-settings/save":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _save_provider_settings(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        if self.path == "/setup/save":
+        if request_path == "/setup/save":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             cfg_path = _resolve_config_path()
             # Always save to persistent volume if available (survives container recreation)
             data_dir = os.environ.get("VO_STATUS_DIR", "/data")
             persistent_path = os.path.join(data_dir, "vo-config.json")
             if os.path.isdir(data_dir) and cfg_path != persistent_path:
                 cfg_path = persistent_path
+            if not isinstance(body, dict):
+                return self._send_json({"ok": False, "error": "Settings must be a JSON object"}, 400)
+            _cfg_lock = _json_file_lock(cfg_path)
+            _cfg_lock.acquire()
             try:
-                # Merge with existing config — read from resolved path first, fall back to app default
-                existing = {}
-                for try_path in [cfg_path, os.path.join(os.path.dirname(__file__), "vo-config.json")]:
+                # Merge with existing config. Only a MISSING file falls back to the bundled
+                # default; an unreadable one is never replaced by defaults (BE-19).
+                try:
+                    existing = _read_json_state(cfg_path, default=None)
+                except JsonStateError as exc:
+                    return self._send_json({"ok": False, "error": f"Settings were not saved: {exc}"}, 409)
+                if existing is None:
                     try:
-                        with open(try_path, "r") as f:
-                            existing = json.load(f)
-                        break
-                    except (FileNotFoundError, json.JSONDecodeError):
-                        continue
+                        existing = _read_json_state(os.path.join(os.path.dirname(__file__), "vo-config.json"), default={})
+                    except JsonStateError:
+                        existing = {}
                 # Deep merge
+                applied = {}   # section -> the values this save sets (see _note_settings_changes)
                 for key in body:
-                    if key.startswith("_"):
+                    if key.startswith("_") or key == "replaceAll":
                         continue
-                    if key == "hermes" and isinstance(body[key], dict) and isinstance(existing.get(key), dict):
+                    if key == office_life.settings.CONFIG_KEY:
+                        # Saved only by POST /api/office-life/settings (one validation path).
+                        continue
+                    if key == "hermes" and isinstance(body[key], dict):
+                        if not isinstance(existing.get(key), dict):
+                            existing[key] = {}
                         hermes_body = dict(body[key])
+                        replace_all = hermes_body.pop("replaceAll", None) is True or body.get("replaceAll") is True
                         if isinstance(hermes_body.get("connections"), list):
-                            hermes_body["connections"] = _merge_hermes_connection_updates(
-                                existing[key],
-                                hermes_body.get("connections") or [],
-                            )
+                            if hermes_body["connections"] or replace_all:
+                                hermes_body["connections"] = _merge_hermes_connection_updates(
+                                    existing[key],
+                                    hermes_body["connections"],
+                                )
+                            else:
+                                # An empty list is "no change" unless the caller says
+                                # replaceAll: true (removing every connection is explicit).
+                                hermes_body.pop("connections")
+                        elif "connections" in hermes_body:
+                            hermes_body.pop("connections")
                         # Remove the retired container-runtime settings when the
-                        # new connection editor saves configuration.
+                        # new connection editor saves configuration. homePath and
+                        # binary are NOT retired: the provider page still offers them
+                        # for local Hermes CLI profiles (providers/builtin.py).
                         for retired in (
-                            "homePath", "binary", "apiUrl", "apiKey", "apiProfiles",
+                            "apiUrl", "apiKey", "apiProfiles",
                             "desktopUrl", "desktopToken", "desktopHostHeader",
                             "desktopTcpHost", "desktopTcpPort", "desktopLogPath",
                             "preferDesktop", "autoStartProfileApis",
@@ -20264,14 +23586,19 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                         if not hermes_body.get("platformToken") and existing[key].get("platformToken"):
                             hermes_body.pop("platformToken", None)
                         existing[key].update(hermes_body)
+                        applied[key] = hermes_body
                         continue
                     if isinstance(body[key], dict) and isinstance(existing.get(key), dict):
                         existing[key].update(body[key])
                     else:
                         existing[key] = body[key]
+                    if isinstance(body[key], dict):
+                        applied[key] = body[key]
+                # (a blank value keeps what is set: the environment's stays in charge)
+                _note_settings_changes(existing, {section: {k: v for k, v in values.items() if v not in (None, "")}
+                                                  for section, values in applied.items()})
                 existing["_setupComplete"] = True
-                with open(cfg_path, "w") as f:
-                    json.dump(existing, f, indent=2)
+                _write_json_atomic(cfg_path, existing, mode=0o600)
                 # Reload config and re-discover if path or gateway changed
                 global VO_CONFIG, WORKSPACE_BASE, _discovered_roster, _discovered_at
                 old_path = WORKSPACE_BASE
@@ -20293,11 +23620,14 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 token_changed = new_token != old_token
                 if gateway_changed or token_changed:
                     gateway_presence.stop()
-                    if new_token:
+                    if new_token and not _pl_owns():
                         gateway_presence.start(GATEWAY_URL, new_token, port=PORT, client_version=_get_openclaw_version())
+                # (the wizard's Gateway Connection reaches the layer; idempotent, so after every save: the token was
+                # already read back from the saved file above, a first token never shows as changed)
+                if new_token:
+                    _pl_adopt_saved_gateway_soon()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({"ok": True}).encode())
             except Exception as e:
@@ -20305,6 +23635,8 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_header("Content-Type", "application/json")
                 self.end_headers()
                 self.wfile.write(json.dumps({"ok": False, "error": str(e)}).encode())
+            finally:
+                _cfg_lock.release()
             return
         # --- LAYOUT MARKETPLACE / LIBRARY ---
         elif request_path == "/api/layouts":
@@ -20315,11 +23647,10 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     raise LayoutValidationError("Invalid Content-Length header") from exc
                 if length <= 0 or length > 1_500_000:
                     raise LayoutValidationError("Layout file must be between 1 byte and 1.5 MB")
-                body = json.loads(self.rfile.read(length))
+                body = self._read_json_body(length)
                 asset = LAYOUT_LIBRARY.save(body)
                 self.send_response(201)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({"ok": True, "layout": asset}).encode("utf-8"))
             except json.JSONDecodeError:
@@ -20334,115 +23665,117 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(json.dumps({"ok": False, "error": str(exc)}).encode("utf-8"))
             return
         # --- OFFICE CONFIG PERSISTENCE ---
-        elif self.path == "/api/office-config":
-            length = int(self.headers.get('Content-Length', 0))
-            body = self.rfile.read(length) if length else b'{}'
-            # Validate JSON
-            try:
-                json.loads(body)
-            except json.JSONDecodeError:
-                self.send_response(400)
-                self.send_header("Content-Type", "application/json")
-                self.end_headers()
-                self.wfile.write(b'{"error":"Invalid JSON"}')
-                return
-            _oc_path = os.path.join(STATUS_DIR, "office-config.json")
-            with open(_oc_path, "w") as f:
-                f.write(body.decode())
-            os.chmod(_oc_path, 0o666)
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(b'{"ok":true}')
-            return
+        elif request_path == "/api/office-config":
+            # BE-18: only a real layout object replaces the saved one; atomic, with .bak.
+            if not self._content_length():
+                return self._send_json({"ok": False, "error": "empty_body", "message": "No office layout was sent."}, 400)
+            body = self._read_json_body()
+            if isinstance(body, dict) and body.get("reset") is True and len(body) == 1:
+                # Settings > Full reset (v0.10.1 saves): the saved layout is moved aside
+                # (office-config.reset-<time>.json, recoverable) and the default is served.
+                _oc_path = os.path.join(STATUS_DIR, OFFICE_CONFIG_FILE_NAME)
+                with _json_file_lock(_oc_path):
+                    if os.path.exists(_oc_path):
+                        os.replace(_oc_path, os.path.join(STATUS_DIR, f"office-config.reset-{int(time.time() * 1000)}.json"))
+                    _OFFICE_SAVE_LAST.pop(os.path.abspath(_oc_path), None)
+                return self._send_json({"ok": True, "reset": True, "rev": "0"}, 200, {"X-VO-Rev": "0"})
+            if not isinstance(body, dict) or not any(
+                key in body for key in ("canvasWidth", "canvasHeight", "furniture", "walls", "floor", "agents", "branches")
+            ):
+                return self._send_json({"ok": False, "error": "invalid_layout",
+                                        "message": "That does not look like an office layout; nothing was saved."}, 400)
+            _oc_path = os.path.join(STATUS_DIR, OFFICE_CONFIG_FILE_NAME)
+            _oc_base, _oc_client, _oc_seq = _office_save_headers(self.headers)
+            with _json_file_lock(_oc_path):
+                refused = _office_save_check(_oc_path, _oc_base, _oc_client, _oc_seq)
+                if refused is None:
+                    _oc_rev = _office_save_write(_oc_path, body, _oc_client, _oc_seq)
+            if refused is not None:
+                return self._send_json(refused, 409, {"X-VO-Rev": refused["rev"]})
+            return self._send_json({"ok": True, "rev": _oc_rev}, 200, {"X-VO-Rev": _oc_rev})
         # --- AGENT CREATION API ---
-        elif self.path == "/api/agent/create":
+        elif request_path == "/api/agent/create":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_agent_create(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/provider-chat":
+        elif request_path == "/api/provider-chat":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_provider_chat(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/provider-interrupt":
+        elif request_path == "/api/provider-interrupt":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_provider_interrupt(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/provider-test":
+        elif request_path == "/api/provider-test":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            provider_id = str(body.get("providerId") or body.get("providerKind") or "").strip()
-            result = _get_provider_registry().invoke(provider_id, "test")
-            if not isinstance(result, dict):
-                result = {"ok": False, "error": "Provider returned an invalid health response"}
-            self.send_response(200 if result.get("ok") else 502)
+            body = self._read_json_body(length)
+            result = _handle_provider_test(body)
+            status = result.pop("_status", None) or (200 if result.get("ok") else 502)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
             return
+        elif request_path in ("/api/browser/test", "/api/pc-metrics/test"):
+            length = int(self.headers.get('Content-Length', 0))
+            body = self._read_json_body(length)
+            handler = _handle_browser_probe if request_path == "/api/browser/test" else _handle_pc_metrics_probe
+            result = handler(body)
+            return self._send_json(result, result.pop("_status", 200))
         elif request_path.startswith("/api/agent-workspace/"):
             agent_key = urllib.parse.unquote(request_path.split("/api/agent-workspace/", 1)[1].strip("/"))
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_agent_workspace_update(agent_key, body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
         # --- MEETINGS API ---
-        elif self.path == "/api/meetings/create":
+        elif request_path == "/api/meetings/create":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_meeting_create(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/meetings/end":
+        elif request_path == "/api/meetings/end":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_meeting_end(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/meetings/end-all":
+        elif request_path == "/api/meetings/end-all":
             result = _handle_meeting_end_all()
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20454,11 +23787,10 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             agent_key = parts[0]
             skill_path = parts[1].strip("/") if len(parts) > 1 else ""
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_skill_write(agent_key, skill_path, body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20467,7 +23799,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path.startswith("/api/presence/"):
             agent_id = self.path.split("/api/presence/")[1].strip("/")
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             state = body.get("state", "idle")
             task = body.get("task", "")
             if state not in ("idle", "working", "meeting", "break"):
@@ -20478,39 +23810,35 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             gateway_presence.set_manual_override(agent_id, state, task)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True, "agent": agent_id, "state": state}).encode())
             return
-        elif self.path == "/api/provider-runs":
+        elif request_path == "/api/provider-runs":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_provider_run_start(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/hermes/runs":
+        elif request_path == "/api/hermes/runs":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_hermes_run_start(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/hermes/interrupt":
+        elif request_path == "/api/hermes/interrupt":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_hermes_interrupt(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20518,45 +23846,41 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif request_path.startswith("/api/hermes/runs/") and request_path.endswith("/stop"):
             run_id = urllib.parse.unquote(request_path[len("/api/hermes/runs/"):-len("/stop")].strip("/"))
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             body["runId"] = run_id
             result = _handle_hermes_interrupt(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/hermes/chat":
+        elif request_path == "/api/hermes/chat":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_hermes_chat(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/codex/runs":
+        elif request_path == "/api/codex/runs":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_codex_run_start(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/claude-code/runs":
+        elif request_path == "/api/claude-code/runs":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_claude_code_run_start(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20564,12 +23888,11 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif request_path.startswith("/api/codex/runs/") and request_path.endswith("/stop"):
             run_id = urllib.parse.unquote(request_path[len("/api/codex/runs/"):-len("/stop")].strip("/"))
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             body["runId"] = run_id
             result = _handle_codex_interrupt(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -20577,96 +23900,88 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif request_path.startswith("/api/claude-code/runs/") and request_path.endswith("/stop"):
             run_id = urllib.parse.unquote(request_path[len("/api/claude-code/runs/"):-len("/stop")].strip("/"))
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             body["runId"] = run_id
             result = _handle_claude_code_interrupt(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/codex/chat":
+        elif request_path == "/api/codex/chat":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_codex_chat(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/claude-code/chat":
+        elif request_path == "/api/claude-code/chat":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_claude_code_chat(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/codex/interrupt":
+        elif request_path == "/api/codex/interrupt":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_codex_interrupt(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/claude-code/interrupt":
+        elif request_path == "/api/claude-code/interrupt":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_claude_code_interrupt(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/codex/approval/respond":
+        elif request_path == "/api/codex/approval/respond":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_codex_approval_respond(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/hermes/approval/respond":
+        elif request_path == "/api/hermes/approval/respond":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_hermes_approval_respond(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/agent-platform-communications/send":
+        elif request_path == "/api/agent-platform-communications/send":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_agent_platform_comm_send(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
         elif request_path in {"/api/hermes-platform/enqueue", "/api/hermes-platform/ack", "/api/hermes-platform/reply", "/api/hermes-platform/heartbeat"}:
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             auth_error = _hermes_platform_auth_error(self.headers)
             if auth_error:
                 result = auth_error
@@ -20680,24 +23995,22 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 result = _handle_hermes_platform_heartbeat(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/chat-sessions/create":
+        elif request_path == "/api/office/chat-sessions/create":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result, status = handle_chat_session_create(body.get("agentId") or body.get("agent") or body.get("key") or "main", body)
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/chat-sessions/delete":
+        elif request_path == "/api/office/chat-sessions/delete":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result, status = handle_chat_session_delete(body.get("agentId") or body.get("agent") or body.get("key") or "main", body.get("sessionId") or body.get("sessionKey") or "", body)
             if status == 200 and result.get("ok"):
                 agent_ref = _chat_sessions_agent(body.get("agentId") or body.get("agent") or body.get("key") or "main")
@@ -20708,23 +24021,21 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                         _save_provider_history(agent_ref["providerKind"], agent_ref["profile"], [])
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/chat-sessions/switch":
+        elif request_path == "/api/office/chat-sessions/switch":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result, status = handle_chat_session_switch(body.get("agentId") or body.get("agent") or body.get("key") or "main", body.get("sessionId") or body.get("sessionKey") or "", body)
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/hermes/history/clear":
+        elif request_path == "/api/hermes/history/clear":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             agent = _get_hermes_agent(body.get("agentId") or body.get("key") or "hermes-default") or {}
             profile = agent.get("profile") or agent.get("providerAgentId") or "default"
             session_id = _get_hermes_session_id(profile)
@@ -20739,13 +24050,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             _set_hermes_session_id(profile, "")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True, "deletedHermesSession": bool(delete_result.get("deleted")), "sessionId": session_id}).encode())
             return
-        elif self.path == "/api/codex/history/clear":
+        elif request_path == "/api/codex/history/clear":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             agent = _get_codex_agent(body.get("agentId") or body.get("key") or "codex-default") or {}
             profile = agent.get("profile") or agent.get("providerAgentId") or "default"
             session_id = _get_codex_session_id(profile)
@@ -20754,13 +24064,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             _clear_codex_token_usage(profile)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True, "clearedCodexSession": bool(session_id), "sessionId": session_id}).encode())
             return
-        elif self.path == "/api/claude-code/history/clear":
+        elif request_path == "/api/claude-code/history/clear":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             agent = _get_claude_code_agent(body.get("agentId") or body.get("key") or "claude-code-main") or {}
             profile = agent.get("profile") or agent.get("providerAgentId") or "main"
             session_id = _get_claude_code_session_id(profile)
@@ -20769,73 +24078,75 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             _clear_claude_code_token_usage(profile)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True, "clearedClaudeCodeSession": bool(session_id), "sessionId": session_id}).encode())
             return
-        elif self.path == "/api/hermes/test":
+        elif request_path == "/api/hermes/test":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_hermes_test(body)
             self.send_response(200 if result.get("ok") else 503)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/hermes/desktop/discover":
+        elif request_path == "/api/hermes/desktop/discover":
             length = int(self.headers.get('Content-Length', 0))
             if length:
                 self.rfile.read(length)
             result = {
                 "ok": False,
-                "error": "Hermes Desktop/CLI discovery was removed. Add the native Hermes gateway URL and API key under Hermes Connections.",
+                "error": "Hermes Desktop discovery was removed. Open Agent Providers and add Hermes: its Find button "
+                         "looks for Hermes on this computer.",
+                "replacement": "/api/agent-providers/detect",
             }
             self.send_response(410)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/codex/test":
+        elif request_path == "/api/codex/test":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_codex_test(body)
-            self.send_response(200 if result.get("ok") else 503)
+            # (a test answers 200 also when the CLI is not reachable: ok false and the reason are the result)
+            self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/claude-code/test":
+        elif request_path == "/api/claude-code/test":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_claude_code_test(body)
-            self.send_response(200 if result.get("ok") else 503)
+            # (a test answers 200 also when the CLI is not reachable: ok false and the reason are the result)
+            self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/transcribe":
+        elif request_path == "/transcribe":
             # Proxy to host whisper server
-            length = int(self.headers.get('Content-Length', 0))
+            length = self._content_length()
+            if length > 50 * 1024 * 1024:
+                return self._send_json({"error": "Audio is too large"}, 413)
             audio = self.rfile.read(length) if length else b''
             try:
-                _whisper_url = VO_CONFIG["whisper"]["url"].rstrip("/") + "/transcribe"
+                _whisper_base = _safe_helper_url(VO_CONFIG["whisper"]["url"])
+                if not _whisper_base:
+                    return self._send_json({"error": "Speech-to-text URL is not configured"}, 503)
+                _whisper_url = _whisper_base.rstrip("/") + "/transcribe"
                 req = urllib.request.Request(_whisper_url, data=audio,
                     headers={'Content-Type': self.headers.get('Content-Type', 'audio/webm')})
                 with urllib.request.urlopen(req, timeout=60) as resp:
                     result = resp.read()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(result)
             except Exception as e:
                 self.send_response(500)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode())
             return
@@ -20843,7 +24154,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             # Save agent workspace file
             agent_key = self.path.split("/agent-bio-save/")[1]
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             filename = body.get("filename", "")
             content = body.get("content", "")
             # Security: only allow known filenames
@@ -20852,122 +24163,113 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             if not ws_dir or filename not in allowed:
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": f"Invalid agent or filename: {agent_key}/{filename}"}).encode())
                 return
+            _hp_require_full("openclaw", None, "files")
             ws_path = os.path.join(WORKSPACE_BASE, ws_dir)
             fpath = os.path.join(ws_path, filename)
             try:
-                with open(fpath, "w") as f:
-                    f.write(content)
+                if not isinstance(content, str):
+                    raise ValueError("content must be text")
+                _atomic_write_text(fpath, content)
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({"ok": True, "saved": filename}).encode())
             except Exception as e:
                 self.send_response(500)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode())
             return
-        elif self.path == "/set-model":
+        elif request_path == "/set-model":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             agent_key = body.get("agent", "")
             model_id = body.get("model", "")
-            result = self._set_agent_model(agent_key, model_id)
+            result = self._gateway_save(body, lambda: self._set_agent_model(agent_key, model_id))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/native-models/openclaw/agent-model":
+        elif request_path == "/api/native-models/openclaw/agent-model":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            result = self._set_agent_model(body.get("agent", ""), body.get("model", ""))
+            body = self._read_json_body(length)
+            result = self._gateway_save(body, lambda: self._set_agent_model(body.get("agent", ""), body.get("model", "")))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/native-models/openclaw/auth/api-key":
+        elif request_path == "/api/native-models/openclaw/auth/api-key":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            result = _save_openclaw_api_key(
+            body = self._read_json_body(length)
+            result = self._gateway_save(body, lambda: _save_openclaw_api_key(
                 body.get("provider", ""),
                 body.get("apiKey", ""),
                 body.get("profileId") or body.get("profile") or "",
                 body.get("agent") or body.get("agentId") or "main",
                 sync_all=str(body.get("scope") or "global").lower() != "agent",
-            )
+            ))
             self.send_response(200 if result.get("ok") else 400)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/native-models/openclaw/auth/delete":
+        elif request_path == "/api/native-models/openclaw/auth/delete":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            result = _delete_openclaw_auth(
+            body = self._read_json_body(length)
+            result = self._gateway_save(body, lambda: _delete_openclaw_auth(
                 body.get("provider", ""),
                 body.get("profileId") or body.get("profile") or "",
                 body.get("agent") or body.get("agentId") or "main",
                 sync_all=str(body.get("scope") or "global").lower() != "agent",
-            )
+            ))
             self.send_response(200 if result.get("ok") else 400)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/native-models/openclaw/auth/sync-static":
+        elif request_path == "/api/native-models/openclaw/auth/sync-static":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            result = _sync_openclaw_static_auth_from_main(body.get("provider"), body.get("profileId") or body.get("profile"))
+            body = self._read_json_body(length)
+            result = self._gateway_save(body, lambda: _sync_openclaw_static_auth_from_main(body.get("provider"), body.get("profileId") or body.get("profile")))
             self.send_response(200 if result.get("ok") else 400)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/native-models/openclaw/auth/reset-overrides":
+        elif request_path == "/api/native-models/openclaw/auth/reset-overrides":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            result = _reset_openclaw_static_auth_overrides(body.get("agent") or body.get("agentId"), body.get("provider"))
+            body = self._read_json_body(length)
+            result = self._gateway_save(body, lambda: _reset_openclaw_static_auth_overrides(body.get("agent") or body.get("agentId"), body.get("provider")))
             self.send_response(200 if result.get("ok") else 400)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/native-models/openclaw/provider":
+        elif request_path == "/api/native-models/openclaw/provider":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            result = self._save_custom_provider(
+            body = self._read_json_body(length)
+            result = self._gateway_save(body, lambda: self._save_custom_provider(
                 _safe_provider_id(body.get("provider", "")),
                 body.get("baseUrl", ""),
                 _parse_model_entries(body.get("models", "")),
                 api=body.get("api", ""),
                 api_key=body.get("apiKey", ""),
                 timeout_seconds=body.get("timeoutSeconds", None),
-            )
+            ))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/native-models/openclaw/provider/delete":
+        elif request_path == "/api/native-models/openclaw/provider/delete":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            result = self._delete_custom_provider(body.get("provider", ""))
+            body = self._read_json_body(length)
+            result = self._gateway_save(body, lambda: self._delete_custom_provider(body.get("provider", "")))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/native-models/hermes/profile-model":
+        elif request_path == "/api/native-models/hermes/profile-model":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _set_hermes_profile_model(
                 body.get("profile", "default"),
                 body.get("provider", ""),
@@ -20976,30 +24278,27 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             )
             self.send_response(result.get("_status", 405))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/native-models/hermes/auth/api-key":
+        elif request_path == "/api/native-models/hermes/auth/api-key":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _save_hermes_api_key(body.get("provider", ""), body.get("apiKey", ""), body.get("label", ""))
             self.send_response(result.get("_status", 405))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/native-models/hermes/auth/delete":
+        elif request_path == "/api/native-models/hermes/auth/delete":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _delete_hermes_auth(body.get("provider", ""), body.get("target", ""))
             self.send_response(result.get("_status", 405))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/native-models/hermes/provider":
+        elif request_path == "/api/native-models/hermes/provider":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _save_hermes_custom_provider(
                 body.get("profile", "default"),
                 body.get("provider", ""),
@@ -21008,40 +24307,36 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             )
             self.send_response(result.get("_status", 405))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/native-models/hermes/provider/delete":
+        elif request_path == "/api/native-models/hermes/provider/delete":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _delete_hermes_custom_provider(body.get("profile", "default"), body.get("provider", ""))
             self.send_response(result.get("_status", 405))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/config/providers/save-key":
+        elif request_path == "/config/providers/save-key":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            result = self._save_provider_key(body.get("provider", ""), body.get("key", ""))
+            body = self._read_json_body(length)
+            result = self._gateway_save(body, lambda: self._save_provider_key(body.get("provider", ""), body.get("key", "")))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/config/providers/delete-key":
+        elif request_path == "/config/providers/delete-key":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            result = self._delete_provider_key(body.get("provider", ""), body.get("profileId", ""))
+            body = self._read_json_body(length)
+            result = self._gateway_save(body, lambda: self._delete_provider_key(body.get("provider", ""), body.get("profileId", "")))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/config/providers/save-custom":
+        elif request_path == "/config/providers/save-custom":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
-            result = self._save_custom_provider(
+            body = self._read_json_body(length)
+            result = self._gateway_save(body, lambda: self._save_custom_provider(
                 body.get("provider", ""),
                 body.get("baseUrl", ""),
                 body.get("models", []),
@@ -21049,52 +24344,52 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 body.get("api"),
                 body.get("apiKey"),
                 body.get("timeoutSeconds"),
-            )
+            ))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/license/activate":
+        elif request_path == "/api/license/activate":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             key = body.get("key", "")
             result = activate_license(key)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/license/deactivate":
+        elif request_path == "/api/license/deactivate":
             result = deactivate_license()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
             return
-        elif self.path == "/api/gateway/configure":
+        elif request_path == "/api/gateway/configure":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = self._configure_gateway_origin(body.get("origin", ""))
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(result).encode())
-            return
-        elif self.path == "/clear-notify":
+            return self._send_json(result, result.pop("_status", 200))
+        elif request_path == "/api/openclaw/leftovers/cleanup":
+            self._read_json_body()
+            _hp_require_full("openclaw")  # writes openclaw.json
+            try:
+                agent_providers.require_recent(self._vo_access())
+            except agent_providers.ProviderError as exc:
+                raise _RequestError(exc.status, exc.code, exc.message)
+            result = _openclaw_leftovers_cleanup(str(self.headers.get("Host") or "").strip())
+            return self._send_json(result, result.pop("_status", 200))
+        elif request_path == "/clear-notify":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(b'{"ok":true}')
         elif request_path == "/sms-thread-mode":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             phone = self._normalize_sms_phone(body.get("phone", ""))
             mode = body.get("active", "agent")
             if mode not in ("user", "agent"):
@@ -21105,173 +24400,169 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 result = self._set_sms_thread_mode(phone, mode)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
         elif request_path == "/sms-mode":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             mode = body.get("active", "agent")
             if mode not in ("user", "agent"):
                 mode = "agent"
             self._write_global_sms_mode(mode)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({"ok": True, "active": mode}).encode())
         elif request_path == "/sms-send":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = self._send_sms_intervention(body.get("to", ""), body.get("body", ""), body.get("name", ""), body.get("sender", "user"))
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
 
-        elif self.path == "/upload":
+        elif request_path == "/upload":
             # Self-contained file upload — saves to STATUS_DIR/uploads/
             MAX_UPLOAD = 50 * 1024 * 1024  # 50MB
             length = int(self.headers.get('Content-Length', 0))
             if length > MAX_UPLOAD:
                 self.send_response(413)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": "File too large (max 50MB)"}).encode())
                 return
             try:
-                body = json.loads(self.rfile.read(length)) if length else {}
-                filename = os.path.basename(body.get("filename", "upload"))
-                mime_type = str(body.get("mimeType") or body.get("contentType") or mimetypes.guess_type(filename)[0] or "")
-                content = base64.b64decode(body.get("content", ""))
+                body = self._read_json_body(length, max_bytes=MAX_UPLOAD * 4 // 3 + 256 * 1024)
+                original_name = os.path.basename(str(body.get("filename") or "upload").replace("\\", "/"))
+                mime_type = str(body.get("mimeType") or body.get("contentType") or mimetypes.guess_type(original_name)[0] or "")
+                content = base64.b64decode(body.get("content", ""), validate=False)
+                if len(content) > MAX_UPLOAD:
+                    raise ValueError("File too large (max 50MB)")
             except Exception as e:
                 self.send_response(400)
                 self.send_header("Content-Type", "application/json")
-                self.send_header("Access-Control-Allow-Origin", "*")
                 self.end_headers()
                 self.wfile.write(json.dumps({"error": str(e)}).encode())
                 return
             upload_dir = os.path.join(STATUS_DIR, "uploads")
-            os.makedirs(upload_dir, exist_ok=True)
-            dest = os.path.join(upload_dir, filename)
-            if os.path.exists(dest):
-                stem, ext = os.path.splitext(filename)
-                dest = os.path.join(upload_dir, f"{stem}_{int(time.time())}{ext}")
-            with open(dest, "wb") as f:
+            data_owner.makedirs(upload_dir, exist_ok=True)
+            # CH-17: a unique name per upload (several pasted "image.png" in one message
+            # used to overwrite each other); the original name is kept as a suffix.
+            safe_name = re.sub(r"[^A-Za-z0-9._ -]+", "_", original_name).strip(" .") or "upload"
+            stem, ext = os.path.splitext(safe_name)
+            safe_name = (stem[:80] or "upload") + ext[:16]
+            while True:
+                dest = os.path.join(upload_dir, f"{uuid.uuid4().hex[:12]}-{safe_name}")
+                try:
+                    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+                    data_owner.adopt_fd(fd, upload_dir)
+                    break
+                except FileExistsError:
+                    continue
+            with os.fdopen(fd, "wb") as f:
                 f.write(content)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps({
                 "path": dest,
                 "url": "/chat-media?path=" + urllib.parse.quote(dest),
+                "name": original_name,
                 "mimeType": mime_type,
                 "size": len(content)
             }).encode())
             print(f"📎 Upload: {dest} ({len(content):,} bytes)")
 
-        elif self.path == "/api/skills-library":
+        elif request_path == "/api/skills-library":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_skills_library_create(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/skills-library/apply":
+        elif request_path == "/api/skills-library/apply":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_skills_library_apply(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/skills-library/save-from-agent":
+        elif request_path == "/api/skills-library/save-from-agent":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_skills_library_save_from_agent(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/skills-library/upload":
+        elif request_path == "/api/skills-library/upload":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_skills_library_upload(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/skills-workshop/action":
+        elif request_path == "/api/skills-workshop/action":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_skill_workshop_action(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
         # ── PROJECTS POST ────────────────────────────────────────────
-        elif self.path == "/api/projects":
+        elif request_path == "/api/projects":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_project_create(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/projects/scores/award":
+        elif request_path == "/api/projects/scores/award":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_score_award(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/projects/from-template":
+        elif request_path == "/api/projects/from-template":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_project_from_template(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
-        elif self.path == "/api/projects/templates":
+        elif request_path == "/api/projects/templates":
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_save_as_template(body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
         elif self.path.startswith("/api/projects/") and self.path.endswith("/workflow/start"):
             proj_id = self.path.split("/api/projects/")[1].rsplit("/workflow/start", 1)[0]
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_workflow_start(proj_id, body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -21280,7 +24571,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result = _handle_workflow_stop(proj_id)
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(result).encode())
         elif self.path.startswith("/api/projects/") and "/tasks" in self.path and "/comments" in self.path:
@@ -21290,11 +24580,10 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             proj_id = parts[0]
             task_rest = parts[1].split("/comments")[0].strip("/") if len(parts) > 1 else ""
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_task_comment(proj_id, task_rest, body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -21302,11 +24591,10 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             # POST /api/projects/{id}/tasks
             proj_id = self.path.split("/api/projects/")[1].rsplit("/tasks", 1)[0]
             length = int(self.headers.get('Content-Length', 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+            body = self._read_json_body(length)
             result = _handle_task_create(proj_id, body)
             self.send_response(result.get("_status", 200))
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
@@ -21315,45 +24603,77 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
 
     def _configure_gateway_origin(self, origin):
-        """Configure gateway to allow the given origin, and set insecure auth flags for Docker."""
+        """Allow this office's origin in the gateway's controlUi.allowedOrigins (BE-04, CH-10).
+
+        Never replaces a config it cannot read (OpenClaw accepts JSON5 with
+        comments), writes atomically and only when something changes, and only for
+        the origin this request actually came from.
+        """
+        _hp_require_full("openclaw")  # writes openclaw.json
+        origin = str(origin or "").strip().rstrip("/")
         if not origin:
-            return {"ok": False, "error": "No origin provided"}
+            return {"ok": False, "error": "No origin provided", "_status": 400}
         try:
-            try:
-                with open(CONFIG_PATH, "r") as f:
-                    cfg = json.load(f)
-            except (FileNotFoundError, json.JSONDecodeError):
-                cfg = {}
+            parsed = urllib.parse.urlparse(origin)
+        except ValueError:
+            parsed = None
+        if not parsed or parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.path or parsed.query:
+            return {"ok": False, "error": "Origin must look like http://host:port", "_status": 400}
+        host = str(self.headers.get("Host") or "").strip().lower()
+        if host and parsed.netloc.lower() != host:
+            return {"ok": False, "error": "Only the address this page was opened from can be added", "_status": 400}
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except FileNotFoundError:
+            return {"ok": False, "error": "openclaw.json was not found", "_status": 404}
+        except (ValueError, OSError) as exc:
+            return {
+                "ok": False,
+                "error": "openclaw.json is not plain JSON (it may use comments), so it was left untouched. "
+                         f"Add the origin with: openclaw config set gateway.controlUi.allowedOrigins (detail: {str(exc)[:120]})",
+                "_status": 409,
+            }
+        if not isinstance(cfg, dict):
+            return {"ok": False, "error": "openclaw.json is not an object; left untouched", "_status": 409}
+        gateway_cfg = cfg.setdefault("gateway", {})
+        control_ui = gateway_cfg.setdefault("controlUi", {}) if isinstance(gateway_cfg, dict) else None
+        if not isinstance(control_ui, dict):
+            return {"ok": False, "error": "gateway.controlUi has an unexpected shape; left untouched", "_status": 409}
+        origins = control_ui.get("allowedOrigins", [])
+        if not isinstance(origins, list):
+            return {"ok": False, "error": "gateway.controlUi.allowedOrigins is not a list; left untouched", "_status": 409}
+        if origin in origins:
+            return {"ok": True, "added": False, "origins": origins}
+        saved = {}
 
-            gateway_cfg = cfg.setdefault("gateway", {})
-            control_ui = gateway_cfg.setdefault("controlUi", {})
+        def mutate(fresh):  # onto the file as it is now, under its lock
+            gw = fresh.setdefault("gateway", {})
+            ui = gw.setdefault("controlUi", {}) if isinstance(gw, dict) else None
+            current = ui.get("allowedOrigins", []) if isinstance(ui, dict) else None
+            if not isinstance(current, list):
+                return False
+            saved["origins"] = current if origin in current else current + [origin]
+            if origin in current:
+                return False
+            ui["allowedOrigins"] = saved["origins"]
+            return True
 
-            # Get current allowed origins
-            origins = control_ui.get("allowedOrigins", [])
-            if not isinstance(origins, list):
-                origins = []
-
-            added = origin not in origins
-            if added:
-                origins.append(origin)
-            control_ui["allowedOrigins"] = origins
-
-            # Ensure insecure auth flags for Docker
-            control_ui["allowInsecureAuth"] = True
-            control_ui["dangerouslyDisableDeviceAuth"] = True
-
-            with open(CONFIG_PATH, "w") as f:
-                json.dump(cfg, f, indent=2)
-
-            # Signal gateway to reload
-            self._signal_gateway(restart=False)
-
-            return {"ok": True, "added": added, "origins": origins}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+        changed, err = _edit_openclaw_config(mutate, CONFIG_PATH)
+        if err:
+            return {"ok": False, "error": err, "_status": 409 if "left untouched" in err else 500}
+        if not changed:
+            if "origins" not in saved:
+                return {"ok": False, "error": "gateway.controlUi has an unexpected shape; left untouched", "_status": 409}
+            return {"ok": True, "added": False, "origins": saved["origins"]}
+        control_ui["allowedOrigins"] = saved["origins"]
+        self._signal_gateway(restart=False)
+        return {"ok": True, "added": True, "origins": control_ui["allowedOrigins"]}
 
     def _test_gateway_connection(self):
         """Test server-side connectivity to the OpenClaw gateway."""
+        if _pl_owns():
+            return _pl_gateway_test()
         import asyncio as _asyncio
         import concurrent.futures
 
@@ -21370,7 +24690,6 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     ws = await _ws_connect(
                         gw_url,
                         max_size=1024 * 1024,
-                        additional_headers={"Origin": origin},
                         close_timeout=3,
                     )
                     async with ws:
@@ -21387,37 +24706,48 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                             "method": "connect",
                             "params": {
                                 "minProtocol": GATEWAY_PROTOCOL_VERSION, "maxProtocol": GATEWAY_PROTOCOL_VERSION,
-                                "client": {"id": "openclaw-control-ui", "version": _get_openclaw_version(), "platform": "server", "mode": "webchat"},
+                                "client": {"id": "gateway-client", "version": _get_openclaw_version(), "platform": "server", "mode": "backend"},
                                 "role": "operator",
                                 "scopes": ["operator.read"],
                                 "caps": [], "commands": [], "permissions": {},
                                 "auth": {"token": token}
                             }
                         }
-                        await ws.send(json.dumps(connect_msg))
+                        await ws.send(json.dumps(_oc_with_device(connect_msg, gw_url, msg)))
 
-                        raw2 = await _asyncio.wait_for(ws.recv(), timeout=5)
-                        res = json.loads(raw2)
+                        async def _reply(req_id, seconds=5):
+                            # Event frames (tick, presence) may arrive before the reply.
+                            deadline = time.time() + seconds
+                            while time.time() < deadline:
+                                raw_frame = await _asyncio.wait_for(ws.recv(), timeout=max(0.1, deadline - time.time()))
+                                frame = json.loads(raw_frame)
+                                if isinstance(frame, dict) and frame.get("id") == req_id:
+                                    return frame
+                            return {}
+
+                        res = await _reply("gw-test-1")
                         if not res.get("ok"):
-                            err = res.get("error", {}).get("message", "unknown")
+                            err = (res.get("error") or {}).get("message", "unknown")
                             return {"ok": True, "gateway": "reachable", "token": False, "error": err, "agents": 0}
+                        # The token was accepted, but a gateway may grant no scopes (a token-only client from outside
+                        # its computer): say so instead of a bare "0 agents".
+                        granted = ((res.get("payload") or {}).get("auth") or {}).get("scopes")
+                        problem = scope_problem([s for s in ("operator.read",) if isinstance(granted, list)
+                                                 and not {s, "operator.admin"} & set(granted)])
+                        if problem:
+                            return {"ok": True, "gateway": "reachable", "token": True, "permission": False,
+                                    "scopes": granted, "missingScopes": problem["missingScopes"],
+                                    "detail": problem["detail"], "fix": problem["fix"], "agents": 0}
 
-                        # Connected — query sessions
-                        req = {"type": "req", "id": "gw-test-2", "method": "sessions.list", "params": {}}
+                        # Connected: count the authoritative agent roster, not a
+                        # sample of recent sessions.
+                        req = {"type": "req", "id": "gw-test-2", "method": "agents.list", "params": {}}
                         await ws.send(json.dumps(req))
-                        raw3 = await _asyncio.wait_for(ws.recv(), timeout=5)
-                        res3 = json.loads(raw3)
-                        sessions = res3.get("payload", {}).get("sessions", []) if res3.get("ok") else []
-                        agent_ids = {
-                            s.get("key", "").split(":", 2)[1]
-                            for s in sessions
-                            if isinstance(s, dict)
-                            and s.get("key", "").startswith("agent:")
-                            and len(s.get("key", "").split(":", 2)) >= 2
-                        }
-                        agent_count = len(agent_ids)
+                        res3 = await _reply("gw-test-2")
+                        agents = (res3.get("payload") or {}).get("agents", []) if res3.get("ok") else []
+                        agent_count = len(agents) if isinstance(agents, list) else 0
 
-                        return {"ok": True, "gateway": "reachable", "token": True, "agents": agent_count}
+                        return {"ok": True, "gateway": "reachable", "token": True, "permission": True, "agents": agent_count}
 
             except (ConnectionRefusedError, ConnectionResetError, OSError):
                 return {"ok": False, "gateway": "unreachable", "token": False, "agents": 0}
@@ -21510,12 +24840,12 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
 
     def _sms_primary_log_path(self):
         primary_dir = self._sms_primary_data_dir()
-        os.makedirs(primary_dir, exist_ok=True)
+        data_owner.makedirs(primary_dir, exist_ok=True)
         return os.path.join(primary_dir, "sms-log.jsonl")
 
     def _sms_primary_contacts_path(self):
         primary_dir = self._sms_primary_data_dir()
-        os.makedirs(primary_dir, exist_ok=True)
+        data_owner.makedirs(primary_dir, exist_ok=True)
         preferred = "contacts.json" if primary_dir != STATUS_DIR else "sms-contacts.json"
         return os.path.join(primary_dir, preferred)
 
@@ -21534,9 +24864,8 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             return {"active": "agent"}
 
     def _write_global_sms_mode(self, mode):
-        os.makedirs(STATUS_DIR, exist_ok=True)
-        with open(os.path.join(STATUS_DIR, "sms-mode.json"), "w") as f:
-            json.dump({"active": mode}, f)
+        data_owner.makedirs(STATUS_DIR, exist_ok=True)
+        _write_json_atomic(os.path.join(STATUS_DIR, "sms-mode.json"), {"active": mode}, indent=None, backup=False)
 
     def _read_sms_thread_modes(self):
         try:
@@ -21557,12 +24886,18 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         phone = self._normalize_sms_phone(phone)
         if not phone:
             return {"ok": False, "error": "Missing phone"}
-        modes = self._read_sms_thread_modes()
-        modes[phone] = mode if mode in ("agent", "user") else "agent"
-        os.makedirs(STATUS_DIR, exist_ok=True)
-        with open(self._sms_thread_modes_path(), "w") as f:
-            json.dump(modes, f, indent=2, sort_keys=True)
-        return {"ok": True, "phone": phone, "active": modes[phone]}
+        path = self._sms_thread_modes_path()
+        active = mode if mode in ("agent", "user") else "agent"
+        data_owner.makedirs(STATUS_DIR, exist_ok=True)
+        # One writer at a time; an unreadable file is never replaced (v0.10.1 saves, M1).
+        with _json_file_lock(path):
+            try:
+                modes = _read_json_state(path, default={})
+            except JsonStateError as exc:
+                return {"ok": False, "error": f"{exc}; nothing was changed", "_status": 503}
+            modes[phone] = active
+            _write_json_atomic(path, dict(sorted(modes.items())), backup=False)
+        return {"ok": True, "phone": phone, "active": active}
 
     def _sms_mode_for_phone(self, phone):
         phone = self._normalize_sms_phone(phone)
@@ -21621,7 +24956,16 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             url = str(url or "").strip()
             if not url:
                 return
-            item = {"url": url, "contentType": str(content_type or "").strip(), "filename": str(filename or "").strip()}
+            # CH-06: only web links (or our own proxy) reach the SMS panel; no javascript:/data: URLs.
+            try:
+                scheme = urllib.parse.urlparse(url).scheme.lower()
+            except ValueError:
+                return
+            if scheme not in {"http", "https"} and not url.startswith("/sms-media?"):
+                return
+            content_type = re.sub(r"[^A-Za-z0-9.+/;= -]", "", str(content_type or "").strip())[:100]
+            filename = re.sub(r"[<>\"'`\x00-\x1f]", "", str(filename or "").strip())[:200]
+            item = {"url": url, "contentType": content_type, "filename": filename}
             item["proxyUrl"] = self._sms_media_proxy_url(item["url"], item["contentType"])
             media.append(item)
         raw_media = entry.get("media") or entry.get("mediaUrls") or entry.get("attachments")
@@ -21762,21 +25106,21 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         url = (query_params.get("url", [""])[0] or "").strip()
         requested_type = (query_params.get("contentType", [""])[0] or "").strip()
         if not self._is_twilio_media_url(url):
-            self.send_response(400); self.send_header("Content-Type", "text/plain"); self.send_header("Access-Control-Allow-Origin", "*"); self.end_headers(); self.wfile.write(b"Invalid SMS media URL"); return
+            self.send_response(400); self.send_header("Content-Type", "text/plain"); self.end_headers(); self.wfile.write(b"Invalid SMS media URL"); return
         sms_cfg = VO_CONFIG.get("sms", {})
         account_sid = sms_cfg.get("twilioAccountSid")
         auth_token = sms_cfg.get("twilioAuthToken")
         if not account_sid or not auth_token:
-            self.send_response(503); self.send_header("Content-Type", "text/plain"); self.send_header("Access-Control-Allow-Origin", "*"); self.end_headers(); self.wfile.write(b"SMS media proxy is not configured"); return
+            self.send_response(503); self.send_header("Content-Type", "text/plain"); self.end_headers(); self.wfile.write(b"SMS media proxy is not configured"); return
         try:
             credentials = base64.b64encode(f"{account_sid}:{auth_token}".encode()).decode()
             req = urllib.request.Request(url)
             req.add_header("Authorization", f"Basic {credentials}")
             with urllib.request.urlopen(req, timeout=20) as resp:
                 payload = resp.read(); content_type = resp.headers.get("Content-Type") or requested_type or "application/octet-stream"
-            self.send_response(200); self.send_header("Content-Type", content_type); self.send_header("Cache-Control", "private, max-age=3600"); self.send_header("Access-Control-Allow-Origin", "*"); self.end_headers(); self.wfile.write(payload)
+            self.send_response(200); self.send_header("Content-Type", content_type); self.send_header("Cache-Control", "private, max-age=3600"); self.end_headers(); self.wfile.write(payload)
         except Exception as e:
-            self.send_response(502); self.send_header("Content-Type", "text/plain"); self.send_header("Access-Control-Allow-Origin", "*"); self.end_headers(); self.wfile.write(f"Could not fetch SMS media: {e}".encode())
+            self.send_response(502); self.send_header("Content-Type", "text/plain"); self.end_headers(); self.wfile.write(f"Could not fetch SMS media: {e}".encode())
 
     def _load_sms_contacts_map(self):
         contacts = {}
@@ -21968,7 +25312,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             req = urllib.request.Request(url, data=data, method="POST")
             req.add_header("Authorization", f"Basic {credentials}")
             req.add_header("Content-Type", "application/x-www-form-urlencoded")
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=20) as resp:
                 result = json.loads(resp.read().decode())
 
             entry = {
@@ -21980,7 +25324,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
-            with open(sms_log_path, "a") as f:
+            with data_owner.open_new(sms_log_path, "a") as f:
                 f.write(json.dumps(entry) + "\n")
 
             try:
@@ -22000,8 +25344,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             elif name and contacts[to].get("name") in (None, "", "Unknown"):
                 contacts[to]["name"] = name
 
-            with open(contacts_path, "w") as f:
-                json.dump(contacts, f, indent=2)
+            _atomic_write_text(contacts_path, json.dumps(contacts, indent=2))
 
             return {
                 "ok": True,
@@ -22031,7 +25374,7 @@ async def try_connect_gateway():
     for url in [GATEWAY_URL, GATEWAY_URL_FALLBACK]:
         try:
             gw = await asyncio.wait_for(
-                ws_connect(url, max_size=10 * 1024 * 1024, additional_headers={"Origin": f"http://127.0.0.1:{PORT}"}),
+                ws_connect(url, max_size=10 * 1024 * 1024),
                 timeout=3
             )
             if not _ws_proxy_connected_logged:
@@ -22047,9 +25390,34 @@ async def try_connect_gateway():
     return None
 
 
+def _ws_proxy_request_allowed(client_ws):
+    """Raw gateway tunnel (direct transport only, DL-05): same-host pages only,
+    and a signed-in session when the office has a passcode."""
+    request = getattr(client_ws, "request", None)
+    headers = getattr(request, "headers", None) or getattr(client_ws, "request_headers", None) or {}
+    origin = str(headers.get("Origin") or "").strip()
+    host = vo_access.split_host(headers.get("Host") or "")
+    if not origin:
+        return False
+    try:
+        origin_host = vo_access.split_host(urllib.parse.urlparse(origin).netloc)
+    except ValueError:
+        return False
+    if not origin_host or origin_host != host:
+        return False
+    if not vo_access.host_allowed(headers.get("Host"), _ALLOWED_HOSTS, protected=ACCESS_STORE.protected):
+        return False
+    remote = getattr(client_ws, "remote_address", None) or ("",)
+    access = vo_access.evaluate(ACCESS_STORE, str(remote[0] if remote else ""), headers)
+    return access.authenticated
+
+
 async def ws_proxy(client_ws):
     """Proxy a browser WebSocket connection to the OpenClaw gateway."""
     global _ws_proxy_connected_logged, _ws_proxy_failed_logged
+    if not _ws_proxy_request_allowed(client_ws):
+        await client_ws.close(1008, "Not allowed")
+        return
     gw = await try_connect_gateway()
     if not gw:
         await client_ws.close(1011, "Cannot reach gateway")
@@ -22104,7 +25472,163 @@ def start_ws_server():
     asyncio.run(run_ws_server())
 
 
+_HTTP_SERVER = None
+PROVIDER_LAYER = None  # the OpenClaw and Hermes layer's process and proxy (on unless VO_PROVIDER_LAYER=0)
+
+
+
+def _pl_agent_chat_answer(handler, path, query):
+    """0.10's /api/agent-chat/* for the layer's agents (_pl_layer_chat): only ``/can`` stays (the office's menus ask it
+    for a chat-only connection), answered from the layer's agent map; everything else moved to /api/providers/*.
+    Other agents (Hermes API-server connections, VO's other providers) never get here: 0.10's routes answer them."""
+    agent = str(((query or {}).get("agent") or [""])[0] or "")
+    if path == "/api/agent-chat/can":
+        ids = provider_layer_ids.ids()
+        row = next((r for r in (ids.all() if ids is not None else []) if r.get("officeId") == agent), None)
+        if row is None:
+            # (an OpenClaw or `hermes serve` agent its connection has not listed: offline or not there yet. A clear
+            # "no" in a 200, as 0.10's own manifest says it, never a console 404 on every page load)
+            return handler._send_json({"ok": False, "reason": "offline", "agent": agent,
+                                       "message": "Its connection has not listed this agent: it may be offline.",
+                                       "fix": "Open Agent Providers to see the connection."}, 200)
+        return handler._send_json({
+            "ok": True, "kind": row.get("kind") or "", "access": row.get("access") or "full", "manage": True,
+            "layer": True, "layerAgentId": row.get("layerId"), "caps": {"models": True, "layer": True},
+            "connection": {"id": f"pl-{row.get('connectionId')}", "label": row.get("connection") or ""},
+        })
+    return handler._send_json({"ok": False, "code": "moved", "error": (
+        "OpenClaw and Hermes chats moved to /api/providers/* (the office's provider layer); "
+        "VO_PROVIDER_LAYER=0 keeps the old routes for one release.")}, 410)
+
+
+def _pl_openclaw_rpc(handler, body):
+    """cron.html's gateway call while the layer runs OpenClaw: the layer's /api/agent-providers/call on the first
+    OpenClaw connection (its menu decides what may be called; changes need Full access and a recent passcode)."""
+    layer = PROVIDER_LAYER
+    if layer is None or not layer.ready():
+        return {"ok": False, "error": {"code": "unavailable", "message": layer.message if layer else "off"}}, 503
+    access = handler._vo_access()
+    principal = layer.principal(access, ACCESS_STORE, {})
+    status, out = layer.call(layer.office_principal(), "GET", "/api/connections")
+    conn = next((c for c in (out.get("connections") or []) if c.get("kind") == "openclaw" and c.get("enabled")), None) \
+        if status == 200 and isinstance(out, dict) else None
+    if conn is None:
+        return {"ok": False, "error": {"code": "not_configured", "message": "No OpenClaw connection in Agent Providers"}}, 409
+    status, out = layer.call(principal, "POST", "/api/agent-providers/call",
+                             {"id": conn["id"], "method": str(body.get("method") or ""), "params": body.get("params") or {}})
+    if status != 200:
+        err = out if isinstance(out, dict) else {}
+        return {"ok": False, "error": {"code": err.get("code") or "gateway_error",
+                                       "message": err.get("error") or err.get("message") or f"HTTP {status}"}}, status
+    return {"ok": True, "payload": out}, 200
+
+
+_PL_CRON_NAMES = {}                  # layer connection id -> (read at, {job id: name})
+_PL_CRON_NAMES_LOCK = threading.Lock()
+_PL_CRON_NAMES_TTL_S = 30
+
+
+def _pl_cron_job_name(plcid, job_id):
+    """The name of OpenClaw cron job ``job_id`` on the layer's connection ``plcid`` ("pl-<id>"), for Office Life's
+    alarm clock: the layer's activity names a job by its id only. Its cron.list (the call the cron page makes), read at
+    most every 30 s for a job not known yet; '' when the job, the connection or the layer is not there."""
+    layer, job_id = PROVIDER_LAYER, str(job_id or "").strip()
+    cid = str(plcid or "").strip()
+    cid = cid[3:] if cid.startswith("pl-") else cid
+    if not job_id or not cid or layer is None or not layer.ready():
+        return ""
+    with _PL_CRON_NAMES_LOCK:
+        read_at, names = _PL_CRON_NAMES.get(cid, (0.0, {}))
+    if job_id in names or time.time() - read_at < _PL_CRON_NAMES_TTL_S:
+        return names.get(job_id, "")
+    try:
+        status, out = layer.call(layer.office_principal(), "POST", "/api/agent-providers/call",
+                                 {"id": int(cid) if cid.isdigit() else cid, "method": "cron.list",
+                                  "params": {"includeDisabled": True}}, timeout=4.0)
+    except Exception:
+        status, out = 0, None
+    jobs = out.get("jobs") if status == 200 and isinstance(out, dict) and isinstance(out.get("jobs"), list) else []
+    names = {}
+    for job in jobs:
+        if isinstance(job, dict) and job.get("id"):
+            names[str(job["id"])] = clean_display_text(job.get("displayName") or job.get("name") or "", 60)
+    with _PL_CRON_NAMES_LOCK:
+        _PL_CRON_NAMES[cid] = (time.time(), names)
+    return names.get(job_id, "")
+
+
+def _pl_roster_changed():
+    """The layer's agents (or their connections) changed: the next roster read discovers again."""
+    global _discovered_at
+    _discovered_at = 0
+
+
+# ── The office's own providers in the copied chat window (unify, app/office_chat_bridge.py) ─────────────────────────
+# vo-host (kind `office`) calls /api/office-bridge/* here: loopback only, with the layer's signed principal. Answered
+# only while the layer runs (_provider_layer_route); with VO_PROVIDER_LAYER=0 those paths stay unknown, as before.
+import office_chat_bridge  # noqa: E402
+
+os.environ.setdefault("VO_PL_OFFICE_URL", f"http://127.0.0.1:{PORT}")   # (handed to vo-host by provider_layer_proxy)
+OFFICE_BRIDGE = office_chat_bridge.Bridge(office_chat_bridge.ServerOps(globals(), layer=lambda: PROVIDER_LAYER),
+                                          secret=lambda: getattr(PROVIDER_LAYER, "secret", None))
+
+
+def _provider_layer_start():
+    """Starts the copied OpenClaw and Hermes layer unless VO_PROVIDER_LAYER=0 (other providers never depend on it)."""
+    global PROVIDER_LAYER
+    if not provider_layer_proxy.enabled():
+        return None
+    layer = provider_layer_proxy.ProviderLayer(os.path.join(STATUS_DIR, "provider-layer"), log=print)
+    PROVIDER_LAYER = layer
+    # (0.10's saved OpenClaw gateway, once, for vo-migrate.mjs; office ids of the layer's agents: provider_layer_ids)
+    try:
+        provider_layer_ids.handoff(layer.data_dir, *_read_gateway_config())
+    except Exception as exc:
+        print(f"[pl] no OpenClaw gateway handed to the migration: {exc}")
+    provider_layer_ids.attach(layer, on_change=_pl_roster_changed)
+    provider_layer_life.attach(layer, status_key=_hp_status_key)   # (Office Life + presence from the layer's bus)
+    try:
+        layer.start()
+    except Exception as exc:
+        layer.message = f"The OpenClaw and Hermes layer could not start: {exc}"
+        print(f"[pl] {layer.message}")
+    return layer
+
+
+def _install_shutdown_handlers(server):
+    """Stop cleanly on SIGTERM/SIGINT (BE-21): docker stop no longer waits 10 s and kills."""
+    def _handle(signum, _frame):
+        print(f"Received signal {signum}, shutting down...")
+        try:
+            gateway_presence.save_snapshot(os.path.join(STATUS_DIR, "presence-snapshot.json"))
+        except Exception:
+            pass
+        threading.Thread(target=server.shutdown, name="http-shutdown", daemon=True).start()
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            signal.signal(sig, _handle)
+        except (ValueError, OSError):
+            pass  # not the main thread (tests)
+
+
 def start_http_server():
+    global _HTTP_SERVER
+    # Bind first so the office answers while providers are still being discovered (BE-08).
+    server = VirtualOfficeThreadingHTTPServer(("0.0.0.0", PORT), OfficeHandler)
+    _HTTP_SERVER = server
+    _install_shutdown_handlers(server)
+    _provider_layer_start()
+
+    # Warm the provider health cache at once so the provider pages and the
+    # new-agent dialog do not wait for the first probes (BE-24, CH-35).
+    def _warm_provider_health():
+        try:
+            _registry_health_manifests(_get_provider_registry())
+        except Exception:
+            traceback.print_exc()
+    threading.Thread(target=_warm_provider_health, name="provider-health-warm", daemon=True).start()
+
     # Initialize gateway presence with discovered agents
     agent_ids = [a["statusKey"] for a in get_roster()]
     gateway_presence.init_agents(agent_ids)
@@ -22130,12 +25654,24 @@ def start_http_server():
     # Read gateway token (vo-config override, then openclaw.json)
     gw_token = _get_gateway_token()
 
+    # Settings an older office (v0.7.4) put in openclaw.json: tell, never edit on its own.
+    try:
+        _leftovers = _openclaw_leftovers_status()
+        if _leftovers["found"]:
+            print("⚠️  openclaw.json still has settings an older Virtual Office (v0.7.4) added: "
+                  + ", ".join(_leftovers["keys"] + _leftovers["origins"])
+                  + ". Current OpenClaw rejects allowInsecureAuth (config reload skipped (invalid config)) and this"
+                  " office does not need them. Clean them up from the notice on the office page"
+                  + ("" if _pl_owns() else " or in Agent Providers > OpenClaw")   # (the copied window has no such card)
+                  + ", or run: " + openclaw_leftovers.DOCTOR_COMMAND)
+    except Exception as exc:
+        print(f"[openclaw] leftover check skipped: {exc}")
+
     # Start gateway presence listener
-    gw_url = VO_CONFIG["openclaw"]["gatewayUrl"]
-    if gw_token:
-        gateway_presence.start(gw_url, gw_token, port=PORT, client_version=_get_openclaw_version())
-    else:
-        print("⚠️  No gateway token found — gateway presence disabled")
+    _start_presence_listeners(VO_CONFIG["openclaw"]["gatewayUrl"], gw_token)
+
+    # Office life: the office reacts to real provider signals (zero model inference).
+    _life_start()
 
     # Start periodic snapshot saver (every 30s)
     def snapshot_loop():
@@ -22146,12 +25682,21 @@ def start_http_server():
     snap_thread.start()
 
     _oname = VO_CONFIG["office"]["name"]
-    print(f"🏢 {_oname} → http://localhost:{PORT}")
-    server = VirtualOfficeThreadingHTTPServer(("0.0.0.0", PORT), OfficeHandler)
+    print(f"🏢 {_oname} v{VO_VERSION} → http://localhost:{PORT}")
+    if ACCESS_STORE.protected:
+        print("🔒 Office passcode is on (this machine and agent API tokens skip it)")
     try:
         server.serve_forever()
     finally:
+        try:
+            gateway_presence.save_snapshot(snapshot_path)
+        except Exception:
+            pass
+        office_life.shutdown()
         _shutdown_openclaw_gateway_client()
+        if PROVIDER_LAYER is not None:
+            PROVIDER_LAYER.stop()
+        server.server_close()
 
 
 def _wf_auto_resume_on_startup():
@@ -22213,13 +25758,31 @@ def _wf_auto_resume_on_startup():
 
 
 if __name__ == "__main__":
+    # Line-buffered output so print() diagnostics reach `docker logs` (BE-26).
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+    sys.stdout, sys.stderr = _RedactingStream(sys.stdout), _RedactingStream(sys.stderr)
+
+    # As root in a data folder someone else owns (Docker with a bind mount): folders and files an earlier start made
+    # as root go back to that owner; new ones keep it as they are made (app/data_owner.py).
+    data_owner.give_back_data(STATUS_DIR)
+
+    _hp_boot_migration()
+
     # Start API usage collector background thread
     _api_usage_collector.start()
     print("📊 API usage collector started (polls every 60s)")
 
-    # Start WS proxy in a background thread
-    ws_thread = threading.Thread(target=start_ws_server, daemon=True)
-    ws_thread.start()
+    # The raw gateway WebSocket tunnel is only needed by the legacy direct
+    # transport; proxy mode (default) never opens it (DL-05).
+    if OPENCLAW_BROWSER_TRANSPORT == "direct":
+        ws_thread = threading.Thread(target=start_ws_server, daemon=True, name="ws-proxy")
+        ws_thread.start()
+    else:
+        print(f"🔌 Gateway WebSocket tunnel :{WS_PORT} is off (proxy transport)")
 
     # Auto-resume interrupted workflows (in background, after server starts)
     resume_thread = threading.Thread(target=_wf_auto_resume_on_startup, daemon=True, name="wf-auto-resume")
@@ -22227,3 +25790,7 @@ if __name__ == "__main__":
 
     # Start HTTP server in main thread
     start_http_server()
+    # Background pools may still be waiting on slow provider CLIs; do not let them hold the exit.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)

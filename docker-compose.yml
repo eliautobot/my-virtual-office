@@ -2,13 +2,35 @@ services:
   virtual-office:
     image: ${VO_IMAGE:-ghcr.io/eliautobot/my-virtual-office:latest}
     container_name: virtual-office
+    # Small init process: forwards stop signals and reaps agent CLI child processes.
+    init: true
+    # Optional: run as your host user so files written into ~/.openclaw, ~/.codex and
+    # ~/.hermes stay yours (set PUID/PGID in .env, e.g. from `id -u` / `id -g`).
+    # Since v0.10 the office no longer opens /data to everyone (no chmod 777) and keeps
+    # its secret files private (0600, or 0640 for a file its group could read) without
+    # changing their owner. With `user:` the data volume must belong to that user; give
+    # an existing one to it once, with the office stopped and your PUID:PGID
+    # (`docker volume ls | grep vo-data` shows the volume name):
+    #   docker run --rm -v <project>_vo-data:/data alpine chown -R 1000:1000 /data
+    # Without `user:` the office runs as root, as before. See docs/UPDATING.md.
+    # user: "${PUID:-1000}:${PGID:-1000}"
+    # OpenClaw (v0.11): on this bridge network the office reaches the gateway at
+    # ws://host.docker.internal:18789 and pairs as a device: after the first start, open
+    # More tools > Providers > OpenClaw and run the `openclaw devices approve <id>` it shows
+    # on the OpenClaw computer, once. The gateway must listen beyond 127.0.0.1 for that
+    # (OpenClaw's gateway.bind = lan). Alternative on Linux: host networking, no pairing:
+    #   network_mode: host   (and remove the ports:, networks: and extra_hosts: lines;
+    #                         set VO_GATEWAY_URL=ws://127.0.0.1:18789 in .env)
     ports:
       - "${VO_PORT:-8090}:${VO_PORT:-8090}"
+      # Old raw gateway tunnel: nothing listens unless VO_OPENCLAW_BROWSER_TRANSPORT=direct.
       - "${VO_WS_PORT:-8091}:${VO_WS_PORT:-8091}"
     extra_hosts:
       - "host.docker.internal:host-gateway"  # Makes host.docker.internal work on Linux too
     volumes:
-      # Mount OpenClaw home directory (read-write for model/key management)
+      # OpenClaw home: the Skills library, the gateway token on the first start, and the
+      # optional clean-up of settings 0.7.x wrote into openclaw.json (only after you confirm).
+      # Agents, models and settings come from the gateway itself since v0.11.
       - ${VO_OPENCLAW_PATH:-~/.openclaw}:/openclaw
       # Persistent office data (layout, presence snapshots, config)
       - vo-data:/data
@@ -22,12 +44,29 @@ services:
       # unavailable or your Gateway uses a nonstandard workspace root.
       - VO_OPENCLAW_GATEWAY_PATH=${VO_OPENCLAW_GATEWAY_PATH:-}
       - VO_STATUS_DIR=/data
+      # v0.11: OpenClaw and Hermes run on the integration copied from My Virtual World (Node is
+      # in the image). 0 keeps 0.10's Python path for this release (legacy).
+      - VO_PROVIDER_LAYER=${VO_PROVIDER_LAYER:-1}
       - VO_GATEWAY_URL=${VO_GATEWAY_URL:-ws://host.docker.internal:18789}
       - VO_GATEWAY_HTTP=${VO_GATEWAY_HTTP:-http://host.docker.internal:18789}
       - VO_PORT=${VO_PORT:-8090}
       - VO_WS_PORT=${VO_WS_PORT:-8091}
       - VO_OFFICE_NAME=${VO_OFFICE_NAME:-Virtual Office}
+      # Access: optional passcode is set in Settings > Security. Extra host names the
+      # office answers to (for a reverse proxy domain), comma separated.
+      - VO_ALLOWED_HOSTS=${VO_ALLOWED_HOSTS:-}
+      # Optional fixed token for agents calling the API from another machine.
+      - VO_AGENT_API_TOKEN=${VO_AGENT_API_TOKEN:-}
+      # Linux bridge network only: the host's own requests come from the bridge
+      # gateway (often 172.17.0.1); list it so local agents skip the passcode.
+      - VO_TRUSTED_CLIENT_IPS=${VO_TRUSTED_CLIENT_IPS:-}
       - VO_WEATHER_LOCATION=${VO_WEATHER_LOCATION:-}
+      # Agent PC indexes provider-owned files without copying workspaces.
+      # External local folders must also be bind-mounted by a Compose override;
+      # remote provider computers use the authenticated Agent Files Connector.
+      - VO_AGENT_PC_RECENT_LIMIT=${VO_AGENT_PC_RECENT_LIMIT:-100}
+      - VO_AGENT_PC_PATH_MAPPINGS_JSON=${VO_AGENT_PC_PATH_MAPPINGS_JSON:-[]}
+      - VO_AGENT_PC_ALLOW_INSECURE_CONNECTORS=${VO_AGENT_PC_ALLOW_INSECURE_CONNECTORS:-false}
       # Hermes runs outside this container. Add one authenticated native API
       # connection per Hermes profile, or configure connections in Settings.
       - VO_HERMES_ENABLED=${VO_HERMES_ENABLED:-true}
@@ -83,6 +122,11 @@ services:
       - VO_ANTIGRAVITY_WORKSPACE_ROOT=${VO_ANTIGRAVITY_WORKSPACE_ROOT:-/data/antigravity-agents}
       - VO_ANTIGRAVITY_PRINT_TIMEOUT=${VO_ANTIGRAVITY_PRINT_TIMEOUT:-5m}
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - default
       - hermes-internal

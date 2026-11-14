@@ -1,0 +1,215 @@
+#!/usr/bin/env python3
+"""Fake Claude Code CLI for office tests (never a real account, never a model).
+
+Emulates what app/providers/claude_code.py runs and parses:
+  claude -p --output-format stream-json --verbose --include-partial-messages [--resume <id>] [--agent A] [--model M]
+         [--permission-mode M | --dangerously-skip-permissions] <prompt>
+      stream-json lines: system/init (session_id, model), stream_event (message_start, content_block_start/delta/stop
+      for thinking, tool_use with input_json_delta, text_delta; message_delta, message_stop), assistant and user
+      messages (tool_use / tool_result blocks), result (success | is_error); the session is written as
+      $CLAUDE_CONFIG_DIR/projects/<cwd with / and . as ->/<session>.jsonl like the real CLI (the office lists chats and
+      reads history from there). --resume keeps the session id; an unknown id fails like the real CLI.
+  claude auth status --json   {"loggedIn": true, ...}
+  claude --version
+Scripted by directives in the message, see fake_cli_lib.py ([[tool]], [[slow]], [[error]]). Stop = SIGTERM of the group.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import os
+import re
+import sys
+import time
+import uuid
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import fake_cli_lib as L  # noqa: E402
+
+LABEL = "Fake Claude"
+MODEL = os.environ.get("FAKE_CLAUDE_MODEL") or "fake-claude-1"
+HOME = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+STATE = L.State(os.path.join(HOME, "fake-claude"))
+VALUE_FLAGS = {"--output-format", "--resume", "-r", "--agent", "--model", "--permission-mode", "--input-format",
+               "--session-id", "--append-system-prompt", "--max-turns"}
+
+
+def iso() -> str:
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def project_dir(cwd: str) -> str:
+    return os.path.join(HOME, "projects", re.sub(r"[^A-Za-z0-9-]", "-", os.path.realpath(cwd)))
+
+
+def find_session(sid: str) -> str:
+    root = os.path.join(HOME, "projects")
+    if os.path.isdir(root):
+        for d in os.listdir(root):
+            p = os.path.join(root, d, f"{sid}.jsonl")
+            if os.path.isfile(p):
+                return p
+    return ""
+
+
+def user_turns(path: str) -> int:
+    n = 0
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                msg = row.get("message") if isinstance(row.get("message"), dict) else {}
+                if row.get("type") == "user" and isinstance(msg.get("content"), str):
+                    n += 1
+    except OSError:
+        pass
+    return n
+
+
+class Session:
+    def __init__(self, path: str, sid: str, cwd: str) -> None:
+        self.path, self.sid, self.cwd = path, sid, cwd
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        self.parent = None
+
+    def write(self, kind: str, message: dict, **extra) -> None:
+        uid = str(uuid.uuid4())
+        row = {"parentUuid": self.parent, "isSidechain": False, "userType": "external", "cwd": self.cwd,
+               "sessionId": self.sid, "version": "0.0.0-fake", "type": kind, "message": message, "uuid": uid,
+               "timestamp": iso(), **extra}
+        self.parent = uid
+        with open(self.path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+
+
+def out(obj: dict, sid: str) -> None:
+    L.emit({**obj, "session_id": sid, "uuid": str(uuid.uuid4())})
+
+
+def ev(event: dict, sid: str) -> None:
+    out({"type": "stream_event", "event": event, "parent_tool_use_id": None}, sid)
+
+
+def assistant_msg(mid: str, content: list, stop=None) -> dict:
+    return {"model": MODEL, "id": mid, "type": "message", "role": "assistant", "content": content,
+            "stop_reason": stop, "stop_sequence": None,
+            "usage": {"input_tokens": 100, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 20}}
+
+
+def print_mode(args: list[str]) -> int:
+    opts, pos = {}, []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in VALUE_FLAGS and i + 1 < len(args):
+            opts[a] = args[i + 1]
+            i += 2
+            continue
+        if a.startswith("--") and "=" in a:
+            k, v = a.split("=", 1)
+            opts[k] = v
+        elif a.startswith("-") and a not in ("-",):
+            opts[a] = True
+        else:
+            pos.append(a)
+        i += 1
+    prompt = pos[-1] if pos else sys.stdin.read()
+    cwd = os.getcwd()
+    resume = str(opts.get("--resume") or opts.get("-r") or "")
+    if resume:
+        path = find_session(resume)
+        if not path:
+            print(f"No conversation found with session ID: {resume}", file=sys.stderr)
+            return 1
+        sid = resume
+    else:
+        n_id = int(STATE.next_id("s", 1)[1:])
+        sid = f"00000000-0000-4000-8000-{n_id:012d}"
+        path = os.path.join(project_dir(cwd), f"{sid}.jsonl")
+    sess = Session(path, sid, cwd)
+    n = user_turns(path) + 1
+    d = L.directives(prompt)
+    delay = L.step_delay()
+    sess.write("user", {"role": "user", "content": prompt})
+    out({"type": "system", "subtype": "init", "cwd": cwd, "tools": ["Bash", "Read", "Edit"], "mcp_servers": [],
+         "model": MODEL, "permissionMode": opts.get("--permission-mode") or "default", "slash_commands": [],
+         "apiKeySource": "none", "claude_code_version": "0.0.0-fake", "output_style": "default",
+         "agents": [opts["--agent"]] if opts.get("--agent") else []}, sid)
+    if "error" in d:
+        out({"type": "result", "subtype": "success", "is_error": True, "duration_ms": 5, "duration_api_ms": 0,
+             "num_turns": 1, "result": "API Error: fake failure", "total_cost_usd": 0, "usage": {}}, sid)
+        return 1
+    # thinking block
+    mid = f"msg_fake_{n:03d}a"
+    ev({"type": "message_start", "message": assistant_msg(mid, [])}, sid)
+    think = L.thinking(prompt)
+    ev({"type": "content_block_start", "index": 0, "content_block": {"type": "thinking", "thinking": "", "signature": ""}}, sid)
+    for chunk in L.words(think):
+        ev({"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": chunk}}, sid)
+        time.sleep(delay / 3)
+    ev({"type": "content_block_stop", "index": 0}, sid)
+    blocks = [{"type": "thinking", "thinking": think, "signature": "fake"}]
+    out({"type": "assistant", "message": assistant_msg(mid, blocks[:]), "parent_tool_use_id": None}, sid)
+    if "tool" in d:
+        tid = f"toolu_fake_{n:03d}"
+        tool_input = {"command": L.TOOL_COMMAND, "description": "Print a test line"}
+        ev({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": tid, "name": "Bash", "input": {}}}, sid)
+        raw = json.dumps(tool_input)
+        for k in range(0, len(raw), 16):
+            ev({"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": raw[k:k + 16]}}, sid)
+        ev({"type": "content_block_stop", "index": 1}, sid)
+        use = {"type": "tool_use", "id": tid, "name": "Bash", "input": tool_input}
+        out({"type": "assistant", "message": assistant_msg(mid, [use]), "parent_tool_use_id": None}, sid)
+        ev({"type": "message_delta", "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"input_tokens": 100, "output_tokens": 30}}, sid)
+        ev({"type": "message_stop"}, sid)
+        sess.write("assistant", {"role": "assistant", "model": MODEL, "id": mid, "content": blocks + [use]})
+        time.sleep(delay * 2)
+        result_block = {"tool_use_id": tid, "type": "tool_result", "content": L.TOOL_OUTPUT.strip(), "is_error": False}
+        out({"type": "user", "message": {"role": "user", "content": [result_block]}, "parent_tool_use_id": None,
+             "tool_use_result": {"stdout": L.TOOL_OUTPUT.strip(), "stderr": "", "interrupted": False, "isImage": False}}, sid)
+        sess.write("user", {"role": "user", "content": [result_block]})
+        mid = f"msg_fake_{n:03d}b"
+        ev({"type": "message_start", "message": assistant_msg(mid, [])}, sid)
+        idx = 0
+    else:
+        idx = 1
+    reply = L.slow_text(LABEL, n, prompt) if "slow" in d else L.answer(LABEL, n, prompt)
+    step = L.slow_plan()[1] if "slow" in d else delay / 2
+    ev({"type": "content_block_start", "index": idx, "content_block": {"type": "text", "text": ""}}, sid)
+    for chunk in L.words(reply):
+        ev({"type": "content_block_delta", "index": idx, "delta": {"type": "text_delta", "text": chunk}}, sid)
+        time.sleep(step)
+    ev({"type": "content_block_stop", "index": idx}, sid)
+    text_block = {"type": "text", "text": reply}
+    out({"type": "assistant", "message": assistant_msg(mid, [text_block]), "parent_tool_use_id": None}, sid)
+    ev({"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+        "usage": {"input_tokens": 100, "output_tokens": 20 + len(reply)}}, sid)
+    ev({"type": "message_stop"}, sid)
+    sess.write("assistant", {"role": "assistant", "model": MODEL, "id": mid, "content": [text_block]})
+    out({"type": "result", "subtype": "success", "is_error": False, "duration_ms": 40, "duration_api_ms": 30,
+         "num_turns": 2 if "tool" in d else 1, "result": reply, "total_cost_usd": 0.0,
+         "usage": {"input_tokens": 100, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+                   "output_tokens": 20 + len(reply)}, "modelUsage": {}, "permission_denials": []}, sid)
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    STATE.log_call(argv)
+    if argv and argv[0] in ("--version", "-v"):
+        print("0.0.0-fake (Claude Code)")
+        return 0
+    if argv[:2] == ["auth", "status"]:
+        print(json.dumps({"loggedIn": True, "authMethod": "api_key", "apiProvider": "firstParty"}))
+        return 0
+    if "-p" in argv or "--print" in argv:
+        return print_mode([a for a in argv if a not in ("-p", "--print")])
+    print(f"fake-claude: unsupported command {' '.join(argv)[:200]}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,3 +1,7 @@
+/* ═══ Fonts (self-hosted, SIL Open Font License 1.1; see fonts/OFL-*.txt) ═══ */
+@font-face { font-family: "Inter"; font-style: normal; font-weight: 400 700; font-display: swap; src: url("fonts/Inter-latin.woff2") format("woff2"); }
+@font-face { font-family: "Press Start 2P"; font-style: normal; font-weight: 400; font-display: swap; src: url("fonts/PressStart2P-latin.woff2") format("woff2"); }
+
 /* ═══ Variables ═══ */
 :root {
     --bg: #0a0a0f;
@@ -9,7 +13,7 @@
     --border-strong: rgba(255,255,255,0.14);
     --text: #f0f0f5;
     --text-dim: #8888a0;
-    --text-muted: #55556a;
+    --text-muted: #8a8aa3;
     --accent: #ffd700;
     --accent-glow: rgba(255,215,0,0.15);
     --green: #4ecdc4;
@@ -259,8 +263,9 @@ code { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.9em; }
 /* ═══ Setup ═══ */
 .setup-section { padding: 80px 0; background: var(--bg-2); }
 .setup-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
-.setup-steps { display: flex; flex-direction: column; gap: 28px; }
-.setup-step { display: flex; gap: 16px; }
+.setup-steps { display: flex; flex-direction: column; gap: 28px; min-width: 0; }
+.setup-step { display: flex; gap: 16px; min-width: 0; }
+.step-content { flex: 1; min-width: 0; }
 .step-num {
     width: 40px; height: 40px; flex-shrink: 0; display: grid; place-items: center;
     border-radius: 12px; background: var(--accent); color: #000;
@@ -273,6 +278,7 @@ code { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.9em; }
     background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm);
     padding: 14px 16px; margin-top: 8px; overflow-x: auto;
 }
+.code-block { max-width: 100%; overflow-x: auto; }
 .code-block code { font-size: 13px; color: var(--green); line-height: 1.7; white-space: pre; display: block; background: none; padding: 0; }
 .setup-terminal {
     border-radius: var(--radius); overflow: hidden;
@@ -331,4 +337,19 @@ code { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 0.9em; }
     .preview-canvas { min-height: 280px; }
     .p-sidebar { display: none; }
     .p-desk { width: 70px; height: 36px; }
+}
+
+/* ═══ Pixel identity: the product's pixel font on the brand, badges and section labels ═══ */
+.logo-text, .hero-badge, .section-badge { font-family: "Press Start 2P", ui-monospace, monospace; letter-spacing: .02em; }
+.logo-text { font-size: 11px; font-weight: 400; text-transform: uppercase; color: var(--accent); }
+.hero-badge, .section-badge { font-size: 10px; font-weight: 400; }
+
+/* ═══ Narrow screens: keep the header on one line ═══ */
+@media (max-width: 720px) {
+    .nav-links { display: none; }
+}
+@media (max-width: 420px) {
+    .nav-inner { padding: 0 14px; gap: 10px; }
+    .logo-text { font-size: 9px; }
+    .nav-cta { padding: 8px 12px; white-space: nowrap; }
 }

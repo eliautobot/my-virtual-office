@@ -1,30 +1,5 @@
-.office-editor-tabs {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  padding: 9px 10px;
-  border-bottom: 1px solid var(--ui-border-soft, #2a2a4e);
-  background: #0a111e;
-}
 
-.office-editor-tab {
-  min-height: 36px;
-  padding: 7px 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  color: var(--ui-text-3, #8d99aa);
-  background: transparent;
-  font-family: var(--ui-font, Arial, sans-serif);
-  font-size: 12px;
-  font-weight: 750;
-  cursor: pointer;
-}
 
-.office-editor-tab.active {
-  color: #fff2bd;
-  border-color: rgba(245, 200, 76, .34);
-  background: rgba(245, 200, 76, .11);
-}
 
 .office-editor-view { display: none; min-height: 0; flex: 1; }
 .office-editor-view.active { display: flex; flex-direction: column; }
@@ -58,7 +33,7 @@
   gap: 8px;
   margin-bottom: 10px;
   color: var(--ui-accent, #f5c84c);
-  font-size: 11px;
+  font-size: var(--vo-text-xs);
   font-weight: 850;
   letter-spacing: .05em;
 }
@@ -69,7 +44,7 @@
   color: #8fc8ff;
   background: transparent;
   font: inherit;
-  font-size: 10px;
+  font-size: var(--vo-text-xs);
   cursor: pointer;
 }
 
@@ -80,7 +55,7 @@
   border-radius: 8px;
   color: var(--ui-text-3, #8d99aa);
   background: #0a1422;
-  font-size: 11px;
+  font-size: var(--vo-text-xs);
 }
 
 .layout-selection-status.has-selection {
@@ -128,7 +103,7 @@
 .layout-btn.primary {
   color: #17200c;
   border-color: var(--ui-accent, #f5c84c);
-  background: var(--ui-accent, #f5c84c);
+  background: var(--vo-accent-fill);
 }
 
 .layout-btn:disabled { opacity: .42; cursor: not-allowed; }
@@ -138,7 +113,7 @@
 .layout-marketplace-copy {
   margin: -2px 0 10px;
   color: var(--ui-text-3, #94a1b5);
-  font-size: 11px;
+  font-size: var(--vo-text-xs);
   line-height: 1.45;
 }
 
@@ -168,17 +143,17 @@
 .layout-card-heading { display: flex; align-items: center; gap: 8px; }
 .layout-card-icon { font-size: 22px; }
 .layout-card-heading div { min-width: 0; display: grid; gap: 2px; }
-.layout-card-heading strong { overflow: hidden; text-overflow: ellipsis; color: var(--ui-text-1, #f2f5f9); font-size: 12px; }
-.layout-card-heading div span { color: var(--ui-text-3, #8d99aa); font-size: 10px; }
-.layout-card p { margin: 8px 0; color: var(--ui-text-2, #c6cfda); font-size: 11px; line-height: 1.4; }
-.layout-card-meta { margin-bottom: 9px; color: var(--ui-text-3, #8391a5); font-size: 10px; }
+.layout-card-heading strong { overflow: hidden; text-overflow: ellipsis; color: var(--ui-text-1, #f2f5f9); font-size: var(--vo-text-xs); }
+.layout-card-heading div span { color: var(--ui-text-3, #8d99aa); font-size: var(--vo-text-xs); }
+.layout-card p { margin: 8px 0; color: var(--ui-text-2, #c6cfda); font-size: var(--vo-text-xs); line-height: 1.4; }
+.layout-card-meta { margin-bottom: 9px; color: var(--ui-text-3, #8391a5); font-size: var(--vo-text-xs); }
 .layout-card-actions .layout-btn { flex: 1; }
 
 .layout-empty {
   padding: 18px 8px;
   color: var(--ui-text-3, #8d99aa);
   text-align: center;
-  font-size: 11px;
+  font-size: var(--vo-text-xs);
 }
 
 .layout-empty.error,
@@ -190,7 +165,7 @@
   border-top: 1px solid var(--ui-border-soft, #29384d);
   color: var(--ui-text-3, #9aa6b8);
   background: #08111e;
-  font-size: 11px;
+  font-size: var(--vo-text-xs);
   line-height: 1.35;
 }
 
@@ -198,27 +173,11 @@
 .layout-status[data-kind="success"] { color: #8de8c1; }
 .layout-status[data-kind="active"] { color: #8fc8ff; }
 
-html[data-ui-theme="light"] :where(#office-editor-layouts-view, .office-editor-tabs, .layout-status) {
-  color: #172033;
-  border-color: var(--ui-border-soft);
-  background: #f5f8fc;
-}
 
-html[data-ui-theme="light"] :where(.layout-create-panel, .layout-marketplace-panel, .layout-card, .layout-selection-status) {
-  color: #172033;
-  border-color: var(--ui-border-soft);
-  background: #fff;
-}
 
-html[data-ui-theme="light"] .layout-input {
-  color: #172033;
-  border-color: var(--ui-border-soft);
-  background: #fff;
-}
 
-html[data-ui-theme="light"] .layout-status[data-kind="success"] { color: #067647; }
-html[data-ui-theme="light"] .layout-status[data-kind="active"] { color: #175cd3; }
-html[data-ui-theme="light"] .layout-status[data-kind="error"] { color: #b42318; }
+
+
 
 @media (max-width: 900px) {
   .layout-view-scroll { padding: 10px; }

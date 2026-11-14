@@ -12,14 +12,14 @@
       {
         "x": 380,
         "w": 240,
-        "color": "#0000ff",
+        "color": "#5f7186",
         "accentColor": "#263238"
       },
       {
         "x": 620,
         "w": 380,
-        "color": "#e65100",
-        "accentColor": "#bf360c"
+        "color": "#a66f55",
+        "accentColor": "#85563f"
       }
     ],
     "height": 90,
@@ -30,8 +30,8 @@
         "y1": 0,
         "x2": 9,
         "y2": 4,
-        "color": "#ffd600",
-        "accentColor": "#ffd600",
+        "color": "#c9b48a",
+        "accentColor": "#c9b48a",
         "trimColor": "#d2d4da",
         "trim2Color": "#989ca8"
       },
@@ -40,8 +40,8 @@
         "y1": 0,
         "x2": 16,
         "y2": 4,
-        "color": "#ffd600",
-        "accentColor": "#ffd600",
+        "color": "#c9b48a",
+        "accentColor": "#c9b48a",
         "trimColor": "#d2d4da",
         "trim2Color": "#989ca8"
       },
@@ -50,90 +50,90 @@
         "y1": 13,
         "x2": 8,
         "y2": 13,
-        "color": "#4061c8",
-        "accentColor": "#4061c8",
+        "color": "#6b7f9a",
+        "accentColor": "#6b7f9a",
         "trimColor": "#d2d4da",
-        "trim2Color": "#112563"
+        "trim2Color": "#3c4a5e"
       },
       {
         "x1": 1,
         "y1": 5,
         "x2": 8,
         "y2": 5,
-        "color": "#4d79ff",
-        "accentColor": "#4d79ff",
+        "color": "#7a8fae",
+        "accentColor": "#7a8fae",
         "trimColor": "#d2d4da",
-        "trim2Color": "#112c7e"
+        "trim2Color": "#46566e"
       },
       {
         "x1": 17,
         "y1": 5,
         "x2": 24,
         "y2": 5,
-        "color": "#ff7300",
-        "accentColor": "#ff7300",
+        "color": "#b8805f",
+        "accentColor": "#b8805f",
         "trimColor": "#d2d4da",
-        "trim2Color": "#c04b0c"
+        "trim2Color": "#8d5a40"
       },
       {
         "x1": 17,
         "y1": 13,
         "x2": 24,
         "y2": 13,
-        "color": "#cb5c00",
-        "accentColor": "#cb5c00",
+        "color": "#a3704f",
+        "accentColor": "#a3704f",
         "trimColor": "#d2d4da",
-        "trim2Color": "#9a3c09"
+        "trim2Color": "#7a4f38"
       },
       {
         "x1": 8,
         "y1": 4,
         "x2": 8,
         "y2": 6,
-        "color": "#4061c8",
-        "accentColor": "#4061c8",
+        "color": "#6b7f9a",
+        "accentColor": "#6b7f9a",
         "trimColor": "#d2d4da",
-        "trim2Color": "#112563"
+        "trim2Color": "#3c4a5e"
       },
       {
         "x1": 8,
         "y1": 7,
         "x2": 8,
         "y2": 13,
-        "color": "#4061c8",
-        "accentColor": "#4061c8",
+        "color": "#6b7f9a",
+        "accentColor": "#6b7f9a",
         "trimColor": "#d2d4da",
-        "trim2Color": "#112563"
+        "trim2Color": "#3c4a5e"
       },
       {
         "x1": 17,
         "y1": 4,
         "x2": 17,
         "y2": 6,
-        "color": "#cb5c00",
-        "accentColor": "#cb5c00",
+        "color": "#a3704f",
+        "accentColor": "#a3704f",
         "trimColor": "#d2d4da",
-        "trim2Color": "#853408"
+        "trim2Color": "#6e4632"
       },
       {
         "x1": 17,
         "y1": 7,
         "x2": 17,
         "y2": 13,
-        "color": "#cb5c00",
-        "accentColor": "#cb5c00",
+        "color": "#a3704f",
+        "accentColor": "#a3704f",
         "trimColor": "#d2d4da",
-        "trim2Color": "#9a3c09"
+        "trim2Color": "#7a4f38"
       },
       {
         "x1": 10,
         "y1": 6,
         "x2": 15,
         "y2": 6,
-        "color": "#ffd600",
-        "accentColor": "#ffd600",
+        "color": "#c9b48a",
+        "accentColor": "#c9b48a",
         "trimColor": "#d2d4da",
-        "trim2Color": "#98a300"
+        "trim2Color": "#8f9a6a"
       }
     ],
     "topWall": {
@@ -143,8 +143,14 @@
     }
   },
   "floor": {
-    "color1": "#c0c0c0",
-    "color2": "#b0b0b0"
+    "color1": "#b08a64",
+    "color2": "#a27d59",
+    "style": "wood",
+    "zones": [
+      { "x": 0, "y": 2, "w": 8, "h": 3, "style": "carpet", "color1": "#6f7f8c", "color2": "#7c8c98" },
+      { "x": 17, "y": 2, "w": 8, "h": 3, "style": "tile", "color1": "#dcd8cf", "color2": "#bdb7ab" },
+      { "x": 9, "y": 2, "w": 7, "h": 4, "style": "carpet", "color1": "#7a6f6a", "color2": "#867a74" }
+    ]
   },
   "furniture": [
     {
@@ -439,7 +445,7 @@
       "x": 820,
       "y": 20,
       "text": "KITCHEN",
-      "labelColor": "#ff0000",
+      "labelColor": "#f0b48a",
       "fontSize": 16
     },
     {
@@ -448,7 +454,7 @@
       "x": 200,
       "y": 20,
       "text": "LOUNGE",
-      "labelColor": "#00d5ff",
+      "labelColor": "#a8d8e4",
       "fontSize": 16
     },
     {

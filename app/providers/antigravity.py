@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import threading
 import time
@@ -14,11 +15,29 @@ from pathlib import Path
 from typing import Any
 
 from .file_safety import backup_files
+from .cli_runner import argv_message, safe_session_id
 from .process_env import resolve_executable, sanitized_env
+import data_owner   # (folders and files made as root keep the data folder's owner)
 
 
 _ACTIVE: dict[str, subprocess.Popen[str]] = {}
 _LOCK = threading.Lock()
+
+
+def _kill_group(proc: "subprocess.Popen[str]", sig: int = signal.SIGKILL, reap: bool = True) -> None:
+    """Signal the CLI's whole process group and reap it (no defunct children)."""
+    try:
+        os.killpg(proc.pid, sig)
+    except OSError:
+        try:
+            proc.send_signal(sig)
+        except OSError:
+            pass
+    if reap:
+        try:
+            proc.communicate(timeout=5)
+        except Exception:
+            pass
 
 
 @dataclass
@@ -143,7 +162,7 @@ class AntigravityProvider:
         model_value = str(model or self.model or "inherit")
         native_path = os.path.join(str(self.home_path), "agents", safe, "agent.md")
         project_path = os.path.join(workspace, ".agents", "agents", safe, "agent.md")
-        os.makedirs(os.path.join(workspace, ".agents", "skills"), exist_ok=True)
+        data_owner.makedirs(os.path.join(workspace, ".agents", "skills"), exist_ok=True)
         meta = {
             "profile": safe, "name": name, "role": role, "emoji": emoji, "model": model_value,
             "prompt": instructions, "providerKind": "antigravity", "providerType": "harness",
@@ -229,7 +248,12 @@ class AntigravityProvider:
                 "providerPath": "antigravity-cli",
                 "tools": [],
             }
-        cmd = [self.binary or "agy", "--print", str(message or "")]
+        try:
+            session_id = safe_session_id(session_id)
+            prompt = argv_message(message)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "reply": "", "sessionId": "", "providerPath": "antigravity-cli", "tools": []}
+        cmd = [self.binary or "agy", "--print", prompt]
         if safe and safe != "main":
             cmd.extend(["--agent", safe])
         if session_id:
@@ -241,10 +265,12 @@ class AntigravityProvider:
         if self.print_timeout:
             cmd.extend(["--print-timeout", self.print_timeout])
         workspace = self._workspace(safe)
-        os.makedirs(workspace, exist_ok=True)
+        data_owner.makedirs(workspace, exist_ok=True)
         proc: subprocess.Popen[str] | None = None
         try:
-            proc = subprocess.Popen(cmd, cwd=workspace, env=self._env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            # Own process group so Stop/timeout also end anything the CLI started (BE-16).
+            proc = subprocess.Popen(cmd, cwd=workspace, env=self._env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, start_new_session=True)
             with _LOCK:
                 _ACTIVE[safe] = proc
             stdout, stderr = proc.communicate(timeout=int(timeout_sec or self.timeout_sec))
@@ -268,7 +294,7 @@ class AntigravityProvider:
             }
         except subprocess.TimeoutExpired:
             if proc:
-                proc.kill()
+                _kill_group(proc)
             return {"ok": False, "error": "Antigravity call timed out", "reply": "", "sessionId": session_id or ""}
         except Exception as exc:
             return {"ok": False, "error": str(exc), "reply": "", "sessionId": session_id or ""}
@@ -282,7 +308,7 @@ class AntigravityProvider:
         with _LOCK:
             proc = _ACTIVE.get(safe)
         if proc and proc.poll() is None:
-            proc.terminate()
+            _kill_group(proc, sig=signal.SIGTERM, reap=False)
             return {"ok": True, "interrupted": True, "profile": safe}
         return {"ok": False, "error": f"No active Antigravity run for {safe}"}
 
@@ -353,9 +379,10 @@ class AntigravityProvider:
 
     @staticmethod
     def _write_text(path: str, content: str) -> None:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data_owner.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = f"{path}.tmp-{os.getpid()}"
         Path(tmp).write_text(content, encoding="utf-8")
+        data_owner.adopt(tmp)
         os.replace(tmp, path)
 
     @staticmethod

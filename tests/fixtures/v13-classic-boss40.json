@@ -1,0 +1,34 @@
+{
+ "bossDesk/0/on": {
+  "artHash": "5b07d5cd",
+  "artOpaque": 30724
+ },
+ "bossDesk/0/off": {
+  "artHash": "def75abd",
+  "artOpaque": 30724
+ },
+ "bossDesk/90/on": {
+  "artHash": "5a96ec3d",
+  "artOpaque": 20720
+ },
+ "bossDesk/90/off": {
+  "artHash": "74fb2fd",
+  "artOpaque": 20720
+ },
+ "bossDesk/180/on": {
+  "artHash": "12fa89fd",
+  "artOpaque": 25404
+ },
+ "bossDesk/180/off": {
+  "artHash": "12fa89fd",
+  "artOpaque": 25404
+ },
+ "bossDesk/270/on": {
+  "artHash": "e0bfafed",
+  "artOpaque": 21264
+ },
+ "bossDesk/270/off": {
+  "artHash": "885dd66d",
+  "artOpaque": 21264
+ }
+}

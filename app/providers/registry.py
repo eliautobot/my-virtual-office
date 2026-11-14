@@ -11,7 +11,10 @@ from __future__ import annotations
 import importlib.util
 import os
 import re
+import threading
+import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout, wait as futures_wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -19,6 +22,7 @@ from typing import Any, Iterable
 
 CONTRACT_VERSION = "1.1"
 CAPABILITY_NAMES = {
+    "taskProgress",
     "discover",
     "health",
     "chat",
@@ -41,6 +45,23 @@ CAPABILITY_NAMES = {
     "agentToAgent",
     "attachments",
     "tools",
+    # Chat window features of the full Hermes and OpenClaw connections (hp port).
+    "effort",
+    "questions",
+    "plan",
+    "queue",
+    "observe",
+    "presence",
+    "titles",
+    "context",
+    "commands",
+    "media",
+    "tasks",
+    "browser",
+    "screen",
+    "computer",
+    "progressCard",
+    "accessLevel",
 }
 
 
@@ -101,6 +122,13 @@ class ProviderManifest:
         }
 
 
+# Provider probes spawn CLIs and open network connections; run them side by side
+# with a deadline instead of one after another on a request thread (BE-08/BE-24).
+_PROBE_POOL = ThreadPoolExecutor(max_workers=8, thread_name_prefix="provider-probe")
+HEALTH_TIMEOUT_SEC = float(os.environ.get("VO_PROVIDER_HEALTH_TIMEOUT_SEC") or 12)
+DISCOVERY_TIMEOUT_SEC = float(os.environ.get("VO_PROVIDER_DISCOVERY_TIMEOUT_SEC") or 25)
+
+
 class ProviderRegistry:
     """Registry of provider objects implementing the Office provider contract."""
 
@@ -108,6 +136,11 @@ class ProviderRegistry:
         self.context = context or {}
         self._providers: dict[str, Any] = {}
         self._load_errors: list[dict[str, str]] = []
+        # Errors from discovery/health calls: latest per provider+operation, reset each discovery (BE-33).
+        self._runtime_errors: dict[tuple[str, str], dict[str, str]] = {}
+        self._health_cache: dict[str, tuple[float, Any]] = {}
+        self._discovery_cache: dict[str, list] = {}
+        self._cache_lock = threading.Lock()
 
     def register(self, provider: Any) -> None:
         manifest = self._manifest(provider)
@@ -125,25 +158,82 @@ class ProviderRegistry:
         provider = self.get(provider_id)
         return self._manifest(provider) if provider is not None else None
 
-    def manifests(self, include_health: bool = False) -> list[dict[str, Any]]:
-        result = []
-        for provider_id, provider in self._providers.items():
-            item = self._manifest(provider).as_dict()
-            if include_health:
-                item["health"] = self._safe_call(provider_id, "test", default={"ok": False, "error": "Health check unavailable"})
-            result.append(item)
-        return result
+    def _parallel_calls(self, provider_ids: list[str], operation: str, default: Any, timeout: float) -> dict[str, tuple[bool, Any]]:
+        """Run one operation on many providers at once. Returns {id: (finished, value)}."""
+        if not provider_ids:
+            return {}
+        if len(provider_ids) == 1:
+            pid = provider_ids[0]
+            return {pid: (True, self._safe_call(pid, operation, default=default))}
+        futures = {pid: _PROBE_POOL.submit(self._safe_call, pid, operation, default) for pid in provider_ids}
+        futures_wait(list(futures.values()), timeout=max(0.1, timeout))
+        results = {}
+        for pid, future in futures.items():
+            if future.done():
+                try:
+                    results[pid] = (True, future.result())
+                except Exception as exc:  # _safe_call already catches; defensive
+                    results[pid] = (True, default)
+                    self._note_error(pid, operation, str(exc))
+            else:
+                results[pid] = (False, default)
+                self._note_error(pid, operation, f"timed out after {timeout:.0f}s")
+        return results
+
+    def manifests(self, include_health: bool = False, max_age: float | None = None) -> list[dict[str, Any]]:
+        """Provider manifests; with ``include_health`` each provider's ``test()`` runs in
+        parallel with a deadline. ``max_age`` (seconds) reuses recent health results."""
+        items = [(provider_id, self._manifest(provider).as_dict()) for provider_id, provider in self._providers.items()]
+        if include_health:
+            now = time.time()
+            health: dict[str, Any] = {}
+            stale: list[str] = []
+            with self._cache_lock:
+                for provider_id, _item in items:
+                    cached = self._health_cache.get(provider_id)
+                    if max_age is not None and cached and now - cached[0] <= max_age:
+                        health[provider_id] = cached[1]
+                    else:
+                        stale.append(provider_id)
+            fallback = {"ok": False, "error": "Health check unavailable"}
+            for provider_id, (finished, value) in self._parallel_calls(stale, "test", fallback, HEALTH_TIMEOUT_SEC).items():
+                if finished:
+                    health[provider_id] = value
+                    with self._cache_lock:
+                        self._health_cache[provider_id] = (time.time(), value)
+                else:
+                    with self._cache_lock:
+                        previous = self._health_cache.get(provider_id)
+                    health[provider_id] = previous[1] if previous else {
+                        "ok": False, "error": "Health check timed out", "connectionState": "timeout",
+                    }
+            for provider_id, item in items:
+                item["health"] = health.get(provider_id, fallback)
+        return [item for _provider_id, item in items]
 
     def discover_agents(self) -> list[dict[str, Any]]:
         agents: list[dict[str, Any]] = []
         seen: set[tuple[str, str, str]] = set()
+        with self._cache_lock:
+            self._runtime_errors = {}
+        candidates = []
         for provider_id, provider in self._providers.items():
             manifest = self._manifest(provider)
             if not manifest.enabled or not manifest.capabilities.get("discover"):
                 continue
-            rows = self._safe_call(provider_id, "discover_agents", default=[])
+            candidates.append((provider_id, manifest))
+        results = self._parallel_calls([pid for pid, _m in candidates], "discover_agents", [], DISCOVERY_TIMEOUT_SEC)
+        for provider_id, manifest in candidates:
+            finished, rows = results.get(provider_id, (True, []))
+            if finished and isinstance(rows, list):
+                with self._cache_lock:
+                    self._discovery_cache[provider_id] = rows
+            elif not finished:
+                # A slow provider keeps its last known agents instead of flickering offline.
+                with self._cache_lock:
+                    rows = list(self._discovery_cache.get(provider_id) or [])
             if not isinstance(rows, list):
-                self._load_errors.append({"provider": provider_id, "error": "discover_agents returned a non-list value"})
+                self._note_error(provider_id, "discover_agents", "discover_agents returned a non-list value")
                 continue
             for row in rows:
                 if not isinstance(row, dict):
@@ -282,11 +372,14 @@ class ProviderRegistry:
                 "capabilities": manifest.capabilities,
             })
             ok = ok and not errors
+        with self._cache_lock:
+            runtime_errors = list(self._runtime_errors.values())
+        load_errors = list(self._load_errors) + runtime_errors
         return {
-            "ok": ok and not self._load_errors,
+            "ok": ok and not load_errors,
             "contractVersion": CONTRACT_VERSION,
             "providers": reports,
-            "loadErrors": list(self._load_errors),
+            "loadErrors": load_errors,
         }
 
     def load_extensions(self, directories: Iterable[str]) -> None:
@@ -359,8 +452,12 @@ class ProviderRegistry:
             return method()
         except Exception as exc:
             traceback.print_exc()
-            self._load_errors.append({"provider": provider_id, "error": f"{operation}: {exc}"})
+            self._note_error(provider_id, operation, str(exc))
             return default
+
+    def _note_error(self, provider_id: str, operation: str, message: str) -> None:
+        with self._cache_lock:
+            self._runtime_errors[(provider_id, operation)] = {"provider": provider_id, "error": f"{operation}: {message}"}
 
     @staticmethod
     def _normalize_agent(provider_id: str, manifest: ProviderManifest, row: dict[str, Any]) -> dict[str, Any]:

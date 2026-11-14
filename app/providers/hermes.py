@@ -3,9 +3,9 @@
 The supported Virtual Office integration is the authenticated Hermes API
 Server. Hermes itself owns profiles, processes, sessions, tools, and terminal
 execution in its native environment; Virtual Office is only an external API
-client. Legacy CLI/Desktop helpers remain in this module temporarily for
-backward-compatible imports, but production discovery and chat routing do not
-use them.
+client. The local CLI profile helpers (HermesProvider) stay for the native
+runtime; the Hermes Desktop backend client and its discovery were removed
+(``hermes serve`` connections are found by POST /api/agent-providers/detect).
 """
 
 from __future__ import annotations
@@ -13,14 +13,10 @@ from __future__ import annotations
 import os
 import re
 import shutil
-import socket
-import selectors
-import errno
 import subprocess
 import threading
 import time
 import json
-import asyncio
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -29,6 +25,9 @@ from urllib.parse import quote, urljoin
 from typing import Any
 
 from .file_safety import backup_files
+from .cli_runner import argv_message, safe_session_id
+from .process_env import agent_env
+import data_owner   # (folders and files made as root keep the data folder's owner)
 
 
 @dataclass
@@ -181,7 +180,7 @@ class HermesProvider:
 
     @staticmethod
     def _atomic_owned_text(path: str, content: str, profile_home: str) -> None:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data_owner.makedirs(os.path.dirname(path), exist_ok=True)
         try:
             reference = os.stat(path)
         except OSError:
@@ -213,7 +212,7 @@ class HermesProvider:
         configured a Hermes home path, derive HOME from it so Hermes resolves
         its own profile paths consistently with the configured installation.
         """
-        env = os.environ.copy()
+        env = agent_env()
         if self.home_path:
             env["VO_HERMES_HOME"] = self.home_path
             if os.path.basename(self.home_path.rstrip(os.sep)) == ".hermes":
@@ -281,10 +280,14 @@ class HermesProvider:
         if not message.strip():
             return {"ok": False, "error": "message is required", "exitCode": None, "reply": ""}
 
+        try:
+            prompt = argv_message(message)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "exitCode": None, "reply": ""}
         cmd = [self.binary]
         if profile and profile != "default":
             cmd.extend(["--profile", profile])
-        cmd.extend(["-z", message])
+        cmd.extend(["-z", prompt])
 
         try:
             result = subprocess.run(
@@ -333,6 +336,11 @@ class HermesProvider:
         if not message.strip():
             return {"ok": False, "error": "message is required", "exitCode": None, "reply": "", "sessionId": session_id or ""}
 
+        try:
+            session_id = safe_session_id(session_id)
+            prompt = argv_message(message)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc), "exitCode": None, "reply": ""}
         cmd = [self.binary]
         if profile and profile != "default":
             cmd.extend(["--profile", profile])
@@ -341,7 +349,7 @@ class HermesProvider:
             cmd.extend(["--resume", session_id])
         if yolo_once:
             cmd.append("--yolo")
-        cmd.extend(["-q", message])
+        cmd.extend(["-q", prompt])
 
         try:
             result = subprocess.run(
@@ -536,8 +544,8 @@ class HermesProvider:
             )
 
         profile_home = os.path.join(self.home_path, "profiles", safe_profile)
-        os.makedirs(profile_home, exist_ok=True)
-        os.makedirs(os.path.join(profile_home, "skills"), exist_ok=True)
+        data_owner.makedirs(profile_home, exist_ok=True)
+        data_owner.makedirs(os.path.join(profile_home, "skills"), exist_ok=True)
         self._write_profile_bootstrap(profile_home, name=name, role=role, emoji=emoji, profile=safe_profile)
         self._chown_like_home(profile_home)
 
@@ -561,14 +569,14 @@ class HermesProvider:
         try:
             text = open(identity_path, "r", encoding="utf-8", errors="replace").read()
             for key, label in (("name", "Name"), ("role", "Creature"), ("emoji", "Emoji")):
-                match = re.search(rf"(?im)^\\s*-\\s*\\*\\*{label}:\\*\\*\\s*(.+)$", text)
+                match = re.search(rf"(?im)^\s*-\s*\*\*{label}:\*\*\s*(.+)$", text)
                 if match:
                     current[key] = match.group(1).split(" — Hermes profile", 1)[0].strip()
         except OSError:
             pass
         for key in current:
             if key in patch:
-                current[key] = str(patch.get(key) or "").strip()
+                current[key] = re.sub(r"[\r\n]+", " ", str(patch.get(key) or "")).strip()
         self._atomic_owned_text(
             identity_path,
             "# IDENTITY.md\n\n"
@@ -809,6 +817,8 @@ class HermesApiClient:
     base_url: str | None = None
     api_key: str | None = None
     timeout_sec: int = 30
+    max_response_bytes: int = 0  # Optional bounded read for projection-only callers.
+    task_only: bool = False  # Opt-in: unrelated provider transports stay unchanged.
 
     def __post_init__(self) -> None:
         self.base_url = (self.base_url or os.environ.get("VO_HERMES_API_URL") or "http://127.0.0.1:8642").rstrip("/")
@@ -839,8 +849,17 @@ class HermesApiClient:
             data = json.dumps(body).encode("utf-8")
             req_headers["Content-Type"] = "application/json"
         req = urllib.request.Request(self._url(path), data=data, headers=req_headers, method=method.upper())
-        with urllib.request.urlopen(req, timeout=int(timeout_sec or self.timeout_sec)) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
+        open_request = urllib.request.urlopen
+        if self.task_only:
+            class NoTaskRedirect(urllib.request.HTTPRedirectHandler):
+                def redirect_request(self, req, fp, code, msg, headers, newurl):
+                    return None
+            open_request = urllib.request.build_opener(NoTaskRedirect()).open
+        with open_request(req, timeout=int(timeout_sec or self.timeout_sec)) as resp:
+            raw_bytes = resp.read(self.max_response_bytes + 1) if self.max_response_bytes > 0 else resp.read()
+            if self.max_response_bytes > 0 and len(raw_bytes) > self.max_response_bytes:
+                raise ValueError("Hermes response exceeds the bounded projection budget")
+            raw = raw_bytes.decode("utf-8", errors="replace")
             parsed = json.loads(raw) if raw.strip() else {}
             if isinstance(parsed, dict):
                 parsed["_status"] = getattr(resp, "status", 200)
@@ -1008,560 +1027,6 @@ class HermesApiClient:
                     data_lines.append(line[5:].lstrip())
 
 
-@dataclass
-class HermesDesktopBackendClient:
-    """Client for Hermes Desktop's `hermes serve` TUI-gateway backend."""
-
-    base_url: str | None = None
-    token: str | None = None
-    host_header: str | None = None
-    tcp_host: str | None = None
-    tcp_port: int | str | None = None
-    timeout_sec: int = 10
-
-    def __post_init__(self) -> None:
-        self.base_url = (
-            self.base_url
-            or os.environ.get("VO_HERMES_DESKTOP_URL")
-            or ""
-        ).rstrip("/")
-        self.token = self.token if self.token is not None else os.environ.get("VO_HERMES_DESKTOP_TOKEN", "")
-        self.host_header = self.host_header if self.host_header is not None else os.environ.get("VO_HERMES_DESKTOP_HOST_HEADER", "")
-        self.tcp_host = self.tcp_host if self.tcp_host is not None else os.environ.get("VO_HERMES_DESKTOP_TCP_HOST", "")
-        self.tcp_port = self.tcp_port if self.tcp_port is not None else os.environ.get("VO_HERMES_DESKTOP_TCP_PORT", "")
-        try:
-            self.tcp_port = int(self.tcp_port) if str(self.tcp_port or "").strip() else None
-        except Exception:
-            self.tcp_port = None
-
-        parsed = self._parsed_base_url()
-        if parsed and self.host_header and not self.tcp_host and self.host_header != parsed.netloc:
-            self.tcp_host = parsed.hostname or ""
-        if parsed and self._is_loopback_host(parsed.hostname) and self._running_in_docker() and not self.tcp_host:
-            self.tcp_host = os.environ.get("VO_HERMES_DESKTOP_DOCKER_HOST", "host.docker.internal")
-        if parsed and self.tcp_host and not self.tcp_port:
-            self.tcp_port = parsed.port
-        if parsed and self._uses_tcp_override() and not self.host_header:
-            self.host_header = parsed.netloc
-
-    def _url(self, path: str) -> str:
-        return self._logical_url(path)
-
-    @staticmethod
-    def _running_in_docker() -> bool:
-        if os.path.exists("/.dockerenv"):
-            return True
-        try:
-            with open("/proc/1/cgroup", "r", encoding="utf-8", errors="ignore") as f:
-                return any(token in f.read() for token in ("docker", "containerd", "kubepods"))
-        except Exception:
-            return False
-
-    @staticmethod
-    def _is_loopback_host(hostname: str | None) -> bool:
-        host = (hostname or "").strip().lower().strip("[]")
-        return host in {"127.0.0.1", "localhost", "::1"}
-
-    def _parsed_base_url(self):
-        if not self.base_url:
-            return None
-        return urllib.parse.urlparse(self.base_url)
-
-    def _logical_netloc(self) -> str:
-        parsed = self._parsed_base_url()
-        if not parsed:
-            return ""
-        return (self.host_header or parsed.netloc or "").strip()
-
-    def _uses_tcp_override(self) -> bool:
-        return bool(str(self.tcp_host or "").strip())
-
-    def _resolve_tcp_host_ipv4(self, host: str, port: int | None) -> str:
-        if not host:
-            return host
-        try:
-            socket.inet_aton(host)
-            return host
-        except OSError:
-            pass
-        try:
-            infos = socket.getaddrinfo(host, int(port or 0), family=socket.AF_INET, type=socket.SOCK_STREAM)
-            if infos:
-                return infos[0][4][0]
-        except Exception:
-            pass
-        return host
-
-    def _logical_url(self, path: str) -> str:
-        if not self.base_url:
-            return ""
-        parsed = urllib.parse.urlparse(self.base_url.rstrip("/") + "/" + path.lstrip("/"))
-        logical_netloc = self._logical_netloc()
-        if logical_netloc:
-            parsed = parsed._replace(netloc=logical_netloc)
-        return urllib.parse.urlunparse(parsed)
-
-    def _connect_netloc(self) -> str:
-        parsed = self._parsed_base_url()
-        if not parsed:
-            return ""
-        port = int(self.tcp_port or parsed.port or (443 if parsed.scheme == "https" else 80))
-        host = self._resolve_tcp_host_ipv4(str(self.tcp_host or parsed.hostname or ""), port)
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
-        return f"{host}:{port}"
-
-    def _connect_url(self, path: str) -> str:
-        if not self.base_url:
-            return ""
-        parsed = urllib.parse.urlparse(self.base_url.rstrip("/") + "/" + path.lstrip("/"))
-        if self._uses_tcp_override():
-            parsed = parsed._replace(netloc=self._connect_netloc())
-        return urllib.parse.urlunparse(parsed)
-
-    def _headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
-        headers = {"Accept": "application/json"}
-        if self.host_header:
-            headers["Host"] = self.host_header
-        if self.token:
-            headers["X-Hermes-Session-Token"] = self.token
-        if extra:
-            headers.update({k: v for k, v in extra.items() if v is not None})
-        return headers
-
-    def _json_request(self, method: str, path: str, timeout_sec: int | None = None) -> dict[str, Any]:
-        if not self.base_url:
-            raise ValueError("Hermes Desktop Backend URL is not configured")
-        req = urllib.request.Request(self._connect_url(path), headers=self._headers(), method=method.upper())
-        with urllib.request.urlopen(req, timeout=int(timeout_sec or self.timeout_sec)) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
-            parsed = json.loads(raw) if raw.strip() else {}
-            if isinstance(parsed, dict):
-                parsed["_status"] = getattr(resp, "status", 200)
-                return parsed
-            return {"data": parsed, "_status": getattr(resp, "status", 200)}
-
-    def status(self) -> dict[str, Any]:
-        return self._json_request("GET", "/api/status", timeout_sec=min(self.timeout_sec, 5))
-
-    def _dashboard_index_html(self) -> str:
-        if not self.base_url:
-            return ""
-        req = urllib.request.Request(self._connect_url("/"), headers={"Accept": "text/html", **({"Host": self.host_header} if self.host_header else {})}, method="GET")
-        with urllib.request.urlopen(req, timeout=min(int(self.timeout_sec), 5)) as resp:
-            return resp.read().decode("utf-8", errors="replace")
-
-    def _served_dashboard_token(self) -> str:
-        if self.token:
-            return self.token
-        try:
-            html = self._dashboard_index_html()
-        except Exception:
-            return ""
-        match = re.search(r"window\.__HERMES_SESSION_TOKEN__\s*=\s*(\"(?:\\.|[^\"\\])*\")", html)
-        if not match:
-            return ""
-        try:
-            token = json.loads(match.group(1))
-            return token if isinstance(token, str) else ""
-        except Exception:
-            return ""
-
-    def _ws_url(self) -> str:
-        if not self.base_url:
-            return ""
-        parsed = urllib.parse.urlparse(self._url("/api/ws"))
-        scheme = "wss" if parsed.scheme == "https" else "ws"
-        query = parsed.query
-        token = self._served_dashboard_token()
-        if token and "token=" not in query:
-            token_q = urllib.parse.urlencode({"token": token})
-            query = f"{query}&{token_q}" if query else token_q
-        return urllib.parse.urlunparse(parsed._replace(scheme=scheme, query=query))
-
-    def _connect_ws(self):
-        ws_url = self._ws_url()
-        if not ws_url:
-            raise ValueError("Hermes Desktop Backend URL is not configured")
-        try:
-            from websockets.asyncio.client import connect as ws_connect
-        except Exception:
-            from websockets import connect as ws_connect  # type: ignore
-        headers = {}
-        if self.host_header and not self._uses_tcp_override():
-            headers["Host"] = self.host_header
-        timeout = min(int(self.timeout_sec), 30)
-        kwargs = {"open_timeout": timeout, "close_timeout": 1}
-        parsed = urllib.parse.urlparse(ws_url)
-        if self._uses_tcp_override():
-            port = int(self.tcp_port or parsed.port or (443 if parsed.scheme == "wss" else 80))
-            kwargs["host"] = self._resolve_tcp_host_ipv4(str(self.tcp_host or ""), port)
-            kwargs["port"] = port
-        try:
-            return ws_connect(ws_url, additional_headers=headers or None, **kwargs)
-        except TypeError:
-            return ws_connect(ws_url, extra_headers=headers or None, **kwargs)
-
-    async def _recv_json(self, ws, timeout_sec: float) -> dict[str, Any]:
-        raw = await asyncio.wait_for(ws.recv(), timeout=max(timeout_sec, 0.1))
-        data = json.loads(str(raw).strip())
-        return data if isinstance(data, dict) else {"data": data}
-
-    async def _rpc(self, ws, method: str, params: dict[str, Any] | None = None, timeout_sec: int | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-        rid = f"vo-{int(time.time() * 1000)}-{os.getpid()}"
-        await ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params or {}}))
-        deadline = time.monotonic() + int(timeout_sec or self.timeout_sec)
-        events: list[dict[str, Any]] = []
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"Hermes Desktop Backend RPC timed out: {method}")
-            item = await self._recv_json(ws, remaining)
-            if item.get("id") == rid:
-                if item.get("error"):
-                    err = item.get("error") if isinstance(item.get("error"), dict) else {"message": str(item.get("error"))}
-                    raise RuntimeError(err.get("message") or f"Hermes Desktop Backend RPC failed: {method}")
-                result = item.get("result")
-                return (result if isinstance(result, dict) else {"value": result}, events)
-            if item.get("method") == "event":
-                params_obj = item.get("params") if isinstance(item.get("params"), dict) else {}
-                events.append(params_obj)
-
-    def _run_async(self, coro):
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(coro)
-
-        result: dict[str, Any] = {}
-        error: list[BaseException] = []
-
-        def worker() -> None:
-            try:
-                result["value"] = asyncio.run(coro)
-            except BaseException as exc:
-                error.append(exc)
-
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
-        thread.join()
-        if error:
-            raise error[0]
-        return result.get("value")
-
-    def rpc_call(self, method: str, params: dict[str, Any] | None = None, timeout_sec: int | None = None) -> dict[str, Any]:
-        async def run() -> dict[str, Any]:
-            async with self._connect_ws() as ws:
-                result, events = await self._rpc(ws, method, params, timeout_sec=timeout_sec)
-                return {"ok": True, "result": result, "events": events, "websocketUrl": self._ws_url()}
-
-        return self._run_async(run())
-
-    @staticmethod
-    def _payload_text(payload: dict[str, Any]) -> str:
-        for key in ("text", "delta", "content", "output", "message"):
-            value = payload.get(key)
-            if isinstance(value, str):
-                return value
-        value = payload.get("chunk")
-        if isinstance(value, dict):
-            for key in ("text", "delta", "content"):
-                if isinstance(value.get(key), str):
-                    return value.get(key) or ""
-        return ""
-
-    @staticmethod
-    def _coerce_reasoning_text(text: str) -> str:
-        raw = str(text or "")
-        cleaned = re.sub(
-            r"^\s*(?:(?:[^\s.]{1,16})\s+)?(?:processing|thinking|reasoning|analyzing|pondering|contemplating|musing|cogitating|ruminating|deliberating|mulling|reflecting|computing|synthesizing|formulating|brainstorming)\.\.\.\s*",
-            "",
-            raw,
-            flags=re.IGNORECASE,
-        )
-        if re.search(r"\b(?:current rewritten thinking|next thinking to process|provide the thinking content|don't see any .*thinking)\b", cleaned, flags=re.IGNORECASE):
-            return ""
-        return cleaned
-
-    @staticmethod
-    def _payload_tool_card(payload: dict[str, Any], status: str, fallback_id: str) -> dict[str, Any]:
-        nested = payload.get("tool") if isinstance(payload.get("tool"), dict) else {}
-        function = payload.get("function") if isinstance(payload.get("function"), dict) else {}
-        tool_id = str(
-            payload.get("tool_id")
-            or payload.get("toolCallId")
-            or payload.get("tool_call_id")
-            or payload.get("call_id")
-            or payload.get("id")
-            or nested.get("id")
-            or fallback_id
-        )
-        name = str(
-            payload.get("name")
-            or payload.get("tool_name")
-            or payload.get("toolName")
-            or nested.get("name")
-            or function.get("name")
-            or "Hermes tool"
-        )
-        args = (
-            payload.get("arguments")
-            or payload.get("args")
-            or payload.get("input")
-            or payload.get("parameters")
-            or nested.get("arguments")
-            or nested.get("args")
-            or function.get("arguments")
-            or {}
-        )
-        if not isinstance(args, dict):
-            args = {"input": args}
-        if not args and payload.get("args_text"):
-            args = {"input": payload.get("args_text")}
-        preview = payload.get("context") or payload.get("preview") or payload.get("command") or ""
-        if preview and not any(args.get(k) for k in ("command", "description", "input")):
-            args["command"] = str(preview)
-        result = (
-            payload.get("result")
-            or payload.get("summary")
-            or payload.get("output")
-            or payload.get("content")
-            or nested.get("result")
-            or nested.get("output")
-            or ""
-        )
-        error = payload.get("error") or nested.get("error") or ""
-        return {
-            "id": tool_id,
-            "name": name,
-            "status": "error" if error else status,
-            "arguments": args,
-            "args_preview": str(preview or ""),
-            "result": error or result or ("Running" if status == "running" else "Completed"),
-            "error": str(error or ""),
-        }
-
-    def send_chat_message(
-        self,
-        message: str,
-        session_id: str | None = None,
-        timeout_sec: int | None = None,
-        on_event=None,
-        run_id: str | None = None,
-    ) -> dict[str, Any]:
-        def emit_event(event_name: str, payload: dict[str, Any]) -> None:
-            if not on_event:
-                return
-            try:
-                on_event(event_name, payload)
-            except Exception:
-                pass
-
-        async def run() -> dict[str, Any]:
-            async with self._connect_ws() as ws:
-                stored_session_id = str(session_id or "").strip()
-                live_session_id = ""
-                if stored_session_id:
-                    try:
-                        resumed, _ = await self._rpc(ws, "session.resume", {"session_id": stored_session_id, "source": "virtual-office"}, timeout_sec=min(int(timeout_sec or self.timeout_sec), 30))
-                        live_session_id = str(resumed.get("session_id") or "")
-                        stored_session_id = str(resumed.get("session_key") or resumed.get("resumed") or stored_session_id)
-                    except Exception:
-                        live_session_id = ""
-                if not live_session_id:
-                    created, _ = await self._rpc(ws, "session.create", {"source": "virtual-office"}, timeout_sec=min(int(timeout_sec or self.timeout_sec), 30))
-                    live_session_id = str(created.get("session_id") or "")
-                    stored_session_id = str(created.get("stored_session_id") or created.get("session_key") or live_session_id)
-                if not live_session_id:
-                    raise RuntimeError("Hermes Desktop Backend did not return a live session id")
-
-                _, submit_events = await self._rpc(ws, "prompt.submit", {"session_id": live_session_id, "text": message}, timeout_sec=min(int(timeout_sec or self.timeout_sec), 30))
-
-                reply_parts: list[str] = []
-                reasoning_parts: list[str] = []
-                tools: list[dict[str, Any]] = []
-                tools_by_id: dict[str, dict[str, Any]] = {}
-                terminal_error = ""
-                tool_seq = 0
-                pending_events = list(submit_events or [])
-                deadline = time.monotonic() + int(timeout_sec or self.timeout_sec)
-                while True:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise TimeoutError("Hermes Desktop Backend chat timed out")
-                    if pending_events:
-                        params_obj = pending_events.pop(0)
-                        if not isinstance(params_obj, dict):
-                            continue
-                    else:
-                        item = await self._recv_json(ws, remaining)
-                        if item.get("method") != "event":
-                            continue
-                        params_obj = item.get("params") if isinstance(item.get("params"), dict) else {}
-                    payload = params_obj.get("payload") if isinstance(params_obj.get("payload"), dict) else {}
-                    event_type = str(params_obj.get("type") or params_obj.get("event") or payload.get("type") or payload.get("event") or "").lower()
-                    if not payload:
-                        payload = {k: v for k, v in params_obj.items() if k not in {"type", "event", "session_id"}}
-                    event_session = str(params_obj.get("session_id") or payload.get("session_id") or "")
-                    if event_session and event_session != live_session_id:
-                        continue
-                    if event_type in {"message.delta", "message_delta", "assistant.delta", "assistant_delta", "output.delta"}:
-                        text = self._payload_text(payload)
-                        if event_type == "message.delta":
-                            reply_parts.append(text)
-                        else:
-                            reply_parts.append(text)
-                        if text:
-                            emit_event("message.delta", {
-                                "delta": text,
-                                "reply": "".join(reply_parts),
-                                "sessionId": stored_session_id,
-                                "liveSessionId": live_session_id,
-                                "runId": run_id or "",
-                            })
-                    elif event_type in {"thinking.delta", "thinking_delta", "reasoning.delta", "reasoning_delta", "thought.delta", "thought_delta", "analysis.delta", "analysis_delta", "reasoning.available"}:
-                        text = self._coerce_reasoning_text(self._payload_text(payload))
-                        if text and text.strip() != "".join(reply_parts).strip():
-                            reasoning_parts.append(text)
-                            emit_event("reasoning.available", {
-                                    "text": text,
-                                    "thinking": "\n".join(reasoning_parts).strip(),
-                                    "sessionId": stored_session_id,
-                                    "liveSessionId": live_session_id,
-                                    "runId": run_id or "",
-                                })
-                    elif event_type in {"tool.start", "tool.started", "tool.progress", "tool.generating", "tool.update", "tool.updated", "tool_start", "tool_progress", "tool_generating", "tool_update", "tool.call.start", "tool_call.start", "tool_call.started", "tool_call.progress", "tool_call.generating", "tool_call.update"}:
-                        tool_seq += 1
-                        card = self._payload_tool_card(payload, "running", f"desktop-tool-{tool_seq}")
-                        tool_id = card["id"]
-                        tools_by_id[tool_id] = card
-                        tools.append(card)
-                        emit_event("tool.started", {
-                                "toolCard": card,
-                                "tool": card.get("name") or "Hermes tool",
-                                "preview": card.get("args_preview") or "",
-                                "sessionId": stored_session_id,
-                                "liveSessionId": live_session_id,
-                                "runId": run_id or "",
-                            })
-                    elif event_type in {"tool.complete", "tool.completed", "tool.end", "tool.ended", "tool.result", "tool.failed", "tool.error", "tool_complete", "tool_result", "tool_call.complete", "tool_call.completed", "tool_call.result", "tool_call.failed"}:
-                        tool_id = str(payload.get("tool_id") or payload.get("toolCallId") or payload.get("tool_call_id") or payload.get("call_id") or payload.get("id") or "")
-                        card = tools_by_id.get(tool_id) if tool_id else None
-                        if not card:
-                            card = self._payload_tool_card(payload, "done", tool_id or f"desktop-tool-{len(tools) + 1}")
-                            tools.append(card)
-                        update = self._payload_tool_card(payload, "error" if "fail" in event_type or "error" in event_type else "done", card.get("id") or "")
-                        card.update({k: v for k, v in update.items() if v not in ("", {}, None)})
-                        emit_event("tool.failed" if card.get("status") == "error" else "tool.completed", {
-                                "toolCard": card,
-                                "tool": card.get("name") or "Hermes tool",
-                                "preview": card.get("args_preview") or "",
-                                "error": card.get("error") or "",
-                                "sessionId": stored_session_id,
-                                "liveSessionId": live_session_id,
-                                "runId": run_id or "",
-                            })
-                    elif event_type in {"approval.request", "clarify.request", "sudo.request", "secret.request"}:
-                        terminal_error = "Hermes Desktop Backend is waiting for interactive input that Virtual Office cannot answer yet."
-                        break
-                    elif event_type in {"error", "run.failed", "message.error"}:
-                        terminal_error = str(payload.get("message") or payload.get("error") or "Hermes Desktop Backend error")
-                        break
-                    elif event_type in {"message.complete", "message.completed", "run.completed", "complete", "done"}:
-                        text = self._payload_text(payload)
-                        status = str(payload.get("status") or "complete")
-                        final_reply = text or "".join(reply_parts)
-                        return {
-                            "ok": status not in {"error", "interrupted"} and not terminal_error,
-                            "reply": final_reply,
-                            "stderr": terminal_error,
-                            "exitCode": 0 if status not in {"error", "interrupted"} and not terminal_error else 1,
-                            "sessionId": stored_session_id,
-                            "liveSessionId": live_session_id,
-                            "providerPath": "desktop",
-                            "tools": tools,
-                            "thinking": "\n".join(reasoning_parts).strip(),
-                            "reasoningTokens": 0,
-                            "error": terminal_error or (status if status in {"error", "interrupted"} else None),
-                        }
-                return {
-                    "ok": False,
-                    "reply": "".join(reply_parts),
-                    "stderr": terminal_error,
-                    "exitCode": 1,
-                    "sessionId": stored_session_id,
-                    "liveSessionId": live_session_id,
-                    "providerPath": "desktop",
-                    "tools": tools,
-                    "thinking": "\n".join(reasoning_parts).strip(),
-                    "reasoningTokens": 0,
-                    "error": terminal_error or "Hermes Desktop Backend chat ended without a final message.",
-                }
-
-        if not message.strip():
-            return {"ok": False, "error": "message is required", "reply": "", "exitCode": None, "sessionId": session_id or ""}
-        try:
-            return self._run_async(run())
-        except Exception as exc:
-            return {"ok": False, "error": str(exc), "reply": "", "stderr": str(exc)[:2000], "exitCode": None, "sessionId": session_id or "", "providerPath": "desktop"}
-
-    def test(self, verify_ws: bool = True) -> dict[str, Any]:
-        result: dict[str, Any] = {
-            "ok": False,
-            "url": self.base_url,
-            "logicalUrl": self._logical_url("/") if self.base_url else "",
-            "connectUrl": self._connect_url("/") if self.base_url else "",
-            "tcpHost": self.tcp_host or "",
-            "tcpPort": self.tcp_port or "",
-            "hostHeader": self.host_header or "",
-            "statusEndpoint": self._logical_url("/api/status") if self.base_url else "",
-            "websocketUrl": "",
-            "authRequired": False,
-            "chatReady": False,
-            "features": {"tuiGatewayJsonRpc": False},
-        }
-        if not self.base_url:
-            result["error"] = "Hermes Desktop Backend URL is not configured"
-            return result
-        try:
-            status = self.status()
-            auth_required = bool(status.get("auth_required"))
-            result.update({
-                "ok": True,
-                "status": status.get("status") or "ok",
-                "version": status.get("version") or "",
-                "activeSessions": status.get("active_sessions"),
-                "authRequired": auth_required,
-                "authProviders": status.get("auth_providers") or [],
-                "hermesHome": status.get("hermes_home") or "",
-                "websocketUrl": self._ws_url(),
-            })
-            if auth_required:
-                result["error"] = "Hermes Desktop Backend is reachable but requires dashboard authentication."
-                return result
-            if verify_ws:
-                rpc = self.rpc_call("session.active_list", {}, timeout_sec=min(int(self.timeout_sec), 5))
-                result["websocketOk"] = bool(rpc.get("ok"))
-                result["features"]["tuiGatewayJsonRpc"] = bool(rpc.get("ok"))
-                result["chatReady"] = bool(rpc.get("ok"))
-                if not rpc.get("ok"):
-                    result["error"] = rpc.get("error") or "Hermes Desktop Backend WebSocket did not accept JSON-RPC."
-            else:
-                result["chatReady"] = True
-                result["features"]["tuiGatewayJsonRpc"] = True
-        except urllib.error.HTTPError as exc:
-            body = ""
-            try:
-                body = exc.read().decode("utf-8", errors="replace")
-            except Exception:
-                body = ""
-            result["status"] = exc.code
-            result["error"] = body[:500] or str(exc)
-        except Exception as exc:
-            result["error"] = str(exc)[:500]
-        return result
-
-
 def discover_api_agents(
     api_url: str | None = None,
     api_key: str | None = None,
@@ -1682,463 +1147,3 @@ def discover_api_connections(
             seen_ids.add(agent_id)
             agents.append(agent)
     return agents
-
-
-def _expand_candidate_path(path: str | None) -> str:
-    return os.path.expandvars(os.path.expanduser(str(path or "").strip()))
-
-
-def _default_desktop_log_paths(hermes_home: str | None = None, extra_paths: list[str] | None = None) -> list[str]:
-    paths: list[str] = []
-    for item in extra_paths or []:
-        if item:
-            paths.append(_expand_candidate_path(item))
-    for env_name in ("VO_HERMES_DESKTOP_LOG_PATH", "HERMES_DESKTOP_LOG_PATH"):
-        value = os.environ.get(env_name)
-        if value:
-            paths.append(_expand_candidate_path(value))
-    if hermes_home:
-        paths.append(os.path.join(_expand_candidate_path(hermes_home), "logs", "desktop.log"))
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if local_app_data:
-        paths.append(os.path.join(_expand_candidate_path(local_app_data), "hermes", "logs", "desktop.log"))
-    paths.append(os.path.expanduser("~/.hermes/logs/desktop.log"))
-
-    seen = set()
-    result = []
-    for path in paths:
-        norm = os.path.normpath(path) if path else ""
-        key = norm.lower() if os.name == "nt" else norm
-        if norm and key not in seen:
-            seen.add(key)
-            result.append(norm)
-    return result
-
-
-def _tail_text(path: str, max_bytes: int = 262_144) -> str:
-    try:
-        with open(path, "rb") as f:
-            try:
-                f.seek(0, os.SEEK_END)
-                size = f.tell()
-                f.seek(max(0, size - max_bytes))
-            except OSError:
-                pass
-            return f.read(max_bytes).decode("utf-8", errors="replace")
-    except Exception:
-        return ""
-
-
-def _desktop_ports_from_log(path: str) -> list[int]:
-    text = _tail_text(path)
-    if not text:
-        return []
-    matches = []
-    pattern = re.compile(
-        r"HERMES_DASHBOARD_READY\s+port=(\d{2,5})|https?://(?:127\.0\.0\.1|localhost|\[::1\]):(\d{2,5})",
-        flags=re.IGNORECASE,
-    )
-    for match in pattern.finditer(text):
-        matches.append(match.group(1) or match.group(2))
-    ports: list[int] = []
-    for item in reversed(matches):
-        try:
-            port = int(item)
-        except Exception:
-            continue
-        if 1 <= port <= 65535 and port not in ports:
-            ports.append(port)
-    return ports
-
-
-def _port_from_url_or_host(value: str | None) -> int | None:
-    value = str(value or "").strip()
-    if not value:
-        return None
-    try:
-        parsed = urllib.parse.urlparse(value if "://" in value else f"http://{value}")
-        if parsed.port:
-            return int(parsed.port)
-    except Exception:
-        pass
-    match = re.search(r":(\d{2,5})(?:/|$)", value)
-    if not match:
-        return None
-    try:
-        port = int(match.group(1))
-        return port if 1 <= port <= 65535 else None
-    except Exception:
-        return None
-
-
-def _port_range_from_env() -> list[int]:
-    """Return bounded ports for optional Desktop route probing."""
-    raw = os.environ.get("VO_HERMES_DESKTOP_DISCOVERY_PORTS", "49152-65535")
-    ports: list[int] = []
-    for item in re.split(r"[\s,]+", raw.strip()):
-        if not item:
-            continue
-        if "-" in item:
-            left, right = item.split("-", 1)
-            try:
-                start = max(1, min(65535, int(left.strip())))
-                end = max(1, min(65535, int(right.strip())))
-            except Exception:
-                continue
-            if start > end:
-                start, end = end, start
-            ports.extend(range(start, end + 1))
-        else:
-            try:
-                port = int(item)
-            except Exception:
-                continue
-            if 1 <= port <= 65535:
-                ports.append(port)
-    seen = set()
-    result = []
-    for port in ports:
-        if port not in seen:
-            seen.add(port)
-            result.append(port)
-    return result[:20000]
-
-
-def _resolve_ipv4_host(host: str) -> str:
-    host = str(host or "").strip()
-    if not host:
-        return ""
-    try:
-        socket.inet_aton(host)
-        return host
-    except OSError:
-        pass
-    try:
-        infos = socket.getaddrinfo(host, 80, family=socket.AF_INET, type=socket.SOCK_STREAM)
-        if infos:
-            return infos[0][4][0]
-    except Exception:
-        return ""
-    return ""
-
-
-def _desktop_route_host_candidates(configured_host: str | None = None) -> list[tuple[str, str]]:
-    hosts: list[tuple[str, str]] = []
-    seen = set()
-
-    def add(host: str | None, source: str) -> None:
-        clean = str(host or "").strip()
-        if not clean:
-            return
-        key = clean.lower()
-        if key not in seen:
-            seen.add(key)
-            hosts.append((clean, source))
-
-    add(configured_host, "configured-route-host")
-    for item in re.split(r"[\s,]+", os.environ.get("VO_HERMES_DESKTOP_DISCOVERY_HOSTS", "").strip()):
-        add(item, "env-route-host")
-    add(os.environ.get("VO_HERMES_DESKTOP_DOCKER_HOST"), "env-docker-host")
-    add("host.docker.internal", "docker-host")
-    add("127.0.0.1", "direct-loopback")
-    return hosts
-
-
-def _scan_open_tcp_ports(host: str, ports: list[int], timeout_sec: float = 4.0) -> list[int]:
-    """Fast bounded TCP connect scan for user-triggered local Desktop discovery."""
-    target = _resolve_ipv4_host(host)
-    if not target or not ports:
-        return []
-    selector = selectors.DefaultSelector()
-    pending: dict[int, tuple[socket.socket, int]] = {}
-    open_ports: list[int] = []
-    deadline = time.monotonic() + max(0.25, min(float(timeout_sec or 4.0), 12.0))
-    batch_size = max(16, min(int(os.environ.get("VO_HERMES_DESKTOP_DISCOVERY_BATCH", "256") or 256), 1024))
-    remaining = iter(ports)
-
-    def close_fd(fd: int) -> None:
-        item = pending.pop(fd, None)
-        if not item:
-            return
-        sock, _ = item
-        try:
-            selector.unregister(sock)
-        except Exception:
-            pass
-        try:
-            sock.close()
-        except Exception:
-            pass
-
-    try:
-        exhausted = False
-        while time.monotonic() < deadline and (pending or not exhausted):
-            while len(pending) < batch_size and time.monotonic() < deadline and not exhausted:
-                try:
-                    port = next(remaining)
-                except StopIteration:
-                    exhausted = True
-                    break
-                try:
-                    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    sock.setblocking(False)
-                    err = sock.connect_ex((target, int(port)))
-                    if err == 0:
-                        open_ports.append(int(port))
-                        sock.close()
-                    elif err in {errno.EINPROGRESS, errno.EWOULDBLOCK, errno.EALREADY}:
-                        selector.register(sock, selectors.EVENT_WRITE)
-                        pending[sock.fileno()] = (sock, int(port))
-                    else:
-                        sock.close()
-                except Exception:
-                    try:
-                        sock.close()  # type: ignore[name-defined]
-                    except Exception:
-                        pass
-
-            wait = max(0.0, min(0.05, deadline - time.monotonic()))
-            events = selector.select(wait)
-            if not events and len(pending) >= batch_size:
-                continue
-            for key, _ in events:
-                fd = key.fd
-                sock, port = pending.get(fd, (None, None))  # type: ignore[assignment]
-                if not sock:
-                    continue
-                try:
-                    err = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-                    if err == 0:
-                        open_ports.append(int(port))
-                except Exception:
-                    pass
-                close_fd(fd)
-    finally:
-        for fd in list(pending):
-            close_fd(fd)
-        try:
-            selector.close()
-        except Exception:
-            pass
-
-    seen = set()
-    result = []
-    for port in open_ports:
-        if port not in seen:
-            seen.add(port)
-            result.append(port)
-    return result
-
-
-def _loopback_listener_ports(limit: int = 12) -> list[tuple[int, str]]:
-    commands = [
-        ["ss", "-ltnp"],
-        ["ss", "-ltn"],
-        ["netstat", "-an"],
-        ["lsof", "-nP", "-iTCP", "-sTCP:LISTEN"],
-    ]
-    found: dict[int, tuple[int, str]] = {}
-    for command in commands:
-        if not shutil.which(command[0]):
-            continue
-        try:
-            proc = subprocess.run(command, capture_output=True, text=True, timeout=2)
-        except Exception:
-            continue
-        output = (proc.stdout or "") + "\n" + (proc.stderr or "")
-        for raw_line in output.splitlines():
-            line = raw_line.strip()
-            if not line or "LISTEN" not in line.upper():
-                continue
-            if not re.search(r"(?:127\.0\.0\.1|localhost|\[::1\]|::1)", line, flags=re.IGNORECASE):
-                continue
-            ports = re.findall(r"(?:127\.0\.0\.1|localhost|\[::1\]|::1)[\].:]*(\d{2,5})", line, flags=re.IGNORECASE)
-            if not ports:
-                ports = re.findall(r"\*:(\d{2,5})", line)
-            for item in ports:
-                try:
-                    port = int(item)
-                except Exception:
-                    continue
-                if not (1 <= port <= 65535):
-                    continue
-                lower = line.lower()
-                priority = 0
-                if "hermes" in lower:
-                    priority = 3
-                elif "python" in lower:
-                    priority = 2
-                elif port >= 49152:
-                    priority = 1
-                if priority <= 0:
-                    continue
-                existing = found.get(port)
-                if not existing or priority > existing[0]:
-                    label = "hermes" if priority == 3 else ("python" if priority == 2 else "loopback")
-                    found[port] = (priority, label)
-        if found:
-            break
-    ordered = sorted(found.items(), key=lambda item: (-item[1][0], -item[0]))
-    return [(port, detail) for port, (_, detail) in ordered[:limit]]
-
-
-def discover_desktop_backend(
-    *,
-    hermes_home: str | None = None,
-    desktop_url: str | None = None,
-    desktop_token: str | None = None,
-    desktop_host_header: str | None = None,
-    desktop_tcp_host: str | None = None,
-    desktop_tcp_port: int | str | None = None,
-    desktop_log_path: str | None = None,
-    timeout_sec: int = 2,
-) -> dict[str, Any]:
-    """Find a running Hermes Desktop `hermes serve` backend when possible."""
-    port_sources: dict[int, list[str]] = {}
-
-    def add_port(port: int | None, source: str) -> None:
-        if not port or not (1 <= int(port) <= 65535):
-            return
-        port_sources.setdefault(int(port), [])
-        if source not in port_sources[int(port)]:
-            port_sources[int(port)].append(source)
-
-    for path in _default_desktop_log_paths(hermes_home, [desktop_log_path] if desktop_log_path else []):
-        for port in _desktop_ports_from_log(path)[:5]:
-            add_port(port, "log:desktop.log")
-
-    add_port(_port_from_url_or_host(desktop_url), "configured-url")
-    add_port(_port_from_url_or_host(desktop_host_header), "configured-host-header")
-    for port, detail in _loopback_listener_ports():
-        add_port(port, f"listener:{detail}")
-
-    candidates: list[dict[str, Any]] = []
-    route_seen = set()
-    for port, sources in port_sources.items():
-        logical_url = f"http://127.0.0.1:{port}"
-        host_header = f"127.0.0.1:{port}"
-        route_options: list[tuple[str, int | str | None, str]] = []
-        if desktop_tcp_host:
-            route_options.append((str(desktop_tcp_host), desktop_tcp_port or None, "configured-route"))
-            route_options.append((str(desktop_tcp_host), None, "configured-host-current-port"))
-        route_options.append(("", None, "direct-loopback"))
-
-        for tcp_host, tcp_port, route_source in route_options:
-            key = (logical_url, host_header, tcp_host or "", str(tcp_port or ""))
-            if key in route_seen:
-                continue
-            route_seen.add(key)
-            client = HermesDesktopBackendClient(
-                base_url=logical_url,
-                token=desktop_token,
-                host_header=host_header,
-                tcp_host=tcp_host,
-                tcp_port=tcp_port,
-                timeout_sec=max(1, min(int(timeout_sec or 2), 5)),
-            )
-            status = client.test(verify_ws=True)
-            candidate = {
-                "ok": bool(status.get("ok")),
-                "chatReady": bool(status.get("chatReady")),
-                "desktopUrl": logical_url,
-                "desktopHostHeader": host_header,
-                "desktopTcpHost": status.get("tcpHost") or tcp_host or "",
-                "desktopTcpPort": status.get("tcpPort") or tcp_port or "",
-                "logicalUrl": status.get("logicalUrl") or logical_url,
-                "connectUrl": status.get("connectUrl") or "",
-                "websocketOk": bool(status.get("websocketOk")),
-                "authRequired": bool(status.get("authRequired")),
-                "version": status.get("version") or "",
-                "error": status.get("error") or "",
-                "sources": sources + [route_source],
-            }
-            candidates.append(candidate)
-
-    candidates.sort(key=lambda item: (
-        not item.get("chatReady"),
-        not item.get("ok"),
-        "log:" not in " ".join(item.get("sources") or []),
-        item.get("error") or "",
-    ))
-    best = candidates[0] if candidates else {}
-    discovered = any(
-        item.get("chatReady") or any(str(source).startswith("log:") for source in (item.get("sources") or []))
-        for item in candidates
-    )
-    result = {
-        "ok": bool(best.get("chatReady")),
-        "found": bool(discovered),
-        "desktopUrl": best.get("desktopUrl") or "",
-        "desktopHostHeader": best.get("desktopHostHeader") or "",
-        "desktopTcpHost": best.get("desktopTcpHost") or "",
-        "desktopTcpPort": best.get("desktopTcpPort") or "",
-        "logicalUrl": best.get("logicalUrl") or "",
-        "connectUrl": best.get("connectUrl") or "",
-        "chatReady": bool(best.get("chatReady")),
-        "websocketOk": bool(best.get("websocketOk")),
-        "authRequired": bool(best.get("authRequired")),
-        "version": best.get("version") or "",
-        "sources": best.get("sources") or [],
-        "candidates": candidates[:12],
-    }
-    if not candidates or not discovered:
-        result["error"] = "No Hermes Desktop backend was found. Open Hermes Desktop, then try discovery again."
-    elif not best.get("chatReady"):
-        result["error"] = best.get("error") or "Hermes Desktop was found, but the backend was not reachable from this server."
-    return result
-
-
-def discover_desktop_agents(
-    desktop_url: str | None = None,
-    desktop_token: str | None = None,
-    desktop_host_header: str | None = None,
-    desktop_tcp_host: str | None = None,
-    desktop_tcp_port: int | str | None = None,
-    *,
-    enabled: bool = True,
-    timeout_sec: int = 5,
-) -> list[dict[str, Any]]:
-    """Return a Desktop Backend-backed Hermes agent when `hermes serve` is reachable."""
-    if not enabled or not desktop_url:
-        return []
-
-    client = HermesDesktopBackendClient(
-        base_url=desktop_url,
-        token=desktop_token,
-        host_header=desktop_host_header,
-        tcp_host=desktop_tcp_host,
-        tcp_port=desktop_tcp_port,
-        timeout_sec=timeout_sec,
-    )
-    status = client.test(verify_ws=False)
-    if not status.get("ok") or status.get("authRequired"):
-        return []
-
-    return [{
-        "id": "hermes-default",
-        "statusKey": "hermes-default",
-        "providerKind": "hermes",
-        "providerType": "runtime",
-        "providerAgentId": "default",
-        "profile": "default",
-        "name": "Hermes Desktop",
-        "emoji": os.environ.get("VO_HERMES_AGENT_EMOJI", "⚕️"),
-        "role": "Hermes Agent",
-        "model": status.get("model") or "Hermes Desktop",
-        "provider": "Hermes Desktop Backend",
-        "gateway": "desktop",
-        "workspace": "",
-        "home": status.get("hermesHome") or "",
-        "binary": "",
-        "desktopUrl": client.base_url,
-        "desktopLogicalUrl": status.get("logicalUrl") or "",
-        "desktopTcpHost": status.get("tcpHost") or "",
-        "desktopTcpPort": status.get("tcpPort") or "",
-        "desktopHostHeader": status.get("hostHeader") or "",
-        "lastActiveAt": int(time.time()),
-        "capabilities": ["chat", "status", "sessions", "desktop"],
-        "connectionModes": ["desktop"],
-        "cliAvailable": False,
-        "apiAvailable": False,
-        "desktopAvailable": True,
-    }]

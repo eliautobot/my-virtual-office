@@ -46,7 +46,7 @@ def main() -> int:
     if status != 200 or not health.get("ok"):
         failures.append("server health failed")
 
-    status, conformance = get_json(args.base_url, "/api/providers/conformance")
+    status, conformance = get_json(args.base_url, "/api/office/providers/conformance")
     results.append({
         "check": "conformance",
         "http": status,

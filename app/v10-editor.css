@@ -1,0 +1,594 @@
+/* Office editor (v0.10 polish). Loaded after v08-office.css; tokens from ui-tokens.css.
+   Catalog grid + thumbnails (OE-12), search empty state (OE-13), status / peek bar (OE-04, OE-07, OE-09),
+   phone sheet with the action bar as its footer (OE-05, OE-06), one item toolbar (OE-15), snap + select area
+   (OE-11, OE-27), shortcut card (OE-17), paint tab (OE-10), colour window (OE-08, OE-14), edit pill (OE-28). */
+
+/* ---------- edit pill: mode · size · save state (OE-28) ---------- */
+.vo-office-save-status { top: 10px; }
+.vo-office-save-status > span + span::before { content: '·'; margin-right: var(--vo-space-2); color: var(--vo-text-3); }
+.vo-office-save-status .vo-osp-mode { color: var(--vo-accent); font-weight: var(--vo-weight-bold); }
+.vo-office-save-status .vo-osp-size { color: var(--vo-text-2); }
+.vo-office-save-status.is-saved .vo-osp-state { color: var(--vo-success); }
+.vo-office-save-status.is-failed .vo-osp-state { color: var(--vo-danger); }
+.vo-office-save-status.is-saved, .vo-office-save-status.is-saving, .vo-office-save-status.is-idle { color: var(--vo-text-2); }
+/* R-07: on phones the pill takes the top bar's title spot while editing, so it no longer sits on the office's
+   top wall beside the top handle (the editor keeps a 14 px band for that handle, R-06/R-07 insets). */
+@media (max-width: 900px) {
+  body.ui-office-editing .vo-office-save-status {
+    position: fixed;
+    top: calc(var(--vo-safe-top, 0px) + 8px);
+    left: var(--vo-space-3);
+    transform: none;
+    max-width: calc(100% - 112px);
+    overflow: hidden;
+    z-index: calc(var(--vo-z-chrome) + 1);
+  }
+  body.ui-office-editing .vo-topbar-title { visibility: hidden; }
+}
+
+/* ---------- catalog: 3 compact columns with real thumbnails ---------- */
+.furniture-catalog .catalog-items,
+.furniture-catalog .catalog-quick-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  padding: 4px 0 6px;
+}
+.furniture-catalog .catalog-item,
+.furniture-catalog .catalog-quick-item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 2px;
+  min-width: 0;
+  min-height: 88px;
+  padding: 6px 4px 5px;
+  border: var(--vo-border-w) solid var(--vo-border-subtle);
+  border-radius: var(--vo-radius-sm);
+  background: var(--vo-surface-2);
+  color: var(--vo-text-1);
+  text-align: center;
+  cursor: pointer;
+}
+.furniture-catalog .catalog-item, .furniture-catalog .catalog-quick-item { user-select: none; -webkit-user-select: none; }
+body.vo-editor-dragging-item, body.vo-editor-dragging-item * { cursor: grabbing !important; }
+.furniture-catalog .catalog-item:hover,
+.furniture-catalog .catalog-quick-item:hover { border-color: var(--vo-border-strong); background: var(--vo-surface-3); }
+.furniture-catalog .catalog-item.selected { border-color: var(--vo-accent); box-shadow: 0 0 0 1px var(--vo-accent) inset; background: var(--vo-accent-soft); }
+.furniture-catalog .catalog-item:focus-visible,
+.furniture-catalog .catalog-quick-item:focus-visible { outline: 2px solid var(--vo-focus); outline-offset: 1px; }
+.furniture-catalog .catalog-icon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  font-size: 24px;
+  line-height: 1;
+}
+.catalog-thumb { width: 44px; height: 44px; image-rendering: pixelated; image-rendering: crisp-edges; }
+.furniture-catalog .catalog-label {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  font-size: var(--vo-text-xs);
+  font-weight: var(--vo-weight-medium);
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.furniture-catalog .catalog-item-meta { font-size: 11px; line-height: 1.2; color: var(--vo-text-3); }
+.furniture-catalog .catalog-fav {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 22px;
+  height: 22px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--vo-text-3);
+  font-size: 13px;
+  line-height: 22px;
+  opacity: 0;
+}
+.furniture-catalog .catalog-item:hover .catalog-fav,
+.furniture-catalog .catalog-fav.active,
+.furniture-catalog .catalog-fav:focus-visible { opacity: 1; }
+.furniture-catalog .catalog-fav.active { color: var(--vo-warning); }
+@media (pointer: coarse) { .furniture-catalog .catalog-fav { opacity: .7; } }
+.furniture-catalog .catalog-quick[hidden] { display: none; }
+.catalog-empty { margin: var(--vo-space-3) var(--vo-space-2); color: var(--vo-text-2); font-size: var(--vo-text-sm); }
+.catalog-empty[hidden] { display: none; }
+
+/* The search box only on Objects (OE-13). */
+.furniture-catalog[data-pane]:not([data-pane="objects"]) .catalog-search { display: none; }
+
+/* ---------- tips: folded, one line (OE-27) ---------- */
+.furniture-catalog .catalog-tips {
+  margin: var(--vo-space-2) var(--vo-space-3) var(--vo-space-3);
+  padding: 0;
+  border: var(--vo-border-w) solid var(--vo-border-subtle);
+  border-radius: var(--vo-radius-sm);
+  background: var(--vo-surface-0);
+  color: var(--vo-text-2);
+  font-size: var(--vo-text-xs);
+  line-height: 1.45;
+}
+.furniture-catalog .catalog-tips > summary {
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--vo-text-2);
+  font-weight: var(--vo-weight-medium);
+}
+.furniture-catalog .catalog-tips-body { padding: 0 10px 8px; }
+.furniture-catalog .catalog-tips-body p { margin: 4px 0; }
+.furniture-catalog .catalog-tips[hidden] { display: none; }
+
+/* ---------- paint + pet panes ---------- */
+.catalog-pane { padding: var(--vo-space-3); color: var(--vo-text-1); font-size: var(--vo-text-sm); }
+.catalog-pane[hidden] { display: none; }
+.vo-pane-intro { margin: 0 0 var(--vo-space-2); color: var(--vo-text-2); font-size: var(--vo-text-xs); line-height: 1.45; }
+.vo-paint-section + .vo-paint-section { margin-top: var(--vo-space-4); padding-top: var(--vo-space-3); border-top: var(--vo-border-w) solid var(--vo-border-subtle); }
+.vo-paint-title { margin: 0 0 var(--vo-space-1); font-size: var(--vo-text-sm); font-weight: var(--vo-weight-bold); color: var(--vo-text-1); }
+.vo-paint-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.vo-paint-grid--walls { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.vo-paint-swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 5px 3px 4px;
+  border: var(--vo-border-w) solid var(--vo-border-subtle);
+  border-radius: var(--vo-radius-sm);
+  background: var(--vo-surface-2);
+  color: var(--vo-text-1);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.vo-paint-swatch canvas { width: 48px; height: 30px; border-radius: 3px; image-rendering: pixelated; }
+.vo-paint-swatch > span:last-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vo-paint-swatch:hover { border-color: var(--vo-border-strong); }
+.vo-paint-swatch.is-selected { border-color: var(--vo-accent); box-shadow: 0 0 0 1px var(--vo-accent) inset; }
+.vo-wall-chip { display: block; width: 30px; height: 30px; border-radius: 3px; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .25); }
+.vo-paint-custom { display: flex; gap: var(--vo-space-3); margin: var(--vo-space-2) 0; }
+.vo-paint-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.vo-paint-actions .vo-btn.is-active { border-color: var(--vo-accent); background: var(--vo-accent); color: var(--vo-accent-ink); }
+.vo-field { display: flex; align-items: center; gap: var(--vo-space-2); margin: 6px 0; color: var(--vo-text-2); font-size: var(--vo-text-sm); }
+.vo-field > span:first-child { min-width: 44px; }
+.vo-field-check { color: var(--vo-text-1); }
+/* I16: the checkbox sits on the line of its label (ui-modern.css stacks .vo-field fields in a column). */
+.vo-field.vo-field-check { flex-direction: row; align-items: center; justify-content: flex-start; }
+.vo-field.vo-field-check > input[type="checkbox"] { flex: none; margin: 0; }
+@media (pointer: coarse) { .vo-field.vo-field-check { min-height: 44px; } }
+.vo-field .vo-input { flex: 1 1 auto; min-height: 32px; }
+/* v0.12 pets: species tiles (pixel art drawn by the pet code) in the Pet tab. */
+.vo-field.vo-pet-kind { flex-direction: column; align-items: stretch; }
+.vo-pet-species { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.vo-pet-tile { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 2px; min-height: 64px;
+  padding: 4px 2px; border: var(--vo-border-w, 1px) solid var(--vo-border-subtle); border-radius: var(--vo-radius-sm);
+  background: var(--vo-surface-2); color: var(--vo-text-1); font: inherit; font-size: var(--vo-text-xs); cursor: pointer; }
+.vo-pet-tile img { display: block; height: 36px; width: auto; max-width: 100%; object-fit: contain; image-rendering: pixelated; }
+.vo-pet-tile:hover { border-color: var(--vo-border-strong); }
+.vo-pet-tile[aria-checked="true"] { border-color: var(--vo-accent); box-shadow: inset 0 0 0 1px var(--vo-accent); background: var(--vo-accent-soft, var(--vo-surface-3)); }
+.vo-pet-tile:focus-visible { outline: 2px solid var(--vo-focus, var(--vo-accent)); outline-offset: 1px; }
+.vo-pet-hint { margin-top: 2px; }
+.vo-color-input {
+  width: 40px;
+  height: 30px;
+  padding: 2px;
+  border: var(--vo-border-w) solid var(--vo-border-strong);
+  border-radius: var(--vo-radius-xs);
+  background: var(--vo-surface-0);
+  cursor: pointer;
+}
+
+/* ---------- item toolbar: one style, SVG icons, the item name (OE-15) ---------- */
+.furniture-floating-toolbar {
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: var(--vo-border-w) solid var(--vo-border-strong);
+  border-radius: var(--vo-radius-md);
+  background: var(--vo-surface-1);
+  box-shadow: var(--vo-shadow-2);
+}
+.furniture-floating-toolbar .ftb-name {
+  display: inline-block;
+  max-width: 150px;
+  padding: 0 8px 0 6px;
+  overflow: hidden;
+  color: var(--vo-text-1);
+  font: var(--vo-weight-bold) var(--vo-text-xs) / 1 var(--vo-font-ui);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.furniture-floating-toolbar .ftb-btn {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--vo-radius-sm);
+  background: transparent;
+  color: var(--vo-text-1);
+  cursor: pointer;
+}
+.furniture-floating-toolbar .ftb-btn[hidden] { display: none; }
+.furniture-floating-toolbar .ftb-btn .vo-icon { width: 16px; height: 16px; fill: currentColor; }
+.furniture-floating-toolbar .ftb-btn:hover { background: var(--vo-surface-3); }
+.furniture-floating-toolbar .ftb-btn:focus-visible { outline: 2px solid var(--vo-focus); outline-offset: -2px; }
+.furniture-floating-toolbar .ftb-btn.delete-btn:hover { background: var(--vo-danger-soft); color: var(--vo-danger); }
+.furniture-floating-toolbar .ftb-btn.is-set::after {
+  content: '';
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--vo-success);
+}
+.furniture-floating-toolbar .ftb-sep { width: 1px; height: 20px; margin: 0 2px; background: var(--vo-border-subtle); }
+.furniture-floating-toolbar.is-docked .ftb-btn { width: 40px; height: 40px; }
+
+/* ---------- edit bar extras: Select area, Snap, ? ---------- */
+.ui-edit-toolbar .vo-ed-extra { display: inline-flex; align-items: center; gap: var(--vo-space-1); }
+.ui-edit-toolbar .vo-ed-select.is-active { border-color: var(--vo-accent); background: var(--vo-accent-soft); color: var(--vo-text-1); }
+.vo-ed-snap {
+  display: inline-flex;
+  align-items: center;
+  height: var(--vo-control-h);
+  padding: 0 2px 0 8px;
+  border: var(--vo-border-w) solid var(--vo-border-subtle);
+  border-radius: var(--vo-radius-sm);
+  background: var(--vo-surface-0);
+  color: var(--vo-text-2);
+}
+.vo-ed-snap > .vo-icon { width: 14px; height: 14px; margin-right: 4px; fill: currentColor; }
+.ui-edit-toolbar .vo-ed-snap-opt {
+  min-height: 0;
+  height: calc(var(--vo-control-h) - 8px);
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--vo-radius-xs);
+  background: transparent;
+  color: var(--vo-text-2);
+  font: var(--vo-weight-medium) var(--vo-text-xs) / 1 var(--vo-font-ui);
+  cursor: pointer;
+}
+.ui-edit-toolbar .vo-ed-snap-opt.is-active { background: var(--vo-accent); color: var(--vo-accent-ink); }
+
+/* ---------- status bar (desktop) / peek bar (phone) ---------- */
+.vo-editor-status {
+  position: fixed;
+  left: 50%;
+  bottom: calc(var(--vo-dock-h) + var(--vo-space-3) + var(--vo-control-h) + 22px);
+  z-index: var(--vo-z-sheet);
+  display: flex;
+  align-items: center;
+  gap: var(--vo-space-2);
+  max-width: min(640px, calc(100vw - 32px));
+  padding: 6px 6px 6px 8px;
+  border: var(--vo-border-w) solid var(--vo-border-strong);
+  border-radius: var(--vo-radius-md);
+  background: var(--vo-glass);
+  box-shadow: var(--vo-shadow-2);
+  color: var(--vo-text-1);
+  font: var(--vo-weight-regular) var(--vo-text-sm) / 1.3 var(--vo-font-ui);
+  transform: translateX(-50%);
+  backdrop-filter: blur(14px);
+}
+.vo-editor-status[hidden] { display: none; }
+.vo-editor-status .vo-es-thumb { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 32px; border-radius: var(--vo-radius-xs); background: var(--vo-surface-2); }
+.vo-editor-status .vo-es-thumb[hidden] { display: none; }
+.vo-editor-status .vo-es-thumb img { width: 32px; height: 32px; image-rendering: pixelated; }
+.vo-editor-status .vo-es-text { display: flex; flex-direction: column; min-width: 0; }
+.vo-editor-status .vo-es-title { overflow: hidden; font-weight: var(--vo-weight-bold); text-overflow: ellipsis; white-space: nowrap; }
+.vo-editor-status .vo-es-title:empty { display: none; }
+.vo-editor-status .vo-es-why { color: var(--vo-success); }
+.vo-editor-status.is-bad { border-color: var(--vo-danger); }
+.vo-editor-status.is-bad .vo-es-why { color: var(--vo-danger); font-weight: var(--vo-weight-medium); }
+.vo-editor-status .vo-es-actions { display: flex; gap: 6px; margin-left: auto; padding-left: var(--vo-space-2); }
+.vo-editor-status .vo-es-actions .vo-btn { white-space: nowrap; }
+.vo-editor-status .vo-es-actions .vo-icon { width: 14px; height: 14px; margin-right: 4px; fill: currentColor; }
+
+/* ---------- shortcut card (OE-17) ---------- */
+.vo-editor-keys {
+  position: fixed;
+  right: var(--vo-space-4);
+  bottom: calc(var(--vo-dock-h) + var(--vo-space-3) + var(--vo-control-h) + 24px);
+  z-index: var(--vo-z-popover);
+  width: min(420px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 140px));
+  overflow: auto;
+  padding: var(--vo-space-3) var(--vo-space-4) var(--vo-space-4);
+  border: var(--vo-border-w) solid var(--vo-border-strong);
+  border-radius: var(--vo-radius-lg);
+  background: var(--vo-surface-1);
+  box-shadow: var(--vo-shadow-3);
+  color: var(--vo-text-1);
+}
+.vo-editor-keys[hidden] { display: none; }
+.vo-ek-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--vo-space-2); }
+.vo-ek-title { margin: 0; font-size: var(--vo-text-md); }
+.vo-ek-list { display: grid; grid-template-columns: auto 1fr; gap: 6px var(--vo-space-3); margin: 0; font-size: var(--vo-text-sm); }
+.vo-ek-list dt { color: var(--vo-text-1); white-space: nowrap; }
+.vo-ek-list dd { margin: 0; color: var(--vo-text-2); }
+.vo-ek-list kbd {
+  display: inline-block;
+  min-width: 18px;
+  padding: 1px 6px;
+  border: var(--vo-border-w) solid var(--vo-border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--vo-radius-xs);
+  background: var(--vo-surface-2);
+  font: var(--vo-weight-medium) var(--vo-text-xs) / 1.4 var(--vo-font-mono);
+  text-align: center;
+}
+
+/* ---------- colour window (OE-08, OE-14) ---------- */
+.vo-editor-color {
+  position: fixed;
+  z-index: var(--vo-z-popover);
+  display: none;
+  flex-direction: column;
+  gap: var(--vo-space-2);
+  width: 248px;
+  padding: var(--vo-space-3);
+  border: var(--vo-border-w) solid var(--vo-border-strong);
+  border-radius: var(--vo-radius-md);
+  background: var(--vo-surface-1);
+  box-shadow: var(--vo-shadow-3);
+  color: var(--vo-text-1);
+  font: var(--vo-weight-regular) var(--vo-text-sm) / 1.3 var(--vo-font-ui);
+}
+.vo-ec-head { display: flex; align-items: center; justify-content: space-between; }
+.vo-ec-title { font-weight: var(--vo-weight-bold); }
+.vo-ec-row { display: flex; align-items: center; gap: var(--vo-space-2); }
+.vo-ec-row[hidden] { display: none; }
+.vo-ec-row > span { min-width: 52px; color: var(--vo-text-2); }
+.vo-ec-hex { width: 84px; min-height: 30px; font-family: var(--vo-font-mono); font-size: var(--vo-text-xs); }
+.vo-ec-sub { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; color: var(--vo-text-2); font-size: var(--vo-text-xs); }
+.vo-ec-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.vo-ec-swatch {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  min-height: 0;
+  padding: 0;
+  border: var(--vo-border-w) solid rgba(255, 255, 255, .3);
+  border-radius: var(--vo-radius-xs);
+  cursor: pointer;
+}
+.vo-ec-swatch:focus-visible { outline: 2px solid var(--vo-focus); outline-offset: 1px; }
+.vo-ec-fav-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  display: none;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--vo-surface-3);
+  color: var(--vo-text-1);
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.vo-ec-fav:hover .vo-ec-fav-remove, .vo-ec-fav:focus-within .vo-ec-fav-remove { display: block; }
+@media (pointer: coarse) { .vo-ec-fav-remove { display: block; width: 20px; height: 20px; line-height: 20px; } }
+.vo-ec-empty { color: var(--vo-text-3); font-size: var(--vo-text-xs); }
+
+/* ---------- canvas resize grips: labelled (OE-24) ---------- */
+
+/* ---------- phones and narrow windows: sheet + footer bar ---------- */
+@media (max-width: 900px) {
+  body.ui-office-editing .ui-edit-toolbar {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-width: none;
+    justify-content: space-between;
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom, 0px));
+    border-width: 1px 0 0;
+    border-radius: 0;
+    transform: none;
+    overflow-x: auto;
+  }
+  /* v0.13 mobileui: the catalog is a bottom sheet with the dashboard sheet's handle: peek (handle +
+     header), half (the old fixed height) or full (up to the top bar), set by v10-editor.js. */
+  body {
+    --vo-edsheet-peek: 58px;
+    --vo-edsheet-h: min(52dvh, 480px);
+  }
+  body.vo-edsheet-peek { --vo-edsheet-h: var(--vo-edsheet-peek); }
+  body.vo-edsheet-full { --vo-edsheet-h: calc(100dvh - var(--vo-topbar-h, 44px) - var(--vo-safe-top, 0px) - var(--vo-control-h) - 13px - env(safe-area-inset-bottom, 0px)); }
+  body.ui-office-editing .furniture-catalog {
+    bottom: calc(var(--vo-control-h) + 13px + env(safe-area-inset-bottom, 0px));
+    height: var(--vo-edsheet-h);
+    border-radius: 16px 16px 0 0;
+    transition: transform .2s ease, height var(--vo-dur, .18s) var(--vo-ease, ease);
+  }
+  body.ui-office-editing .furniture-catalog.is-dragging { transition: none; }
+  /* the handle overlays the header's top band: the catalog's own layout does not move */
+  .furniture-catalog > .vo-edsheet-grab { position: absolute; top: 0; left: 0; right: 0; z-index: 2; flex: none; cursor: grab; }
+  .furniture-catalog > .vo-edsheet-grab::after { inset: -4px 30% -12px; }
+  .furniture-catalog > .vo-edsheet-grab:focus-visible { outline: 2px solid var(--vo-accent); outline-offset: -2px; }
+  body.ui-office-editing .furniture-catalog .catalog-header { cursor: grab; touch-action: none; }
+  /* A compact head so the sheet shows two rows of items, not one. */
+  body.ui-office-editing .furniture-catalog .catalog-header { min-height: 40px; padding-top: 4px; padding-bottom: 4px; }
+  body.ui-office-editing .furniture-catalog .catalog-tools { padding: 6px 12px; }
+  body.ui-office-editing .furniture-catalog .catalog-search { min-height: 36px; margin-bottom: 6px; }
+  body.ui-office-editing .furniture-catalog .catalog-tabs button { min-height: 34px; }
+  .furniture-catalog .catalog-tips { margin-top: var(--vo-space-1); margin-bottom: var(--vo-space-2); }
+  /* While placing or painting the sheet folds away; the status bar is the peek bar. */
+  /* (v0.13: the sheet now stays open while placing, the office is in view above it; only a full-height
+     sheet folds away then) */
+  body.ui-office-editing.vo-editor-peek.vo-edsheet-full .furniture-catalog.visible { transform: translateY(calc(100% + 80px)); visibility: hidden; }
+  .vo-editor-status {
+    left: 8px;
+    right: 8px;
+    bottom: calc(var(--vo-control-h) + 21px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
+    transform: none;
+  }
+  /* the status / placing bar rides on top of the open sheet */
+  body.ui-office-editing .vo-editor-status { bottom: calc(var(--vo-control-h) + 21px + env(safe-area-inset-bottom, 0px) + var(--vo-edsheet-h)); }
+  body.ui-office-editing.vo-editor-peek.vo-edsheet-full .vo-editor-status { bottom: calc(var(--vo-control-h) + 21px + env(safe-area-inset-bottom, 0px)); }
+  .furniture-catalog .catalog-tools { display: block; }
+  .furniture-catalog .catalog-search { margin-bottom: 8px; }
+  .furniture-catalog .catalog-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); max-width: none; width: 100%; }
+  .furniture-catalog .catalog-tabs button { min-width: 0; padding-left: 4px; padding-right: 4px; }
+  .ui-edit-toolbar .vo-ed-select .vo-btn-label, .ui-edit-toolbar .vo-ed-help { display: none; }
+  .ui-edit-toolbar .vo-ed-snap-opt:not(.is-active) { display: none; }
+  .ui-edit-toolbar .vo-ed-snap { padding-right: 2px; }
+  .vo-editor-keys { right: 8px; left: 8px; width: auto; bottom: calc(var(--vo-control-h) + 24px); }
+  .vo-editor-color { left: 8px !important; right: 8px; width: auto; }
+}
+@media (max-width: 640px) {
+  body.ui-office-editing .ui-edit-toolbar { gap: 4px; }
+  /* Icon-only Undo / Redo / Fit so the whole bar fits a phone (the titles stay as tooltips and names). */
+  body.ui-office-editing .ui-edit-toolbar #btn-undo-edit,
+  body.ui-office-editing .ui-edit-toolbar #btn-redo-edit,
+  body.ui-office-editing .ui-edit-toolbar [data-vo-map="fit"] { font-size: 0; gap: 0; min-width: 40px; justify-content: center; }
+  body.ui-office-editing .ui-edit-toolbar #btn-undo-edit .vo-icon,
+  body.ui-office-editing .ui-edit-toolbar #btn-redo-edit .vo-icon,
+  body.ui-office-editing .ui-edit-toolbar [data-vo-map="fit"] .vo-icon { width: 16px; height: 16px; margin: 0; }
+  body.ui-office-editing .ui-edit-toolbar > .vo-btn,
+  body.ui-office-editing .ui-edit-toolbar .vo-ed-extra .vo-btn { flex: 0 0 auto; padding: 6px 8px; }
+  .furniture-catalog .catalog-items,
+  .furniture-catalog .catalog-quick-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* ---------- Layouts tab: room templates with drawn previews ---------- */
+.layout-group-title { margin: var(--vo-space-3) 0 var(--vo-space-1); color: var(--vo-text-2); font-size: var(--vo-text-xs); font-weight: var(--vo-weight-bold); letter-spacing: .02em; }
+.layout-card .layout-preview {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 280 / 112;
+  margin-bottom: var(--vo-space-2);
+  border: var(--vo-border-w) solid var(--vo-border-subtle);
+  border-radius: var(--vo-radius-sm);
+  background: var(--vo-surface-0);
+  image-rendering: pixelated;
+}
+.layout-card .layout-preview.is-empty { display: none; }
+.layout-card .layout-icon-btn { display: inline-grid; place-items: center; }
+.layout-card .layout-icon-btn .vo-icon,
+.layout-upload-btn .vo-icon { width: 14px; height: 14px; fill: currentColor; }
+.layout-upload-btn .vo-icon { margin-right: 6px; vertical-align: -2px; }
+
+/* ---------- pick lists next to the item toolbar (desk owner, sign branch) ---------- */
+.vo-ed-menu {
+  position: fixed;
+  z-index: var(--vo-z-popover);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 200px;
+  max-width: min(280px, calc(100vw - 16px));
+  max-height: min(420px, calc(100vh - 16px));
+  overflow: auto;
+  padding: var(--vo-space-2);
+  border: var(--vo-border-w) solid var(--vo-border-strong);
+  border-radius: var(--vo-radius-md);
+  background: var(--vo-surface-1);
+  box-shadow: var(--vo-shadow-3);
+  color: var(--vo-text-1);
+  font: var(--vo-weight-regular) var(--vo-text-sm) / 1.3 var(--vo-font-ui);
+}
+.vo-ed-menu-title { padding: 2px 6px 6px; color: var(--vo-text-2); font-size: var(--vo-text-xs); font-weight: var(--vo-weight-bold); }
+.vo-ed-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--vo-space-2);
+  min-height: 34px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--vo-radius-sm);
+  background: transparent;
+  color: var(--vo-text-1);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.vo-ed-menu-item:hover, .vo-ed-menu-item:focus-visible { background: var(--vo-surface-3); outline: none; }
+.vo-ed-menu-item.is-current { background: var(--vo-accent-soft); }
+.vo-ed-menu-item.is-muted .vo-ed-menu-text { color: var(--vo-text-2); }
+.vo-ed-menu-item .vo-ed-menu-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vo-ed-menu-item .vo-ed-menu-note { color: var(--vo-text-3); font-size: var(--vo-text-xs); }
+.vo-ed-menu-item .vo-icon { width: 12px; height: 12px; fill: var(--vo-accent); }
+.vo-ed-menu-dot { width: 10px; height: 10px; flex: 0 0 10px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .3); }
+@media (pointer: coarse) { .vo-ed-menu-item { min-height: 44px; } }
+
+/* ---------- v0.13 furniture variants: the count + arrow pill, the variant cards, the Variants dropdown ---------- */
+.furniture-catalog .catalog-item .catalog-variant-toggle {
+  position: absolute; top: 2px; left: 2px; z-index: 1;
+  display: inline-flex; align-items: center; gap: 2px;
+  height: 20px; min-height: 0; padding: 0 4px 0 5px;
+  border: var(--vo-border-w) solid var(--vo-accent); border-radius: 10px;
+  background: var(--vo-accent-soft); color: var(--vo-text-1);
+  font: var(--vo-weight-bold) 11px/1 var(--vo-font-ui); cursor: pointer;
+}
+.furniture-catalog .catalog-variant-toggle:hover, .furniture-catalog .catalog-variant-toggle:focus-visible { background: var(--vo-accent); color: #fff; outline: none; }
+.furniture-catalog .catalog-variant-toggle .vo-chev { width: 10px; height: 10px; color: currentColor; transform: rotate(-90deg); }
+.furniture-catalog .catalog-item.variants-open .catalog-variant-toggle .vo-chev { transform: none; }
+.furniture-catalog .catalog-item.variants-open { border-color: var(--vo-accent); }
+.furniture-catalog .catalog-variants {
+  grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px;
+  padding: 4px; border: var(--vo-border-w) dashed var(--vo-border-strong); border-radius: var(--vo-radius-sm);
+  background: var(--vo-surface-1);
+}
+.furniture-catalog .catalog-variants[hidden] { display: none; }
+.furniture-catalog .catalog-item.catalog-variant {
+  flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px;
+  min-height: 64px; padding: 4px 6px; text-align: left;
+}
+.furniture-catalog .catalog-variant .catalog-icon { flex: 0 0 56px; width: 56px; height: 56px; display: grid; place-items: center; }
+.furniture-catalog .catalog-variant .catalog-icon img, .furniture-catalog .catalog-variant .catalog-icon canvas { width: 56px; height: 56px; }
+.furniture-catalog .catalog-variant-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.furniture-catalog .catalog-variant .catalog-label { font-weight: var(--vo-weight-bold); white-space: normal; }
+.furniture-catalog .catalog-variant-facts { color: var(--vo-text-2); font-size: var(--vo-text-xs); }
+.furniture-catalog .catalog-variant-info { color: var(--vo-text-3); font-size: var(--vo-text-xs); line-height: 1.25;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.furniture-catalog .catalog-variant .catalog-item-meta { display: none; }
+.vo-var-swatches { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 1px; }
+.vo-var-swatch { width: 10px; height: 10px; border-radius: 50%; border: 1px solid var(--vo-border-strong); }
+.ftb-btn.ftb-text-btn { width: auto; padding: 0 8px 0 6px; gap: 4px; }
+.ftb-btn .ftb-btn-text { font: var(--vo-weight-bold) 12px/1 var(--vo-font-ui); }
+.vo-variant-menu { min-width: 260px; max-width: min(320px, calc(100vw - 16px)); }
+.vo-variant-menu .vo-variant-list { display: flex; flex-direction: column; gap: 2px; }
+.vo-variant-menu .vo-variant-opt { display: flex; align-items: center; gap: 8px; text-align: left; }
+.vo-variant-menu .vo-variant-opt .catalog-icon { flex: 0 0 40px; width: 40px; height: 40px; display: grid; place-items: center; }
+.vo-variant-menu .vo-variant-opt .catalog-icon img, .vo-variant-menu .vo-variant-opt .catalog-icon canvas { width: 40px; height: 40px; }
+.vo-variant-menu .vo-ed-menu-text { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.vo-variant-menu .vo-variant-name { font-weight: var(--vo-weight-bold); }
+.vo-variant-menu .vo-variant-facts { color: var(--vo-text-2); font-size: var(--vo-text-xs); }
+.vo-variant-menu .vo-variant-color-title { margin-top: 6px; }
+.vo-variant-colors { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 6px 4px; }
+.vo-variant-color { width: 28px; height: 28px; min-height: 0; padding: 0; border-radius: 50%; border: 2px solid var(--vo-border-strong); cursor: pointer; }
+.vo-variant-color.is-current { border-color: var(--vo-accent); box-shadow: 0 0 0 2px var(--vo-accent-soft); }
+.vo-variant-color:focus-visible { outline: 2px solid var(--vo-accent); outline-offset: 2px; }
+@media (pointer: coarse) { .vo-variant-color { width: 36px; height: 36px; } .furniture-catalog .catalog-item .catalog-variant-toggle { height: 26px; padding: 0 6px; } }
+@media (max-width: 640px) {
+  .ftb-btn.ftb-text-btn .ftb-btn-text { display: none; }
+  .ftb-btn.ftb-text-btn { width: var(--ftb-size, 36px); padding: 0; }
+  .vo-variant-menu { left: 8px !important; right: 8px; max-width: none; width: auto; max-height: min(60vh, 460px); }
+}
+
+@media (max-width: 900px) and (prefers-reduced-motion: reduce) {
+  body.ui-office-editing .furniture-catalog { transition: none; }
+}

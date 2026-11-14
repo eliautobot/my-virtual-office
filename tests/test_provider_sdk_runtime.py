@@ -202,18 +202,18 @@ class ProviderSdkRuntimeTests(unittest.TestCase):
         self.assertEqual([item["key"] for item in balanced], ["main", "hermes-primary", "codex-main"])
 
     def test_named_api_connection_merges_with_matching_default_profile_without_resource_path(self):
-        hermes_home = os.path.join(self.temp_dir.name, "hermes-aster-home")
+        hermes_home = os.path.join(self.temp_dir.name, "hermes-astra-home")
         os.makedirs(hermes_home)
         local = {
             "id": "hermes-default", "statusKey": "hermes-default",
-            "providerAgentId": "default", "profile": "default", "name": "Aster",
+            "providerAgentId": "default", "profile": "default", "name": "Astra",
             "workspace": hermes_home, "home": hermes_home,
             "connectionModes": ["cli"], "cliAvailable": True, "apiAvailable": False,
         }
         api = {
-            "id": "hermes-aster", "statusKey": "hermes-aster",
-            "providerAgentId": "aster", "profile": "aster", "connectionId": "aster",
-            "name": "Aster", "connectionModes": ["api"],
+            "id": "hermes-astra", "statusKey": "hermes-astra",
+            "providerAgentId": "astra", "profile": "astra", "connectionId": "astra",
+            "name": "Astra", "connectionModes": ["api"],
             "cliAvailable": False, "apiAvailable": True,
             "capabilityOverrides": {"streaming": True, "tools": True, "interrupt": True},
         }
@@ -229,7 +229,7 @@ class ProviderSdkRuntimeTests(unittest.TestCase):
             "enabled": True, "localProfilesEnabled": True,
             "resourceRoot": hermes_home, "resourceAccess": "read-write",
             "connections": [{
-                "id": "aster", "name": "Aster", "apiUrl": "http://hermes.invalid:8642",
+                "id": "astra", "name": "Astra", "apiUrl": "http://hermes.invalid:8642",
                 "apiKey": "configured", "resourcePath": "", "enabled": True,
             }],
         }}}
@@ -238,12 +238,12 @@ class ProviderSdkRuntimeTests(unittest.TestCase):
 
         self.assertEqual(1, len(rows))
         row = rows[0]
-        self.assertEqual("hermes-aster", row["id"])
+        self.assertEqual("hermes-astra", row["id"])
         self.assertEqual("default", row["localProfile"])
         self.assertEqual(["cli", "api"], row["connectionModes"])
         self.assertTrue(row["apiAvailable"])
         self.assertIn("hermes-default", row["selectionAliases"])
-        self.assertIn("hermes-aster", row["selectionAliases"])
+        self.assertIn("hermes-astra", row["selectionAliases"])
 
     def test_agent_limit_prefers_api_hermes_over_cli_only_alias(self):
         agents = [
@@ -254,7 +254,7 @@ class ProviderSdkRuntimeTests(unittest.TestCase):
                 "capabilities": {"streaming": False, "tools": False},
             },
             {
-                "key": "hermes-aster", "providerKind": "hermes", "available": True,
+                "key": "hermes-astra", "providerKind": "hermes", "available": True,
                 "apiAvailable": True, "connectionModes": ["api"],
                 "capabilities": {"streaming": True, "tools": True},
             },
@@ -262,7 +262,7 @@ class ProviderSdkRuntimeTests(unittest.TestCase):
         ]
         with mock.patch.object(server, "get_agent_limit", return_value=3):
             selected = server._apply_agent_limit_balanced(agents)
-        self.assertEqual(["main", "hermes-aster", "codex-main"], [row["key"] for row in selected])
+        self.assertEqual(["main", "hermes-astra", "codex-main"], [row["key"] for row in selected])
 
     def test_settings_validation_rejects_bad_url_and_unknown_select(self):
         with self.assertRaises(ValueError):

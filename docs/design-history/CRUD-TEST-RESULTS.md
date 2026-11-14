@@ -1,4 +1,4 @@
-# CRUD Test Results — Projects & Tasks API
+# CRUD Test Results: Projects & Tasks API
 **Date:** 2026-04-01 03:02 UTC  
 **Target:** local product instance  
 **Tester:** automated QA
@@ -42,4 +42,4 @@
 - GET `/api/projects` confirms project ID no longer present
 
 ## No Files Modified
-This was a read-only QA test — no source code changes required. All CRUD endpoints function correctly.
+This was a read-only QA test, no source code changes required. All CRUD endpoints function correctly.

@@ -1,9 +1,13 @@
 #!/bin/bash
 # CRUD Test Script — Projects & Tasks API
-# Run: bash tests/test_crud_projects.sh [base_url]
-# Default: http://localhost:8090
+# Run: bash tests/test_crud_projects.sh <base_url>
+# Creates and deletes projects: point it at a disposable test office only.
 set -e
-BASE="${1:-http://localhost:8090}"
+BASE="${1:-${VO_TEST_URL:-}}"
+if [ -z "$BASE" ]; then
+  echo "Usage: VO_TEST_URL=http://127.0.0.1:18090 bash tests/test_crud_projects.sh (a disposable test office)" >&2
+  exit 2
+fi
 PASS=0; FAIL=0
 
 echo "CRUD TEST: Projects & Tasks API ($BASE)"

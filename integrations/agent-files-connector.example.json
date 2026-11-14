@@ -1,0 +1,14 @@
+{
+  "bind": "127.0.0.1",
+  "port": 8765,
+  "token": "replace-with-at-least-24-random-characters",
+  "certFile": "",
+  "keyFile": "",
+  "roots": [
+    {
+      "id": "projects",
+      "label": "Projects",
+      "path": "C:\\Users\\YOUR_NAME\\Projects"
+    }
+  ]
+}

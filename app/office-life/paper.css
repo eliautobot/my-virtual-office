@@ -1,0 +1,208 @@
+/* Office life: "The Daily Office" newspaper window and the replay bar (owner: L8 life-decor-paper).
+   The window reuses .vo-window (ui-modern.css); the sheet looks like a printed pixel front page.
+   Phones: the window is a full-screen sheet and the replay bar sits above the action bar and sheets. */
+
+/* ---------- newspaper window ---------- */
+.vo-paper {
+  --vo-window-w: 860px;
+  --vo-paper-ink: #2a2118;
+  --vo-paper-ink-soft: #5b4a3a;
+  --vo-paper-bg: #f3ead2;
+  --vo-paper-rule: #2a2118;
+  height: min(88dvh, 920px);
+}
+/* .vo-window sets display:flex, which would beat the hidden attribute. */
+.vo-paper[hidden] { display: none !important; }
+.vo-paper-head { gap: var(--vo-space-3, 12px); }
+.vo-paper-pick { display: flex; align-items: center; gap: var(--vo-space-2, 8px); flex: 1; min-width: 0; }
+.vo-paper-pick-label {
+  color: var(--vo-accent, #fbbf24);
+  font: var(--vo-pixel-sm, .625rem)/1.4 var(--vo-font-pixel, monospace);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.vo-paper-day { min-width: 0; max-width: 340px; flex: 1; }
+.vo-paper-body {
+  padding: var(--vo-space-4, 16px);
+  background: var(--vo-surface-0, #0e131f);
+}
+.vo-paper-sheet {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 18px 22px 22px;
+  color: var(--vo-paper-ink);
+  background:
+    repeating-linear-gradient(0deg, rgba(42, 33, 24, 0.035) 0 1px, transparent 1px 4px),
+    var(--vo-paper-bg);
+  border: 2px solid #1b140d;
+  box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.45);
+  font: 15px/1.5 Georgia, "Times New Roman", serif;
+  image-rendering: pixelated;
+}
+.vo-paper-msg { margin: 48px 0; text-align: center; font-style: italic; color: var(--vo-paper-ink-soft); }
+
+.vo-paper-mast { text-align: center; border-bottom: 4px double var(--vo-paper-rule); padding-bottom: 8px; }
+.vo-paper-ears {
+  display: flex; justify-content: space-between; gap: 12px; min-height: 14px;
+  font: 11px/1.4 var(--vo-font-pixel, monospace); color: var(--vo-paper-ink-soft); text-transform: uppercase;
+}
+.vo-paper-title {
+  margin: 6px 0 8px;
+  color: var(--vo-paper-ink);
+  font: clamp(18px, 3.4vw, 30px)/1.25 var(--vo-font-pixel, monospace);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-shadow: 2px 2px 0 rgba(42, 33, 24, 0.18);
+  overflow-wrap: anywhere;
+}
+.vo-paper-title:focus { outline: none; }
+.vo-paper-dateline {
+  display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 18px;
+  padding: 4px 0; border-top: 1px solid var(--vo-paper-rule);
+  font-size: 12px; font-style: italic; color: var(--vo-paper-ink-soft);
+}
+.vo-paper-tz { font-style: normal; font-family: var(--vo-font-mono, ui-monospace, monospace); font-size: 11px; }
+.vo-paper-note {
+  margin: 10px 0 0; padding: 4px 8px; text-align: center;
+  border: 1px dashed var(--vo-paper-ink-soft); font-size: 12px; font-style: italic;
+}
+
+.vo-paper-lead { padding: 14px 0 12px; border-bottom: 2px solid var(--vo-paper-rule); text-align: center; }
+.vo-paper-headline {
+  margin: 0 0 8px;
+  font: clamp(13px, 2.2vw, 18px)/1.55 var(--vo-font-pixel, monospace);
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+.vo-paper-subhead { margin: 0 auto; max-width: 620px; font-size: 16px; font-style: italic; overflow-wrap: anywhere; }
+.vo-paper-notes { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 10px; }
+.vo-paper-notes li { padding: 2px 8px; border: 1px solid var(--vo-paper-rule); font-size: 13px; }
+
+.vo-paper-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 14px; padding: 14px 0; border-bottom: 2px solid var(--vo-paper-rule); }
+.vo-paper-kicker {
+  margin: 0 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--vo-paper-rule);
+  font: 11px/1.4 var(--vo-font-pixel, monospace); letter-spacing: 0.06em; text-transform: uppercase;
+}
+.vo-paper-mvp {
+  position: relative; padding: 10px 12px;
+  background: #2a2118; color: #f3ead2;
+  box-shadow: inset 0 0 0 2px #f3ead2, inset 0 0 0 4px #2a2118;
+}
+.vo-paper-mvp .vo-paper-kicker { border-bottom-color: rgba(243, 234, 210, 0.5); color: #ffd54f; }
+.vo-paper-mvp::after {
+  content: ""; position: absolute; top: 8px; right: 10px; width: 14px; height: 14px;
+  background:
+    linear-gradient(#ffd54f, #ffd54f) 6px 0 / 2px 14px no-repeat,
+    linear-gradient(#ffd54f, #ffd54f) 0 6px / 14px 2px no-repeat,
+    linear-gradient(#ffd54f, #ffd54f) 3px 3px / 8px 8px no-repeat;
+}
+.vo-paper-mvp-name { margin: 0 0 4px; font: 13px/1.6 var(--vo-font-pixel, monospace); overflow-wrap: anywhere; }
+.vo-paper-mvp-why { margin: 0; font-size: 14px; font-style: italic; overflow-wrap: anywhere; }
+.vo-paper-sprite { width: 24px; height: 24px; margin-right: 6px; vertical-align: -6px; image-rendering: pixelated; }
+.vo-paper-stats dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; font-size: 13px; }
+.vo-paper-stats dt { font-weight: 700; }
+.vo-paper-stats dd { margin: 0; text-align: right; font-family: var(--vo-font-mono, ui-monospace, monospace); overflow-wrap: anywhere; }
+
+.vo-paper-around { padding-top: 14px; }
+.vo-paper-cols { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 0; }
+.vo-paper-col { padding: 6px 12px 10px; border-left: 1px solid rgba(42, 33, 24, 0.45); }
+.vo-paper-col:first-child { border-left: 0; padding-left: 0; }
+.vo-paper-col-name { margin: 0 0 4px; font: 11px/1.6 var(--vo-font-pixel, monospace); text-transform: uppercase; overflow-wrap: anywhere; }
+.vo-paper-col-line { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.vo-paper-col-line::first-letter { font-size: 1.6em; font-weight: 700; line-height: 1; }
+.vo-paper-col-stats { margin: 4px 0 0; font: 11px/1.4 var(--vo-font-mono, ui-monospace, monospace); color: var(--vo-paper-ink-soft); }
+.vo-paper-foot { display: flex; justify-content: flex-end; gap: var(--vo-space-2, 8px); padding: var(--vo-space-3, 12px) var(--vo-space-5, 20px); border-top: 1px solid var(--vo-border-subtle, rgba(255, 255, 255, 0.12)); }
+
+@media (max-width: 640px) {
+  .vo-paper.vo-window {
+    left: 0; top: 0; transform: none;
+    width: 100vw; height: 100dvh; max-height: 100dvh;
+    border: 0; border-radius: 0;
+  }
+  .vo-paper-body { padding: 8px; }
+  .vo-paper-sheet { padding: 12px 12px 16px; box-shadow: none; font-size: 14px; }
+  .vo-paper-grid { grid-template-columns: 1fr; }
+  .vo-paper-cols { grid-template-columns: 1fr; }
+  .vo-paper-col { border-left: 0; border-top: 1px solid rgba(42, 33, 24, 0.45); padding: 8px 0; }
+  .vo-paper-col:first-child { border-top: 0; }
+  .vo-paper-foot { padding-bottom: calc(var(--vo-space-3, 12px) + env(safe-area-inset-bottom, 0px)); }
+  .vo-paper-foot .vo-btn { flex: 1 1 auto; min-height: 44px; }
+  .vo-paper-pick-label { display: none; }
+}
+
+/* ---------- replay bar (inside #voLifeLayer, over the canvas) ---------- */
+.vo-life-replay {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(720px, calc(100% - 2 * var(--vo-right-col, 72px))); /* clear of the map controls column */
+  padding: 6px 8px;
+  border: var(--vo-border-w, 1px) solid var(--vo-border-strong, rgba(255, 255, 255, 0.3));
+  border-radius: var(--vo-radius-md, 6px);
+  background: rgba(14, 19, 31, 0.94);
+  color: var(--vo-text-1, #fff);
+  box-shadow: var(--vo-shadow-2, 0 2px 8px rgba(0, 0, 0, 0.4));
+  font: 600 var(--vo-text-sm, 12px)/1.2 var(--vo-font-ui, system-ui, sans-serif);
+}
+.vo-life-rbtn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-width: 32px; min-height: 32px; padding: 0 8px;
+  border: 1px solid var(--vo-border-subtle, rgba(255, 255, 255, 0.2));
+  border-radius: var(--vo-radius-xs, 3px);
+  background: var(--vo-surface-2, #1c2333);
+  color: inherit; font: inherit; cursor: pointer;
+}
+.vo-life-rbtn:hover { background: var(--vo-surface-3, #273047); }
+.vo-life-rbtn:focus-visible, .vo-life-rslider:focus-visible { outline: 2px solid var(--vo-accent); outline-offset: 2px; }
+.vo-life-rbtn:disabled { opacity: 0.5; cursor: default; }
+.vo-life-rbtn[aria-pressed="true"] { background: var(--vo-accent-fill); border-color: var(--vo-accent, #fbbf24); color: #1b1300; }
+.vo-life-rplay { min-width: 40px; }
+.vo-life-rglyph { font-family: var(--vo-font-pixel, monospace); font-size: 13px; line-height: 1; }
+.vo-life-rslider { flex: 1 1 auto; min-width: 80px; height: 28px; margin: 0; accent-color: var(--vo-accent, #fbbf24); cursor: pointer; }
+.vo-life-rtime { min-width: 46px; text-align: center; font: 11px/1 var(--vo-font-pixel, monospace); }
+.vo-life-rspeed { display: inline-flex; gap: 2px; }
+.vo-life-rsp { padding: 0 6px; }
+.vo-life-rstatus:empty { display: none; }
+.vo-life-rstatus { position: absolute; left: 8px; right: 8px; bottom: calc(100% + 6px); padding: 4px 8px; border-radius: var(--vo-radius-xs, 3px);
+  background: rgba(14, 19, 31, 0.94); text-align: center; pointer-events: none; }
+.vo-life-rclock {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  border: 1px solid #3e2723;
+  border-radius: var(--vo-radius-xs, 3px);
+  background: var(--vo-warning, #fbbf24);
+  color: #1b1300;
+  font: 11px/1.2 var(--vo-font-pixel, monospace);
+  white-space: nowrap;
+  pointer-events: none !important;
+  box-shadow: var(--vo-shadow-1, 0 1px 2px rgba(0, 0, 0, 0.3));
+}
+@media (pointer: coarse) {
+  .vo-life-rbtn { min-width: 44px; min-height: 44px; }
+  .vo-life-rslider { height: 44px; }
+}
+@media (max-width: 640px) {
+  .vo-life-replay {
+    position: fixed;
+    left: var(--vo-space-2, 8px);
+    right: calc(var(--vo-space-2, 8px) * 2 + var(--vo-mapctl-w, 46px));
+    bottom: calc(var(--vo-actionbar-h, 52px) + env(safe-area-inset-bottom, 0px) + max(var(--vo-sheet-h, 0px), var(--vo-chat-sheet-h, 0px)) + var(--vo-space-2, 8px));
+    width: auto;
+    transform: none;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .vo-life-rslider { order: 5; flex-basis: 100%; }
+  .vo-life-rexit-text { display: none; }
+  .vo-life-rclock { top: 6px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vo-paper, .vo-life-replay { animation: none !important; transition: none !important; }
+}

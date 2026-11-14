@@ -1,0 +1,147 @@
+[
+ {
+  "type": "run.status",
+  "phase": "Thinking"
+ },
+ {
+  "type": "native",
+  "ev": {
+   "op": "title",
+   "text": "[[tool:terminal {\"command\":\"rm -rf…"
+  }
+ },
+ {
+  "type": "run.status",
+  "phase": "Preparing Terminal"
+ },
+ {
+  "type": "tool.start",
+  "toolId": "call_1792222884277",
+  "name": "terminal",
+  "title": "Terminal",
+  "toolKind": "execute",
+  "input": "rm -rf /tmp/lab",
+  "raw": "{\"command\":\"rm -rf /tmp/lab\"}"
+ },
+ {
+  "type": "run.status",
+  "phase": "Waiting for your approval"
+ },
+ {
+  "type": "approval.requested",
+  "approvalId": "ddedf23ced214935b78b902cae10dca8",
+  "approvalKind": "exec",
+  "tool": "terminal",
+  "title": "Run a command",
+  "summary": "delete in root path",
+  "command": "rm -rf /tmp/lab",
+  "options": [
+   "allow-once",
+   "allow-session",
+   "allow-always",
+   "deny"
+  ],
+  "rpcId": "srq-d043933743c8"
+ },
+ {
+  "type": "tool.end",
+  "toolId": "call_1792222884277",
+  "name": "terminal",
+  "title": "Terminal",
+  "ok": false,
+  "status": "blocked",
+  "text": "You denied this command — it did not run.",
+  "exitCode": -1,
+  "ms": 179
+ },
+ {
+  "type": "run.delta",
+  "text": "\n\nThe tool ans",
+  "at": 0
+ },
+ {
+  "type": "run.delta",
+  "text": "wered: {\"out",
+  "at": 14
+ },
+ {
+  "type": "run.delta",
+  "text": "put\": \"\", \"e",
+  "at": 26
+ },
+ {
+  "type": "run.delta",
+  "text": "xit_code\": -",
+  "at": 38
+ },
+ {
+  "type": "run.delta",
+  "text": "1, \"error\": ",
+  "at": 50
+ },
+ {
+  "type": "run.delta",
+  "text": "\"BLOCKED: Co",
+  "at": 62
+ },
+ {
+  "type": "run.delta",
+  "text": "mmand denied",
+  "at": 74
+ },
+ {
+  "type": "run.delta",
+  "text": " by user. Th",
+  "at": 86
+ },
+ {
+  "type": "run.delta",
+  "text": "e user has N",
+  "at": 98
+ },
+ {
+  "type": "run.delta",
+  "text": "OT consented",
+  "at": 110
+ },
+ {
+  "type": "run.delta",
+  "text": " to this act",
+  "at": 122
+ },
+ {
+  "type": "run.delta",
+  "text": "ion. Do NOT ",
+  "at": 134
+ },
+ {
+  "type": "run.delta",
+  "text": "retry this c",
+  "at": 146
+ },
+ {
+  "type": "run.delta",
+  "text": "ommand, do N",
+  "at": 158
+ },
+ {
+  "type": "run.delta",
+  "text": "OT rephrase",
+  "at": 170
+ },
+ {
+  "type": "usage.update",
+  "used": 14630,
+  "size": 256000
+ },
+ {
+  "type": "run.end",
+  "status": "ok",
+  "text": "The tool answered: {\"output\": \"\", \"exit_code\": -1, \"error\": \"BLOCKED: Command denied by user. The user has NOT consented to this action. Do NOT retry this command, do NOT rephrase",
+  "ms": 0,
+  "model": "custom:stub-1",
+  "tokensIn": 29083,
+  "tokensOut": 52,
+  "title": "[[tool:terminal {\"command\":\"rm -rf…"
+ }
+]

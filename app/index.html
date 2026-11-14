@@ -4,365 +4,554 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
     <title>My Virtual Office</title>
-    <link rel="icon" type="image/png" href="favicon.png">
-    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="icon" type="image/png" href="favicon.png?v=1">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg?v=1">
     <link rel="apple-touch-icon" href="icon-192.png">
     <link rel="manifest" href="manifest.json">
-    <meta name="theme-color" content="#070b13">
+    <meta name="theme-color" content="#0d1422">
+    <meta name="color-scheme" content="dark light">
     <script>
+    /* Theme boot (same snippet on every page): apply the saved preset, mode and Custom
+       palette before the first paint so no page flashes the default theme. */
     (function () {
+        var root = document.documentElement, preset = 'classic', mode = 'dark';
         try {
-            document.documentElement.dataset.uiTheme = localStorage.getItem('vo-ui-theme') === 'light' ? 'light' : 'dark';
-            var preset = localStorage.getItem('vo-ui-preset') || 'classic';
+            mode = localStorage.getItem('vo-ui-theme') === 'light' ? 'light' : 'dark';
+            preset = localStorage.getItem('vo-ui-preset') || 'classic';
             if (!/^(classic|retro|cyberpunk|gameboy|custom)$/.test(preset)) preset = 'classic';
-            document.documentElement.dataset.uiPreset = preset;
-        } catch (e) {
-            document.documentElement.dataset.uiTheme = 'dark';
-            document.documentElement.dataset.uiPreset = 'classic';
-        }
+            if (preset === 'custom') {
+                var vars = (JSON.parse(localStorage.getItem('vo-ui-custom-vars') || 'null') || {})[mode] || {};
+                for (var k in vars) {
+                    if (/^--vo-[a-z0-9-]+$/.test(k) && typeof vars[k] === 'string') root.style.setProperty(k, vars[k]);
+                }
+            }
+        } catch (e) { /* storage unavailable: defaults */ }
+        root.dataset.uiTheme = mode;
+        root.dataset.uiPreset = preset;
     })();
     </script>
-    <link rel="stylesheet" href="style.css?v=20260814-provider-markdown-1">
+    <script src="vo-auth.js?v=20261101-v08"></script>
+    <script src="vo-connection.js?v=20261107-ptcore"></script>
+    <script src="vo-window-stack.js?v=20261103-v10"></script>
+    <script src="vo-save-queue.js?v=20261107-ptcore"></script>
+    <script src="vo-icons.js?v=20261103-v10"></script>
+    <script src="vo-updates.js?v=20261109-relux-c"></script>
+    <script src="vo-openclaw-leftovers.js?v=20261108-upgrade" data-banner="1"></script>
+    <link rel="preload" href="fonts/Inter-latin.woff2?v=1" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="fonts/PressStart2P-latin.woff2?v=1" as="font" type="font/woff2" crossorigin>
+    <link rel="stylesheet" href="ui-tokens.css?v=20261101-v08">
+    <link rel="stylesheet" href="style.css?v=20261101-v08">
     <link rel="stylesheet" href="projects.css?v=20260722-1">
-    <link rel="stylesheet" href="ui-modern.css?v=20260814-agent-preview-r2">
-    <link rel="stylesheet" href="ui-themes.css?v=20260805-workspace-chat-1">
-    <link rel="stylesheet" href="office-layouts.css?v=20260722-2">
-    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="ui-modern.css?v=20261109-rel11">
+    <link rel="stylesheet" href="ui-themes.css?v=20261101-v08">
+    <link rel="stylesheet" href="office-layouts.css?v=20261101-v08">
 </head>
 <body>
+    <svg xmlns="http://www.w3.org/2000/svg" class="vo-sprite" aria-hidden="true" focusable="false" style="position:absolute;width:0;height:0;overflow:hidden">
+      <symbol id="i-agents" viewBox="0 0 10 10"><path d="M1 1h2v1h-2zM7 1h2v1h-2zM0 2h4v1h-4zM6 2h4v1h-4zM0 3h4v1h-4zM6 3h4v1h-4zM1 4h2v1h-2zM7 4h2v1h-2zM0 6h4v1h-4zM6 6h4v1h-4zM0 7h4v1h-4zM6 7h4v1h-4zM0 8h4v1h-4zM6 8h4v1h-4z"/></symbol>
+      <symbol id="i-edit" viewBox="0 0 10 10"><path d="M7 0h2v1h-2zM6 1h4v1h-4zM5 2h5v1h-5zM4 3h5v1h-5zM3 4h5v1h-5zM2 5h5v1h-5zM1 6h5v1h-5zM1 7h4v1h-4zM0 8h2v1h-2zM0 9h1v1h-1z"/></symbol>
+      <symbol id="i-projects" viewBox="0 0 10 10"><path d="M3 0h4v1h-4zM0 1h2v1h-2zM3 1h1v1h-1zM6 1h1v1h-1zM8 1h2v1h-2zM0 2h1v1h-1zM2 2h6v1h-6zM9 2h1v1h-1zM0 3h1v1h-1zM9 3h1v1h-1zM0 4h1v1h-1zM2 4h6v1h-6zM9 4h1v1h-1zM0 5h1v1h-1zM9 5h1v1h-1zM0 6h1v1h-1zM2 6h4v1h-4zM9 6h1v1h-1zM0 7h1v1h-1zM9 7h1v1h-1zM0 8h1v1h-1zM9 8h1v1h-1zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-chat" viewBox="0 0 10 10"><path d="M1 1h8v1h-8zM0 2h1v1h-1zM9 2h1v1h-1zM0 3h1v1h-1zM2 3h2v1h-2zM5 3h2v1h-2zM9 3h1v1h-1zM0 4h1v1h-1zM9 4h1v1h-1zM0 5h1v1h-1zM9 5h1v1h-1zM1 6h3v1h-3zM5 6h4v1h-4zM3 7h1v1h-1zM5 7h1v1h-1zM3 8h2v1h-2z"/></symbol>
+      <symbol id="i-meetings" viewBox="0 0 10 10"><path d="M8 0h2v1h-2zM8 1h2v1h-2zM4 2h2v1h-2zM8 2h2v1h-2zM4 3h2v1h-2zM8 3h2v1h-2zM0 4h2v1h-2zM4 4h2v1h-2zM8 4h2v1h-2zM0 5h2v1h-2zM4 5h2v1h-2zM8 5h2v1h-2zM0 6h2v1h-2zM4 6h2v1h-2zM8 6h2v1h-2zM0 7h2v1h-2zM4 7h2v1h-2zM8 7h2v1h-2zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-more" viewBox="0 0 10 10"><path d="M0 4h2v1h-2zM4 4h2v1h-2zM8 4h2v1h-2zM0 5h2v1h-2zM4 5h2v1h-2zM8 5h2v1h-2z"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><path fill-rule="evenodd" shape-rendering="geometricPrecision" d="M9.57 4.06 L10.06 0.97 L13.94 0.97 L14.43 4.06 L15.90 4.67 L18.42 2.83 L21.17 5.58 L19.33 8.10 L19.94 9.57 L23.03 10.06 L23.03 13.94 L19.94 14.43 L19.33 15.90 L21.17 18.42 L18.42 21.17 L15.90 19.33 L14.43 19.94 L13.94 23.03 L10.06 23.03 L9.57 19.94 L8.10 19.33 L5.58 21.17 L2.83 18.42 L4.67 15.90 L4.06 14.43 L0.97 13.94 L0.97 10.06 L4.06 9.57 L4.67 8.10 L2.83 5.58 L5.58 2.83 L8.10 4.67Z M15.6 12A3.6 3.6 0 1 0 8.4 12A3.6 3.6 0 1 0 15.6 12Z"/></symbol>
+      <symbol id="i-clock" viewBox="0 0 10 10"><path d="M2 0h6v1h-6zM1 1h1v1h-1zM8 1h1v1h-1zM0 2h1v1h-1zM5 2h1v1h-1zM9 2h1v1h-1zM0 3h1v1h-1zM5 3h1v1h-1zM9 3h1v1h-1zM0 4h1v1h-1zM5 4h3v1h-3zM9 4h1v1h-1zM0 5h1v1h-1zM9 5h1v1h-1zM0 6h1v1h-1zM9 6h1v1h-1zM1 7h1v1h-1zM8 7h1v1h-1zM2 8h6v1h-6z"/></symbol>
+      <symbol id="i-phone" viewBox="0 0 10 10"><path d="M1 0h2v1h-2zM0 1h3v1h-3zM0 2h3v1h-3zM1 3h2v1h-2zM2 4h2v1h-2zM3 5h2v1h-2zM4 6h2v1h-2zM7 6h2v1h-2zM5 7h5v1h-5zM6 8h4v1h-4zM7 9h2v1h-2z"/></symbol>
+      <symbol id="i-globe" viewBox="0 0 10 10"><path d="M2 0h6v1h-6zM1 1h1v1h-1zM4 1h2v1h-2zM8 1h1v1h-1zM0 2h1v1h-1zM3 2h1v1h-1zM6 2h1v1h-1zM9 2h1v1h-1zM0 3h10v1h-10zM0 4h1v1h-1zM3 4h1v1h-1zM6 4h1v1h-1zM9 4h1v1h-1zM0 5h1v1h-1zM3 5h1v1h-1zM6 5h1v1h-1zM9 5h1v1h-1zM0 6h10v1h-10zM0 7h1v1h-1zM3 7h1v1h-1zM6 7h1v1h-1zM9 7h1v1h-1zM1 8h1v1h-1zM4 8h2v1h-2zM8 8h1v1h-1zM2 9h6v1h-6z"/></symbol>
+      <symbol id="i-plus" viewBox="0 0 10 10"><path d="M4 0h2v1h-2zM4 1h2v1h-2zM4 2h2v1h-2zM4 3h2v1h-2zM0 4h10v1h-10zM0 5h10v1h-10zM4 6h2v1h-2zM4 7h2v1h-2zM4 8h2v1h-2zM4 9h2v1h-2z"/></symbol>
+      <symbol id="i-minus" viewBox="0 0 10 10"><path d="M0 4h10v1h-10zM0 5h10v1h-10z"/></symbol>
+      <symbol id="i-target" viewBox="0 0 10 10"><path d="M4 0h2v1h-2zM2 1h6v1h-6zM1 2h1v1h-1zM4 2h2v1h-2zM8 2h1v1h-1zM1 3h1v1h-1zM8 3h1v1h-1zM0 4h3v1h-3zM4 4h2v1h-2zM7 4h3v1h-3zM0 5h3v1h-3zM4 5h2v1h-2zM7 5h3v1h-3zM1 6h1v1h-1zM8 6h1v1h-1zM1 7h1v1h-1zM4 7h2v1h-2zM8 7h1v1h-1zM2 8h6v1h-6zM4 9h2v1h-2z"/></symbol>
+      <symbol id="i-minimap" viewBox="0 0 10 10"><path d="M0 1h10v1h-10zM0 8h10v1h-10zM0 2h1v6h-1zM9 2h1v6h-1zM2 3h3v3h-3zM6 5h2v2h-2z"/></symbol>
+      <symbol id="i-bubbles" viewBox="0 0 10 10"><path d="M0 0h6v1h-6zM0 1h1v1h-1zM5 1h1v1h-1zM0 2h1v1h-1zM2 2h2v1h-2zM5 2h1v1h-1zM0 3h6v1h-6zM1 4h1v1h-1zM4 4h6v1h-6zM4 5h1v1h-1zM9 5h1v1h-1zM4 6h1v1h-1zM6 6h2v1h-2zM9 6h1v1h-1zM4 7h6v1h-6zM7 8h1v1h-1z"/></symbol>
+      <symbol id="i-lock" viewBox="0 0 10 10"><path d="M3 0h4v1h-4zM2 1h1v1h-1zM7 1h1v1h-1zM2 2h1v1h-1zM7 2h1v1h-1zM1 3h8v1h-8zM1 4h8v1h-8zM1 5h3v1h-3zM6 5h3v1h-3zM1 6h3v1h-3zM6 6h3v1h-3zM1 7h8v1h-8zM1 8h8v1h-8z"/></symbol>
+      <symbol id="i-chev" viewBox="0 0 10 10"><path d="M1 3h1v1h-1zM8 3h1v1h-1zM2 4h1v1h-1zM7 4h1v1h-1zM3 5h1v1h-1zM6 5h1v1h-1zM4 6h2v1h-2z"/></symbol>
+      <symbol id="i-close" viewBox="0 0 10 10"><path d="M1 1h1v1h-1zM8 1h1v1h-1zM2 2h1v1h-1zM7 2h1v1h-1zM3 3h1v1h-1zM6 3h1v1h-1zM4 4h2v1h-2zM4 5h2v1h-2zM3 6h1v1h-1zM6 6h1v1h-1zM2 7h1v1h-1zM7 7h1v1h-1zM1 8h1v1h-1zM8 8h1v1h-1z"/></symbol>
+      <symbol id="i-chip" viewBox="0 0 10 10"><path d="M2 0h1v1h-1zM4 0h1v1h-1zM6 0h1v1h-1zM1 1h7v1h-7zM0 2h2v1h-2zM7 2h2v1h-2zM1 3h1v1h-1zM3 3h3v1h-3zM7 3h1v1h-1zM0 4h2v1h-2zM3 4h3v1h-3zM7 4h2v1h-2zM1 5h1v1h-1zM7 5h1v1h-1zM1 6h7v1h-7zM2 7h1v1h-1zM4 7h1v1h-1zM6 7h1v1h-1z"/></symbol>
+      <symbol id="i-plug" viewBox="0 0 10 10"><path d="M2 0h1v1h-1zM5 0h1v1h-1zM2 1h1v1h-1zM5 1h1v1h-1zM1 2h6v1h-6zM1 3h6v1h-6zM1 4h6v1h-6zM2 5h4v1h-4zM3 6h2v1h-2zM3 7h2v1h-2zM3 8h2v1h-2z"/></symbol>
+      <symbol id="i-book" viewBox="0 0 10 10"><path d="M0 0h10v1h-10zM0 1h1v1h-1zM8 1h2v1h-2zM0 2h1v1h-1zM2 2h4v1h-4zM8 2h2v1h-2zM0 3h1v1h-1zM8 3h2v1h-2zM0 4h1v1h-1zM2 4h3v1h-3zM8 4h2v1h-2zM0 5h1v1h-1zM8 5h2v1h-2zM0 6h1v1h-1zM8 6h2v1h-2zM0 7h10v1h-10zM0 8h1v1h-1zM9 8h1v1h-1zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-trophy" viewBox="0 0 10 10"><path d="M0 0h10v1h-10zM0 1h1v1h-1zM2 1h6v1h-6zM9 1h1v1h-1zM0 2h1v1h-1zM2 2h6v1h-6zM9 2h1v1h-1zM1 3h1v1h-1zM3 3h4v1h-4zM8 3h1v1h-1zM3 4h4v1h-4zM4 5h2v1h-2zM4 6h2v1h-2zM3 7h4v1h-4zM2 8h6v1h-6z"/></symbol>
+      <symbol id="i-branch" viewBox="0 0 10 10"><path d="M0 0h2v1h-2zM8 0h2v1h-2zM0 1h2v1h-2zM8 1h2v1h-2zM1 2h1v1h-1zM8 2h1v1h-1zM1 3h1v1h-1zM8 3h1v1h-1zM2 4h6v1h-6zM4 5h2v1h-2zM4 6h2v1h-2zM4 7h2v1h-2zM3 8h4v1h-4zM3 9h4v1h-4z"/></symbol>
+      <symbol id="i-pulse" viewBox="0 0 10 10"><path d="M3 2h1v1h-1zM3 3h1v1h-1zM0 4h1v1h-1zM2 4h1v1h-1zM4 4h1v1h-1zM8 4h2v1h-2zM1 5h1v1h-1zM4 5h1v1h-1zM7 5h1v1h-1zM4 6h1v1h-1zM6 6h1v1h-1zM5 7h1v1h-1z"/></symbol>
+      <symbol id="i-log" viewBox="0 0 10 10"><path d="M0 0h10v1h-10zM0 1h1v1h-1zM9 1h1v1h-1zM0 2h1v1h-1zM2 2h6v1h-6zM9 2h1v1h-1zM0 3h1v1h-1zM9 3h1v1h-1zM0 4h1v1h-1zM2 4h4v1h-4zM9 4h1v1h-1zM0 5h1v1h-1zM9 5h1v1h-1zM0 6h1v1h-1zM2 6h6v1h-6zM9 6h1v1h-1zM0 7h1v1h-1zM9 7h1v1h-1zM0 8h10v1h-10z"/></symbol>
+      <symbol id="i-grid" viewBox="0 0 10 10"><path d="M0 0h4v1h-4zM5 0h4v1h-4zM0 1h4v1h-4zM5 1h4v1h-4zM0 2h4v1h-4zM5 2h4v1h-4zM0 3h4v1h-4zM5 3h4v1h-4zM0 5h4v1h-4zM5 5h4v1h-4zM0 6h4v1h-4zM5 6h4v1h-4zM0 7h4v1h-4zM5 7h4v1h-4zM0 8h4v1h-4zM5 8h4v1h-4z"/></symbol>
+      <symbol id="i-help" viewBox="0 0 10 10"><path d="M2 0h4v1h-4zM1 1h2v1h-2zM5 1h2v1h-2zM5 2h2v1h-2zM4 3h2v1h-2zM3 4h2v1h-2zM3 5h2v1h-2zM3 7h2v1h-2zM3 8h2v1h-2z"/></symbol>
+      <symbol id="i-sidebar" viewBox="0 0 10 10"><path d="M0 0h10v1h-10zM0 1h1v1h-1zM6 1h1v1h-1zM9 1h1v1h-1zM0 2h1v1h-1zM6 2h1v1h-1zM9 2h1v1h-1zM0 3h1v1h-1zM6 3h1v1h-1zM9 3h1v1h-1zM0 4h1v1h-1zM6 4h1v1h-1zM9 4h1v1h-1zM0 5h1v1h-1zM6 5h1v1h-1zM9 5h1v1h-1zM0 6h1v1h-1zM6 6h1v1h-1zM9 6h1v1h-1zM0 7h1v1h-1zM6 7h1v1h-1zM9 7h1v1h-1zM0 8h10v1h-10z"/></symbol>
+      <symbol id="i-palette" viewBox="0 0 10 10"><path d="M2 0h6v1h-6zM1 1h1v1h-1zM8 1h1v1h-1zM0 2h1v1h-1zM2 2h2v1h-2zM6 2h1v1h-1zM9 2h1v1h-1zM0 3h1v1h-1zM2 3h2v1h-2zM9 3h1v1h-1zM0 4h1v1h-1zM6 4h2v1h-2zM9 4h1v1h-1zM0 5h1v1h-1zM6 5h2v1h-2zM9 5h1v1h-1zM0 6h1v1h-1zM3 6h2v1h-2zM9 6h1v1h-1zM1 7h1v1h-1zM3 7h2v1h-2zM7 7h2v1h-2zM2 8h4v1h-4zM7 8h1v1h-1z"/></symbol>
+      <symbol id="i-shield" viewBox="0 0 10 10"><path d="M1 0h8v1h-8zM1 1h1v1h-1zM8 1h1v1h-1zM1 2h1v1h-1zM4 2h2v1h-2zM8 2h1v1h-1zM1 3h1v1h-1zM3 3h4v1h-4zM8 3h1v1h-1zM1 4h1v1h-1zM4 4h2v1h-2zM8 4h1v1h-1zM1 5h1v1h-1zM8 5h1v1h-1zM2 6h1v1h-1zM7 6h1v1h-1zM3 7h1v1h-1zM6 7h1v1h-1zM4 8h2v1h-2z"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 10 10"><path d="M3 0h1v1h-1zM2 1h2v1h-2zM1 2h9v1h-9zM2 3h2v1h-2zM9 3h1v1h-1zM3 4h1v1h-1zM9 4h1v1h-1zM9 5h1v1h-1zM9 6h1v1h-1zM3 7h7v1h-7z"/></symbol>
+      <symbol id="i-save" viewBox="0 0 10 10"><path d="M0 0h9v1h-9zM0 1h1v1h-1zM2 1h1v1h-1zM7 1h1v1h-1zM9 1h1v1h-1zM0 2h1v1h-1zM2 2h1v1h-1zM7 2h1v1h-1zM9 2h1v1h-1zM0 3h1v1h-1zM2 3h6v1h-6zM9 3h1v1h-1zM0 4h1v1h-1zM9 4h1v1h-1zM0 5h1v1h-1zM2 5h6v1h-6zM9 5h1v1h-1zM0 6h1v1h-1zM2 6h1v1h-1zM7 6h1v1h-1zM9 6h1v1h-1zM0 7h1v1h-1zM2 7h1v1h-1zM7 7h1v1h-1zM9 7h1v1h-1zM0 8h10v1h-10z"/></symbol>
+      <symbol id="i-check" viewBox="0 0 10 10"><path d="M9 1h1v1h-1zM8 2h2v1h-2zM7 3h2v1h-2zM0 4h1v1h-1zM6 4h2v1h-2zM0 5h2v1h-2zM5 5h2v1h-2zM1 6h2v1h-2zM4 6h2v1h-2zM2 7h3v1h-3zM3 8h1v1h-1z"/></symbol>
+      <symbol id="i-copy" viewBox="0 0 10 10"><path d="M0 0h7v1h-7zM0 1h1v6h-1zM6 1h1v2h-1zM1 6h2v1h-2zM3 3h7v1h-7zM3 4h1v5h-1zM9 4h1v5h-1zM3 9h7v1h-7z"/></symbol>
+      <symbol id="i-key" viewBox="0 0 10 10"><path d="M2 0h4v1h-4zM1 1h1v1h-1zM6 1h1v1h-1zM1 2h1v1h-1zM3 2h2v1h-2zM6 2h1v1h-1zM1 3h1v1h-1zM6 3h1v1h-1zM2 4h4v1h-4zM3 5h1v1h-1zM3 6h3v1h-3zM3 7h1v1h-1zM3 8h3v1h-3z"/></symbol>
+      <symbol id="i-office" viewBox="0 0 10 10"><path d="M0 0h10v1h-10zM0 1h1v1h-1zM3 1h1v1h-1zM6 1h1v1h-1zM9 1h1v1h-1zM0 2h1v1h-1zM3 2h1v1h-1zM6 2h1v1h-1zM9 2h1v1h-1zM0 3h10v1h-10zM0 4h1v1h-1zM3 4h1v1h-1zM6 4h1v1h-1zM9 4h1v1h-1zM0 5h1v1h-1zM3 5h1v1h-1zM6 5h1v1h-1zM9 5h1v1h-1zM0 6h10v1h-10zM0 7h1v1h-1zM4 7h2v1h-2zM9 7h1v1h-1zM0 8h1v1h-1zM4 8h2v1h-2zM9 8h1v1h-1zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-chevup" viewBox="0 0 10 10"><path d="M4 2h2v1h-2zM3 3h1v1h-1zM6 3h1v1h-1zM2 4h1v1h-1zM7 4h1v1h-1zM1 5h1v1h-1zM8 5h1v1h-1z"/></symbol>
+      <symbol id="i-monitor" viewBox="0 0 10 10"><path d="M0 0h10v1h-10zM0 1h1v5h-1zM9 1h1v5h-1zM0 6h10v1h-10zM2 2h4v1h-4zM2 4h3v1h-3zM4 7h2v1h-2zM2 8h6v1h-6z"/></symbol>
+      <symbol id="i-window" viewBox="0 0 10 10"><path d="M0 1h8v2h-8zM0 3h1v5h-1zM7 3h1v2h-1zM0 8h4v1h-4zM7 5h1v5h-1zM5 7h5v1h-5z"/></symbol>
+      <symbol id="i-snap-left" viewBox="0 0 10 10"><path d="M0 0h10v1h-10zM0 1h5v8h-5zM9 1h1v8h-1zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-snap-right" viewBox="0 0 10 10"><path d="M0 0h10v1h-10zM0 1h1v8h-1zM5 1h5v8h-5zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-maximize" viewBox="0 0 10 10"><path d="M0 0h10v2h-10zM0 2h1v7h-1zM9 2h1v7h-1zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-restore" viewBox="0 0 10 10"><path d="M3 0h7v1h-7zM3 1h1v2h-1zM9 1h1v6h-1zM7 6h2v1h-2zM0 3h7v2h-7zM0 5h1v4h-1zM6 5h1v4h-1zM0 9h7v1h-7z"/></symbol>
+      <symbol id="i-info" viewBox="0 0 10 10"><path d="M2 0h6v1h-6zM1 1h1v1h-1zM8 1h1v1h-1zM0 2h1v6h-1zM9 2h1v6h-1zM1 8h1v1h-1zM8 8h1v1h-1zM2 9h6v1h-6zM4 2h2v1h-2zM3 4h3v1h-3zM4 5h2v2h-2zM3 7h4v1h-4z"/></symbol>
+      <symbol id="i-list" viewBox="0 0 10 10"><path d="M0 1h2v1h-2zM3 1h7v1h-7zM0 2h2v1h-2zM3 2h7v1h-7zM0 4h2v1h-2zM3 4h7v1h-7zM0 5h2v1h-2zM3 5h7v1h-7zM0 7h2v1h-2zM3 7h7v1h-7zM0 8h2v1h-2zM3 8h7v1h-7z"/></symbol>
+      <symbol id="i-sparkle" viewBox="0 0 10 10"><path d="M4 0h2v1h-2zM4 1h2v1h-2zM3 2h4v1h-4zM1 3h8v1h-8zM1 4h8v1h-8zM3 5h4v1h-4zM4 6h2v1h-2zM4 7h2v1h-2zM8 7h1v1h-1zM7 8h3v1h-3zM8 9h1v1h-1z"/></symbol>
+      <symbol id="i-paper" viewBox="0 0 10 10"><path d="M1 1h9v1h-9zM1 2h1v1h-1zM3 2h5v1h-5zM9 2h1v1h-1zM0 3h2v1h-2zM3 3h5v1h-5zM9 3h1v1h-1zM0 4h2v1h-2zM9 4h1v1h-1zM0 5h2v1h-2zM3 5h2v1h-2zM6 5h2v1h-2zM9 5h1v1h-1zM0 6h2v1h-2zM3 6h2v1h-2zM6 6h2v1h-2zM9 6h1v1h-1zM0 7h2v1h-2zM9 7h1v1h-1zM0 8h10v1h-10z"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 10 10"><path d="M3 0h4v1h-4zM0 1h10v1h-10zM1 2h8v1h-8zM1 3h1v6h-1zM8 3h1v6h-1zM3 4h1v4h-1zM6 4h1v4h-1zM2 9h6v1h-6z"/></symbol>
+      <symbol id="i-stop" viewBox="0 0 10 10"><path d="M2 2h6v6h-6z"/></symbol>
+      <symbol id="i-mic" viewBox="0 0 10 10"><path d="M3 0h4v1h-4zM2 1h6v5h-6zM0 4h1v2h-1zM9 4h1v2h-1zM1 6h1v1h-1zM8 6h1v1h-1zM2 7h6v1h-6zM4 8h2v1h-2zM2 9h6v1h-6z"/></symbol>
+      <symbol id="i-attach" viewBox="0 0 10 10"><path d="M4 0h3v1h-3zM3 1h1v7h-1zM7 1h1v6h-1zM5 3h1v5h-1zM4 8h2v1h-2z"/></symbol>
+      <symbol id="i-menu" viewBox="0 0 10 10"><path d="M1 2h8v1h-8zM1 5h8v1h-8zM1 8h8v1h-8z"/></symbol>
+      <symbol id="i-refresh" viewBox="0 0 10 10"><path d="M3 1h5v1h-5zM2 2h1v1h-1zM1 3h1v4h-1zM2 7h1v1h-1zM3 8h4v1h-4zM7 7h1v1h-1zM8 5h1v2h-1zM6 2h4v1h-4zM7 3h2v1h-2zM8 1h1v1h-1z"/></symbol>
+      <symbol id="i-folder" viewBox="0 0 10 10"><path d="M0 1h4v1h-4zM0 2h10v1h-10zM0 3h1v6h-1zM9 3h1v6h-1zM1 4h8v1h-8zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-file" viewBox="0 0 10 10"><path d="M1 0h6v1h-6zM1 1h1v8h-1zM1 9h8v1h-8zM8 3h1v6h-1zM6 1h1v2h-1zM7 1h1v1h-1zM7 2h2v1h-2zM3 4h4v1h-4zM3 6h4v1h-4z"/></symbol>
+      <symbol id="i-apply" viewBox="0 0 10 10"><path d="M4 0h2v4h-2zM2 4h6v1h-6zM3 5h4v1h-4zM4 6h2v1h-2zM0 6h1v4h-1zM9 6h1v4h-1zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-pointer" viewBox="0 0 10 10"><path d="M1 0h1v1h-1zM1 1h2v1h-2zM1 2h3v1h-3zM1 3h4v1h-4zM1 4h5v1h-5zM1 5h6v1h-6zM1 6h3v1h-3zM1 7h1v1h-1zM4 7h1v1h-1zM4 8h2v1h-2z"/></symbol>
+      <symbol id="i-wave" viewBox="0 0 10 10"><path d="M3 0h1v4h-1zM5 0h1v4h-1zM1 1h1v3h-1zM7 1h1v3h-1zM1 4h7v1h-7zM9 4h1v1h-1zM1 5h9v1h-9zM1 6h8v1h-8zM2 7h6v1h-6zM3 8h4v2h-4z"/></symbol>
+      <symbol id="i-warn" viewBox="0 0 10 10"><path d="M4 0h2v1h-2zM4 1h2v1h-2zM3 2h4v1h-4zM3 3h1v1h-1zM6 3h1v1h-1zM4 3h2v3h-2zM2 4h1v2h-1zM7 4h1v2h-1zM1 6h1v2h-1zM8 6h1v2h-1zM4 7h2v1h-2zM0 8h1v1h-1zM9 8h1v1h-1zM0 9h10v1h-10z"/></symbol>
+      <symbol id="i-hourglass" viewBox="0 0 10 10"><path d="M1 0h8v1h-8zM2 1h1v2h-1zM7 1h1v2h-1zM3 2h4v1h-4zM3 3h1v1h-1zM6 3h1v1h-1zM4 4h2v2h-2zM3 6h1v1h-1zM6 6h1v1h-1zM2 7h1v2h-1zM7 7h1v2h-1zM3 7h4v2h-4zM1 9h8v1h-8z"/></symbol>
+      <symbol id="i-link" viewBox="0 0 10 10"><path d="M5 0h4v1h-4zM4 1h1v1h-1zM9 1h1v4h-1zM8 5h1v1h-1zM3 4h1v1h-1zM4 3h1v1h-1zM5 4h1v1h-1zM6 5h1v1h-1zM1 4h4v1h-4zM0 5h1v4h-1zM1 9h4v1h-4zM5 8h1v1h-1zM5 0h1v0h-1z"/></symbol>
+      <symbol id="i-image" viewBox="0 0 10 10"><path d="M0 1h10v1h-10zM0 2h1v7h-1zM9 2h1v7h-1zM0 9h10v1h-10zM6 3h2v2h-2zM1 8h8v1h-8zM2 7h5v1h-5zM3 6h2v1h-2zM7 7h2v1h-2z"/></symbol>
+      <symbol id="i-music" viewBox="0 0 10 10"><path d="M4 0h6v1h-6zM4 1h1v6h-1zM9 1h1v5h-1zM4 2h6v1h-6zM1 6h4v1h-4zM6 5h4v1h-4zM0 7h5v2h-5zM5 6h4v2h-4zM1 9h3v1h-3z"/></symbol>
+      <symbol id="i-film" viewBox="0 0 10 10"><path fill-rule="evenodd" d="M0 1h10v8h-10zM1 2h1v1h-1zM8 2h1v1h-1zM1 4h1v1h-1zM8 4h1v1h-1zM1 6h1v1h-1zM8 6h1v1h-1zM3 3h4v4h-4z"/></symbol>
+      <symbol id="i-code" viewBox="0 0 10 10"><path d="M3 2h1v1h-1zM2 3h1v1h-1zM1 4h1v2h-1zM2 6h1v1h-1zM3 7h1v1h-1zM6 2h1v1h-1zM7 3h1v1h-1zM8 4h1v2h-1zM7 6h1v1h-1zM6 7h1v1h-1z"/></symbol>
+      <symbol id="i-note" viewBox="0 0 10 10"><path d="M1 0h8v1h-8zM1 1h1v9h-1zM8 1h1v9h-1zM1 9h8v1h-8zM3 3h4v1h-4zM3 5h4v1h-4zM3 7h3v1h-3z"/></symbol>
+      <symbol id="i-search" viewBox="0 0 10 10"><path d="M2 0h4v1h-4zM1 1h1v1h-1zM6 1h1v1h-1zM0 2h1v3h-1zM7 2h1v3h-1zM1 5h1v1h-1zM6 5h1v1h-1zM2 6h4v1h-4zM6 6h2v1h-2zM7 7h2v1h-2zM8 8h2v2h-2z"/></symbol>
+      <symbol id="i-play" viewBox="0 0 10 10"><path d="M2 1h1v8h-1zM3 2h2v6h-2zM5 3h2v4h-2zM7 4h1v2h-1z"/></symbol>
+      <symbol id="i-pause" viewBox="0 0 10 10"><path d="M2 1h2v8h-2zM6 1h2v8h-2z"/></symbol>
+    </svg>
+    <a class="vo-skip-link" href="#officeCanvas">Skip to office</a>
     <div class="main-container">
         <div class="left-column">
+            <header class="vo-topbar" aria-label="Office">
+                <h1 class="vo-topbar-title" id="vo-topbar-title">My Virtual Office</h1>
+                <a class="vo-demo-pill" data-vo-demo-pill href="/setup" target="_blank" rel="noopener" hidden><b>DEMO</b><span class="vo-demo-pill-text">Upgrade</span></a>
+                <button type="button" class="vo-btn vo-btn--icon vo-btn--ghost" data-vo-open-settings aria-label="Settings"><svg class="vo-icon" aria-hidden="true"><use href="#i-gear"/></svg></button>
+            </header>
             <div class="game-wrapper">
-                <canvas id="officeCanvas" width="1000" height="700"></canvas>
-                <!-- Main Settings Menu Panel -->
-                <div id="main-menu-panel" class="main-menu-panel">
-                    <div class="main-menu-header">
-                        <span>☰ SETTINGS</span>
-                        <button class="catalog-close-btn" onclick="toggleMainMenu()">✕</button>
-                    </div>
-                    <div class="main-menu-body">
-                        <div class="mm-section">
-                            <div class="mm-section-title">🧩 Provider SDK</div>
-                            <div style="font-size:9px;color:#777;margin:4px 0 8px;line-height:1.5;">
-                                Configure every installed agent framework from its manifest: connections, models, permissions, discovery, and active-session streaming.
-                            </div>
-                            <a href="/providers.html" style="text-decoration:none"><button class="mm-btn mm-btn-primary" type="button">Open Provider SDK Settings</button></a>
-                        </div>
-                        <!-- Connection -->
-                        <div class="mm-section">
-                            <div class="mm-section-title">🔌 OpenClaw Connection</div>
-                            <label class="mm-label">OpenClaw Path <span style="color:#666;font-size:9px">(server-side)</span></label>
-                            <input type="text" id="mm-oc-path" class="mm-input" placeholder="/home/user/.openclaw">
-                            <div style="font-size:9px;color:#666;margin:4px 0 8px;">Path to your OpenClaw installation on the server. Agents are discovered from this directory.</div>
-                            <label class="mm-label">Gateway URL <span style="color:#666;font-size:9px">(server-side)</span></label>
-                            <input type="text" id="mm-gateway-url" class="mm-input" placeholder="ws://127.0.0.1:18789">
-                            <div style="font-size:9px;color:#666;margin:4px 0 8px;">How the server reaches OpenClaw. Default works for local installs.</div>
-                            <label class="mm-label">Gateway Token <span style="color:#666;font-size:9px">(auto-detected)</span></label>
-                            <input type="text" id="mm-gateway-token" class="mm-input" placeholder="Auto-detected from openclaw.json" style="font-family:monospace;font-size:11px;">
-                            <div style="font-size:9px;color:#666;margin:4px 0 8px;">Auth token for chat & live status. Auto-read from OpenClaw config. Override to connect to a different instance.</div>
-                            <button class="mm-btn mm-btn-primary" onclick="mmTestConnection()">🔍 Test Connection</button>
-                            <div id="mm-conn-status"></div>
-                        </div>
-                        <!-- Hermes Connection -->
-                        <div class="mm-section">
-                            <div class="mm-section-title">⚕️ Hermes Connections</div>
-                            <label class="mm-label" style="display:flex;align-items:center;gap:6px;">
-                                <input type="checkbox" id="mm-hermes-enable" checked> Show native Hermes agents
-                            </label>
-                            <div style="font-size:9px;color:#666;margin:4px 0 8px;line-height:1.4;">
-                                Add one authenticated API connection per native Hermes profile. Hermes keeps ownership of its processes, tools, sessions, and terminal environment.
-                            </div>
-                            <div id="mm-hermes-fields" style="margin-top:8px;">
-                                <div id="mm-hermes-connections"></div>
-                                <button class="mm-btn" type="button" onclick="mmAddHermesConnection()">＋ Add Connection</button>
-                                <label class="mm-label" style="display:flex;align-items:center;gap:6px;margin-top:8px;">
-                                    <input type="checkbox" id="mm-hermes-platform-enable"> Hermes Messaging Gateway Platform
-                                </label>
-                                <label class="mm-label">Gateway Platform Token <span style="color:#666;font-size:9px">shared with MY_VIRTUAL_OFFICE_TOKEN</span></label>
-                                <input type="password" id="mm-hermes-platform-token" class="mm-input" placeholder="long shared token">
-                                <label class="mm-label">Gateway Platform Agent ID</label>
-                                <input type="text" id="mm-hermes-platform-agent" class="mm-input" placeholder="hermes-gateway">
-                                <div style="font-size:9px;color:#666;margin:4px 0 8px;">Optional separate bridge for a Hermes Messaging Gateway plugin.</div>
-                                <button class="mm-btn mm-btn-primary" onclick="mmTestHermes()">🔍 Test Hermes</button>
-                                <div id="mm-hermes-status"></div>
-                            </div>
-                        </div>
-                        <!-- Office Settings -->
-                        <div class="mm-section">
-                            <div class="mm-section-title">🏢 Office</div>
-                            <label class="mm-label">Office Name</label>
-                            <input type="text" id="mm-office-name" class="mm-input" placeholder="My Virtual Office">
-                            <label class="mm-label">Weather Location</label>
-                            <div style="display:flex;gap:8px">
-                                <input type="text" id="mm-weather-city" class="mm-input" placeholder="e.g. Miami" style="flex:2">
-                                <input type="text" id="mm-weather-state" class="mm-input" placeholder="e.g. FL" style="flex:1">
-                            </div>
-                        </div>
-                        <!-- Display -->
-                        <div class="mm-section">
-                            <div class="mm-section-title">🖥️ Display</div>
-                            <label class="mm-label" style="display:flex;align-items:center;gap:6px;">
-                                <input type="checkbox" id="mm-show-bubbles" checked> Show chat bubbles
-                            </label>
-                            <label class="mm-label" style="display:flex;align-items:center;gap:6px;">
-                                <input type="checkbox" id="mm-show-names" checked> Show agent names
-                            </label>
-                        </div>
-                        <!-- Live agent previews -->
-                        <div class="mm-section">
-                            <div class="mm-section-title">🖥️ Preview Bubbles</div>
-                            <div style="font-size:10px;color:#777;margin:0 0 9px;line-height:1.45;">
-                                Show live files, media, webpages, and Agent Browser activity above each agent's assigned desk.
-                            </div>
-                            <label class="mm-label" for="mm-preview-display">Display size</label>
-                            <select id="mm-preview-display" class="mm-input" title="Consistent stays the same screen size. World-scaled changes with office zoom.">
-                                <option value="consistent">Consistent size</option>
-                                <option value="world">World-scaled</option>
-                            </select>
-                            <label class="mm-label" for="mm-preview-size">Bubble size</label>
-                            <select id="mm-preview-size" class="mm-input">
-                                <option value="large">Large</option>
-                                <option value="medium">Medium</option>
-                                <option value="small">Small</option>
-                            </select>
-                            <label class="mm-label" for="mm-preview-zoom" style="display:flex;justify-content:space-between;gap:8px;">
-                                <span>Content zoom</span><output id="mm-preview-zoom-value" for="mm-preview-zoom">100%</output>
-                            </label>
-                            <input type="range" id="mm-preview-zoom" min="50" max="200" step="10" value="100" style="width:100%;accent-color:#ffd600;">
-                        </div>
-                        <!-- API Usage -->
-                        <div class="mm-section">
-                            <div class="mm-section-title">☁️ API Usage</div>
-                            <label class="mm-label" style="display:flex;align-items:center;gap:6px;">
-                                <input type="checkbox" id="mm-apiusage-enable" checked> Show API Usage Panel
-                            </label>
-                            <div style="font-size:9px;color:#666;margin:4px 0 8px;">
-                                Auto-detects providers from your OpenClaw config (Anthropic, OpenAI, Google, etc.).<br>
-                                Shows live usage quotas, API key health, and token expiry. No extra setup needed.
-                            </div>
-                            <div id="mm-apiusage-status"></div>
-                        </div>
-                        <!-- PC Performance -->
-                        <div class="mm-section">
-                            <div class="mm-section-title">🖥️ PC Performance</div>
-                            <label class="mm-label" style="display:flex;align-items:center;gap:6px;">
-                                <input type="checkbox" id="mm-pcmetrics-enable"> Enable PC Performance Monitor
-                            </label>
-                            <div id="mm-pcmetrics-fields" style="display:none;margin-top:8px;">
-                                <label class="mm-label">Metrics Server URL</label>
-                                <input type="text" id="mm-pcmetrics-url" class="mm-input" placeholder="http://192.168.1.100:8099">
-                                <div style="font-size:9px;color:#666;margin:4px 0 8px;">URL of the PC running pc-metrics-server.py. Can be local or remote.</div>
-                                <button class="mm-btn mm-btn-primary" onclick="mmTestPcMetrics()">🔍 Test Connection</button>
-                                <div id="mm-pcmetrics-status"></div>
-                            </div>
-                        </div>
-                        <div class="mm-section">
-                            <div class="mm-section-title">&#x1F310; Agent Browser</div>
-                            <div style="font-size:11px;color:#888;margin-bottom:8px;line-height:1.4;">
-                                Give your AI agents a real web browser they can control. You can watch them browse in real time through a live viewer panel.<br><br>
-                                <b>How it works:</b> Your agents use <b>CDP</b> (Chrome DevTools Protocol) to navigate, click, and read pages. The <b>Viewer</b> is a live screen you see in the office — like watching over their shoulder.<br><br>
-                                <b>Compatible with:</b> KasmVNC, headless Chromium, browserless.io, Playwright, or any setup that exposes CDP. The viewer can be any VNC/noVNC/web viewer.
-                            </div>
-                            <label class="mm-label" style="display:flex;align-items:center;gap:6px;">
-                                <input type="checkbox" id="mm-browser-enable"> Enable Agent Browser
-                            </label>
-                            <div id="mm-browser-fields" style="display:none;margin-top:8px;">
-                                <label class="mm-label">CDP URL <span style="color:#666;font-size:9px">(how agents control the browser)</span></label>
-                                <input type="text" id="mm-cdp-url" class="mm-input" placeholder="e.g. http://127.0.0.1:9222">
-                                <div style="font-size:10px;color:#666;margin:2px 0 6px;">The Chrome DevTools Protocol endpoint. Usually runs on the same machine as Virtual Office. Use 127.0.0.1 if the browser container is local.</div>
-                                <button class="mm-btn" onclick="mmTestCdp()" style="font-size:9px;padding:4px 10px;">&#x1F50D; Test CDP</button>
-                                <div id="mm-cdp-status" style="margin:4px 0 10px;"></div>
-                                
-                                <label class="mm-label">Browser Viewer URL <span style="color:#666;font-size:9px">(live view you watch)</span></label>
-                                <input type="text" id="mm-viewer-url" class="mm-input" placeholder="e.g. http://192.168.1.100:6902">
-                                <div style="font-size:10px;color:#666;margin:2px 0 6px;">The URL that loads in the floating browser window. Must be reachable from your browser (not localhost if you're accessing remotely). Use HTTP to avoid certificate issues.</div>
-                                <button class="mm-btn" onclick="mmTestViewer()" style="font-size:9px;padding:4px 10px;">&#x1F50D; Test Viewer</button>
-                                <div id="mm-viewer-status" style="margin:4px 0;"></div>
-                            </div>
-                        </div>
-                        <div class="mm-section">
-                            <div class="mm-section-title">🌤️ Weather</div>
-                            <label class="mm-label">
-                                <input type="checkbox" id="mm-show-weather" checked> Show weather effects
-                            </label>
-                        </div>
-                        <!-- Actions -->
-                        <div class="mm-section">
-                            <div class="mm-section-title">⚡ Actions</div>
-                            <button class="mm-btn" onclick="mmExportConfig()">📤 Export Office Config</button>
-                            <button class="mm-btn" onclick="mmImportConfig()">📥 Import Office Config</button>
-                            <input type="file" id="mm-import-file" accept=".json" style="display:none">
-                            <button class="mm-btn mm-btn-danger" onclick="mmFullReset()">🗑️ Full Reset</button>
-                            <div class="mm-warning">Resets all furniture, agents, and branches to defaults.</div>
-                        </div>
-                        <!-- Help -->
-                        <div class="mm-section">
-                            <div class="mm-section-title">❓ Help</div>
-                            <div class="mm-help">
-                                <p><b>Navigation:</b> Scroll to zoom, click+drag to pan</p>
-                                <p><b>Edit Office:</b> Place/move furniture, walls, floor colors</p>
-                                <p><b>Resize office:</b> Use +/− for one tile, or drag the yellow grip on the right/bottom edge.</p>
-                                <p><b>Agents:</b> Customize appearance, assign desks, set branches</p>
-                                <p><b>Multi-select:</b> Double-click empty space → drag to select area. Or hold Ctrl (Cmd on Mac) and click items one by one.</p>
-                                <p><b>Move group:</b> After multi-selecting, click+hold any selected item to drag them all together.</p>
-                                <p><b>Shortcuts:</b> Del = delete selected, Esc = cancel, click empty = deselect all</p>
-                            </div>
-                            <a href="/setup" class="mm-btn" style="text-align:center;display:block;text-decoration:none">🧙 Run Setup Wizard</a>
-                        </div>
-                        <!-- Save -->
-                        <button class="mm-btn mm-btn-primary mm-save-all" onclick="mmSaveSettings()">💾 Save Settings</button>
-                    </div>
+                <canvas id="officeCanvas" width="1000" height="700" role="img" aria-label="Pixel office floor with your agents. Drag to pan, scroll or pinch to zoom, click an agent for actions."></canvas>
+                <div class="vo-mapctl" role="toolbar" aria-label="Map controls" aria-orientation="vertical">
+                    <button type="button" class="vo-btn vo-btn--icon" data-vo-map="zoom-in" aria-label="Zoom in" title="Zoom in (+)"><svg class="vo-icon" aria-hidden="true"><use href="#i-plus"/></svg></button>
+                    <button type="button" class="vo-btn vo-btn--icon" data-vo-map="zoom-out" aria-label="Zoom out" title="Zoom out (-)"><svg class="vo-icon" aria-hidden="true"><use href="#i-minus"/></svg></button>
+                    <button type="button" class="vo-btn vo-btn--icon" data-vo-map="fit" aria-label="Fit the whole office" title="Fit the whole office (0)"><svg class="vo-icon" aria-hidden="true"><use href="#i-target"/></svg></button>
+                    <button type="button" class="vo-btn vo-btn--icon" data-vo-map="minimap" aria-pressed="false" aria-label="Mini-map" title="Mini-map (M)" hidden><svg class="vo-icon" aria-hidden="true"><use href="#i-minimap"/></svg></button>
+                    <hr aria-hidden="true">
+                    <button type="button" class="vo-btn vo-btn--icon" data-vo-map="bubbles" aria-pressed="false" aria-label="Expand all chat bubbles" title="Chat bubbles: expand or minimize all (B)"><svg class="vo-icon" aria-hidden="true"><use href="#i-bubbles"/></svg></button>
                 </div>
             </div>
-            <div class="toolbar">
-                <button id="btn-main-menu" title="Settings & Help" onclick="toggleMainMenu()">☰ Menu</button>
-                <button id="btn-edit-office" title="Edit office layout — resize canvas, place furniture" onclick="toggleEditMode()">✏️ Edit Office</button>
-                <button id="btn-save-edits" title="Save changes" onclick="saveEdits()" style="display:none;opacity:0.4" disabled>💾 Save</button>
-                <button id="btn-undo-edit" title="Undo last change" onclick="undoEdit()" style="display:none;opacity:0.4" disabled>↩️ Undo</button>
-                <button id="btn-agent-settings" title="Create and customize agents" onclick="toggleAgentPanel()">👤 Agents</button>
-                <div class="toolbar-divider"></div>
-                <button id="btn-expand-all" title="Expand all bubbles" onclick="expandAllBubbles()">💬 Expand All</button>
-                <button id="btn-minimize-all" title="Minimize all bubbles" onclick="minimizeAllBubbles()">💬 Minimize All</button>
-                <a href="/models.html" style="text-decoration:none"><button title="Model & Provider Settings">⚙️ Models</button></a>
-                <a href="/providers.html" style="text-decoration:none"><button title="Provider SDK Connections & Models">🧩 Providers</button></a>
-                <a href="/cron.html" style="text-decoration:none"><button title="Cron Job Manager">⏰ Cron</button></a>
-                <button title="Project Manager" onclick="openProjectsManager()">📋 Projects</button>
-                <button title="Reset canvas zoom" onclick="resetCamera()">🔍 Reset</button>
-                <button id="sms-toggle" title="SMS/Phone Panel">📞 SMS</button>
-                <button id="browser-toggle" title="Agent Browser (Neko)" class="browser-toggle-btn">🌐 Browser</button>
+            <nav class="toolbar vo-dock" role="toolbar" aria-label="Office actions">
+                <div class="vo-dock-group vo-dock-primary">
+                    <button type="button" id="btn-agent-settings" class="vo-btn" data-vo-gate="agents" title="Create and customize agents (G)" onclick="toggleAgentPanel()"><svg class="vo-icon" aria-hidden="true"><use href="#i-agents"/></svg><span class="vo-btn-label">Agents</span></button>
+                    <button type="button" id="btn-edit-office" class="vo-btn" data-vo-gate="edit" title="Edit the office layout and furniture (E)" onclick="toggleEditMode()"><svg class="vo-icon" aria-hidden="true"><use href="#i-edit"/></svg><span class="vo-btn-label">Edit office</span></button>
+                    <button type="button" id="btn-projects" class="vo-btn" title="Projects and tasks (P)" onclick="openProjectsManager()"><svg class="vo-icon" aria-hidden="true"><use href="#i-projects"/></svg><span class="vo-btn-label">Projects</span></button>
+                    <button type="button" id="btn-meetings" class="vo-btn" title="Meetings" onclick="openMeetingsDashboard()"><svg class="vo-icon" aria-hidden="true"><use href="#i-meetings"/></svg><span class="vo-btn-label">Meetings</span></button>
+                </div>
+                <div class="vo-dock-spacer"></div>
+                <a class="vo-demo-pill" data-vo-demo-pill href="/setup" target="_blank" rel="noopener" hidden><b>DEMO</b><span class="vo-demo-pill-text">3 agents max</span><u>Get a license</u></a>
+                <div class="vo-dock-sep" aria-hidden="true"></div>
+                <div class="vo-dock-group">
+                    <button type="button" id="btn-more" class="vo-btn vo-btn--icon" aria-haspopup="menu" aria-expanded="false" aria-controls="vo-more-menu" aria-label="More tools" title="More tools"><svg class="vo-icon" aria-hidden="true"><use href="#i-more"/></svg></button>
+                    <button type="button" id="btn-main-menu" class="vo-btn vo-btn--icon" aria-label="Settings" title="Settings (,)" onclick="toggleMainMenu()"><svg class="vo-icon" aria-hidden="true"><use href="#i-gear"/></svg></button>
+                    <button type="button" id="vo-dock-chat" class="vo-btn vo-btn--primary vo-chat-launch" data-vo-chat-launch title="Chat with your agents (C)"><svg class="vo-icon" aria-hidden="true"><use href="#i-chat"/></svg><span class="vo-btn-label">Chat</span><span class="vo-badge vo-badge--count" data-vo-chat-unread hidden></span></button>
+                </div>
+                <div id="vo-more-menu" class="vo-menu" role="menu" aria-label="More tools" hidden>
+                    <button type="button" class="vo-sheet-grab vo-more-grab" data-vo-more-grab role="menuitem" tabindex="-1" aria-label="Expand menu" aria-expanded="false"><span aria-hidden="true"></span></button>
+                    <div class="vo-menu-label" role="presentation">Manage</div>
+                    <button type="button" class="vo-menu-item vo-menu-compact" role="menuitem" data-vo-more-projects onclick="openProjectsManager()"><svg class="vo-icon" aria-hidden="true"><use href="#i-projects"/></svg>Projects</button>
+                    <a class="vo-menu-item" role="menuitem" href="/models.html"><svg class="vo-icon" aria-hidden="true"><use href="#i-chip"/></svg>Models</a>
+                    <a class="vo-menu-item" role="menuitem" href="/providers.html"><svg class="vo-icon" aria-hidden="true"><use href="#i-plug"/></svg>Providers</a>
+                    <a class="vo-menu-item" role="menuitem" href="/cron.html" data-vo-gate="cron"><svg class="vo-icon" aria-hidden="true"><use href="#i-clock"/></svg>Cron jobs</a>
+                    <button type="button" class="vo-menu-item" role="menuitem" onclick="openSkillsLibrary()"><svg class="vo-icon" aria-hidden="true"><use href="#i-book"/></svg>Skills library</button>
+                    <hr role="separator">
+                    <div class="vo-menu-label" role="presentation">Tools</div>
+                    <button type="button" id="sms-toggle" class="vo-menu-item" role="menuitem" title="SMS and phone panel"><svg class="vo-icon" aria-hidden="true"><use href="#i-phone"/></svg>SMS panel</button>
+                    <button type="button" id="browser-toggle" class="vo-menu-item browser-toggle-btn" role="menuitem" title="Agent browser"><svg class="vo-icon" aria-hidden="true"><use href="#i-globe"/></svg>Agent browser</button>
+                    <button type="button" class="vo-menu-item" role="menuitem" data-vo-life-paper data-vo-life-menu title="Today's front page and the archive" hidden><svg class="vo-icon" aria-hidden="true"><use href="#i-paper"/></svg>Daily Office</button>
+                    <button type="button" class="vo-menu-item" role="menuitem" data-vo-life-paper="replay" data-vo-life-menu title="Replay what happened in the office today" hidden><svg class="vo-icon" aria-hidden="true"><use href="#i-clock"/></svg>Replay the day</button>
+                    <button type="button" class="vo-menu-item vo-menu-empty" role="menuitem" data-vo-tools-empty data-vo-settings-tab="integrations" hidden><svg class="vo-icon" aria-hidden="true"><use href="#i-plug"/></svg><span>Set up SMS or browser</span></button>
+                    <hr role="separator">
+                    <div class="vo-menu-item vo-menu-theme" role="group" aria-label="Theme">
+                        <svg class="vo-icon" aria-hidden="true"><use href="#i-palette"/></svg><span>Theme</span>
+                        <span class="vo-seg">
+                            <button type="button" data-theme-mode="dark" aria-pressed="true">Dark</button>
+                            <button type="button" data-theme-mode="light" aria-pressed="false">Light</button>
+                        </span>
+                    </div>
+                    <button type="button" class="vo-menu-item" role="menuitem" data-vo-settings-tab="themes"><svg class="vo-icon" aria-hidden="true"><use href="#i-palette"/></svg>Theme studio</button>
+                    <button type="button" class="vo-menu-item" role="menuitem" data-vo-help><svg class="vo-icon" aria-hidden="true"><use href="#i-help"/></svg>Help and shortcuts<kbd>?</kbd></button>
+                </div>
+            </nav>
+            <nav class="vo-actionbar" aria-label="Office sections">
+                <button type="button" class="vo-action is-active" data-vo-action="office" aria-current="page"><svg class="vo-icon" aria-hidden="true"><use href="#i-office"/></svg><span>Office</span></button>
+                <button type="button" class="vo-action" data-vo-action="agents" data-vo-gate="agents"><svg class="vo-icon" aria-hidden="true"><use href="#i-agents"/></svg><span>Agents</span></button>
+                <button type="button" class="vo-action vo-action--chat" data-vo-chat-launch aria-label="Chat"><span class="vo-chat-bub"><svg class="vo-icon" aria-hidden="true"><use href="#i-chat"/></svg></span><span>Chat</span><span class="vo-badge vo-badge--count" data-vo-chat-unread hidden></span></button>
+                <button type="button" class="vo-action" data-vo-action="edit" data-vo-gate="edit" aria-label="Edit office" aria-pressed="false" title="Edit the office layout and furniture (E)"><svg class="vo-icon" aria-hidden="true"><use href="#i-edit"/></svg><span>Edit office</span></button>
+                <button type="button" class="vo-action" data-vo-action="more" aria-haspopup="menu" aria-expanded="false" aria-controls="vo-more-menu"><svg class="vo-icon" aria-hidden="true"><use href="#i-more"/></svg><span>More</span></button>
+            </nav>
+        </div>
+        <button type="button" class="sidebar-edge" id="sidebar-edge" onclick="toggleSidebar()" aria-controls="sidebar" aria-expanded="true" aria-label="Hide dashboard" title="Hide dashboard">
+            <span id="sidebar-edge-arrow" aria-hidden="true"><svg class="vo-icon vo-chev" aria-hidden="true" focusable="false"><use href="#i-chev"/></svg></span>
+        </button>
+        <aside class="sidebar vo-sidebar" id="sidebar" aria-label="Dashboard">
+            <button type="button" class="vo-sheet-grab" data-vo-sheet-grab aria-label="Expand dashboard" aria-expanded="false"><span aria-hidden="true"></span></button>
+            <div class="vo-sidebar-head">
+                <div class="vo-brand">
+                    <h2 id="brand-title">MY VIRTUAL OFFICE</h2>
+                    <p class="vo-brand-sub"><span class="vo-sheet-title">Dashboard</span><span class="vo-online-sep" aria-hidden="true"> &middot; </span><span data-vo-online>agents online</span></p>
+                </div>
+                <div class="vo-peek-stats" aria-hidden="true">
+                    <span><i class="vo-dot vo-dot--working"></i><b data-vo-peek="working">0</b></span>
+                    <span><i class="vo-dot vo-dot--idle"></i><b data-vo-peek="idle">0</b></span>
+                    <span><i class="vo-dot vo-dot--meeting"></i><b data-vo-peek="meeting">0</b></span>
+                    <span><i class="vo-dot vo-dot--break"></i><b data-vo-peek="break">0</b></span>
+                </div>
+                <button type="button" class="vo-btn vo-btn--icon vo-btn--ghost" data-vo-cards-toggle aria-label="Collapse all widgets" title="Collapse all widgets"><svg class="vo-icon" aria-hidden="true"><use href="#i-grid"/></svg></button>
+                <button type="button" class="vo-btn vo-btn--icon vo-btn--ghost vo-hide-dash" aria-controls="sidebar" aria-label="Hide dashboard" title="Hide dashboard" onclick="document.getElementById('sidebar-edge').click()"><svg class="vo-icon" aria-hidden="true"><use href="#i-sidebar"/></svg></button>
             </div>
-        </div>
-        <div class="sidebar-edge" id="sidebar-edge" onclick="toggleSidebar()" title="Toggle sidebar">
-            <span id="sidebar-edge-arrow">◀</span>
-        </div>
-        <div class="sidebar" id="sidebar">
-            <div class="brand">
-                <h2 id="brand-title">VIRTUAL</h2>
-                <h3>⚡ DASHBOARD ⚡</h3>
+            <div class="vo-sidebar-scroll">
+                <div class="vo-stats" role="group" aria-label="Agent status">
+                    <div class="vo-stat"><strong id="count-working">0</strong><span><i class="vo-dot vo-dot--working"></i>Working</span></div>
+                    <div class="vo-stat"><strong id="count-idle">0</strong><span><i class="vo-dot vo-dot--idle"></i>Idle</span></div>
+                    <div class="vo-stat"><strong id="count-meeting">0</strong><span><i class="vo-dot vo-dot--meeting"></i>Meeting</span></div>
+                    <div class="vo-stat"><strong id="count-break">0</strong><span><i class="vo-dot vo-dot--break"></i>Break</span></div>
+                </div>
+
+                <section class="vo-card" data-vo-card="agents" data-open="true">
+                    <button type="button" class="vo-card-head" aria-expanded="true" aria-controls="vo-card-agents-body"><svg class="vo-icon" aria-hidden="true"><use href="#i-agents"/></svg><span class="vo-card-title">Agents</span><span class="vo-card-meta" data-vo-meta="agents"></span><svg class="vo-icon vo-chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
+                    <div class="vo-card-body" id="vo-card-agents-body">
+                        <ul class="vo-agent-list" id="vo-agent-list" aria-label="Agents"><li class="vo-empty">Loading agents...</li></ul>
+                    </div>
+                </section>
+
+                <section class="vo-card" data-vo-card="projects" data-open="true">
+                    <button type="button" class="vo-card-head" aria-expanded="true" aria-controls="vo-card-projects-body"><svg class="vo-icon" aria-hidden="true"><use href="#i-projects"/></svg><span class="vo-card-title">Projects</span><span class="vo-card-meta" data-vo-meta="projects"></span><svg class="vo-icon vo-chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
+                    <div class="vo-card-body" id="vo-card-projects-body">
+                        <div id="sidebar-projects-list" class="sidebar-projects-list"></div>
+                        <button type="button" class="vo-link" onclick="openProjectsManager()">Open projects <span aria-hidden="true">&rarr;</span></button>
+                    </div>
+                </section>
+
+                <section class="vo-card" data-vo-card="meetings" data-open="true">
+                    <button type="button" class="vo-card-head" aria-expanded="true" aria-controls="vo-card-meetings-body"><svg class="vo-icon" aria-hidden="true"><use href="#i-meetings"/></svg><span class="vo-card-title">Meetings</span><span class="vo-card-meta" data-vo-meta="meetings"></span><svg class="vo-icon vo-chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
+                    <div class="vo-card-body" id="vo-card-meetings-body">
+                        <div id="sidebar-mtg-active" class="sidebar-mtg-list"><div class="sidebar-mtg-none">No meetings right now. Agents meet at the big table when they work together.</div></div>
+                        <button type="button" class="vo-link sidebar-mtg-btn" onclick="openMeetingsDashboard()">Meeting history <span aria-hidden="true">&rarr;</span></button>
+                    </div>
+                </section>
+
+                <section class="vo-card" data-vo-card="leaderboard">
+                    <button type="button" class="vo-card-head" aria-expanded="false" aria-controls="vo-card-leaderboard-body"><svg class="vo-icon" aria-hidden="true"><use href="#i-trophy"/></svg><span class="vo-card-title">Leaderboard</span><span class="vo-card-meta" data-vo-meta="leaderboard"></span><svg class="vo-icon vo-chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
+                    <div class="vo-card-body" id="vo-card-leaderboard-body">
+                        <div id="sidebar-projects-lb" class="proj-leaderboard">
+                            <div class="proj-lb-empty">No scores yet. Agents earn XP by finishing tasks.</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="vo-card" data-vo-card="branches">
+                    <button type="button" class="vo-card-head" aria-expanded="false" aria-controls="vo-card-branches-body"><svg class="vo-icon" aria-hidden="true"><use href="#i-branch"/></svg><span class="vo-card-title">Branches</span><span class="vo-card-meta" data-vo-meta="branches"></span><svg class="vo-icon vo-chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
+                    <div class="vo-card-body" id="vo-card-branches-body">
+                        <div id="branch-sections-container"></div>
+                        <div class="branch-manager-actions">
+                            <button type="button" class="vo-link" onclick="branchCreatePrompt()"><svg class="vo-icon" aria-hidden="true"><use href="#i-plus"/></svg>Add branch</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="vo-card vo-system-card" data-vo-card="system">
+                    <button type="button" class="vo-card-head" aria-expanded="false" aria-controls="vo-card-system-body"><svg class="vo-icon" aria-hidden="true"><use href="#i-pulse"/></svg><span class="vo-card-title">System</span><span class="vo-card-meta"><span class="vo-sys-state" data-vo-sys="api"><span id="api-status-dot" class="pc-dot offline" title="Loading"></span>API</span><span class="vo-sys-state" data-vo-sys="pc"><span id="pc-status-dot" class="pc-dot offline" title="Offline"></span>PC</span></span><svg class="vo-icon vo-chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
+                    <div class="vo-card-body" id="vo-card-system-body">
+                        <div class="vo-sys-block" id="api-usage-monitor">
+                            <h3 class="vo-subhead">API usage <span id="api-toggle-arrow" class="vo-legacy-arrow" aria-hidden="true"><svg class="vo-icon vo-chev" aria-hidden="true" focusable="false"><use href="#i-chev"/></svg></span></h3>
+                            <div id="api-usage-body" class="api-usage-body" style="display:none">
+                                <div id="api-usage-cards"></div>
+                            </div>
+                            <div class="vo-note" data-vo-api-off hidden><i class="vo-dot"></i><span>API usage panel is turned off.</span> <button type="button" class="vo-link" data-vo-settings-tab="performance">Turn on</button></div>
+                        </div>
+                        <div class="vo-sys-block" id="pc-monitor">
+                            <h3 class="vo-subhead">PC performance <span id="pc-toggle-arrow" class="vo-legacy-arrow" aria-hidden="true"><svg class="vo-icon vo-chev" aria-hidden="true" focusable="false"><use href="#i-chev"/></svg></span></h3>
+                            <div id="pc-monitor-body" class="pc-monitor-body" style="display:none">
+                                <div class="pc-metric-row">
+                                    <div class="pc-metric">
+                                        <div class="pc-metric-header">
+                                            <span class="pc-label">CPU</span>
+                                            <span class="pc-value" id="pc-cpu-val">--%</span>
+                                        </div>
+                                        <div class="pc-bar-track"><div class="pc-bar cpu" id="pc-cpu-bar" style="width:0%"></div></div>
+                                        <canvas id="pc-cpu-graph" class="pc-graph" width="260" height="40" aria-hidden="true"></canvas>
+                                        <div class="pc-detail" id="pc-cpu-detail">-- cores / -- MHz</div>
+                                    </div>
+                                </div>
+                                <div class="pc-metric-row">
+                                    <div class="pc-metric">
+                                        <div class="pc-metric-header">
+                                            <span class="pc-label">RAM</span>
+                                            <span class="pc-value" id="pc-ram-val">--%</span>
+                                        </div>
+                                        <div class="pc-bar-track"><div class="pc-bar ram" id="pc-ram-bar" style="width:0%"></div></div>
+                                        <canvas id="pc-ram-graph" class="pc-graph" width="260" height="40" aria-hidden="true"></canvas>
+                                        <div class="pc-detail" id="pc-ram-detail">-- / -- GB</div>
+                                    </div>
+                                </div>
+                                <div id="pc-gpus-container"></div>
+                            </div>
+                            <div class="vo-note" data-vo-pc-off hidden><i class="vo-dot"></i><span>PC monitor not connected.</span> <button type="button" class="vo-link" data-vo-settings-tab="performance">Set up</button></div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="vo-card" data-vo-card="activity">
+                    <button type="button" class="vo-card-head" aria-expanded="false" aria-controls="vo-card-activity-body"><svg class="vo-icon" aria-hidden="true"><use href="#i-log"/></svg><span class="vo-card-title">Activity</span><span class="vo-card-meta" data-vo-meta="activity"></span><svg class="vo-icon vo-chev" aria-hidden="true"><use href="#i-chev"/></svg></button>
+                    <div class="vo-card-body" id="vo-card-activity-body">
+                        <ul id="log-list" aria-live="off">
+                            <li>System initialized...</li>
+                        </ul>
+                    </div>
+                </section>
             </div>
             <script>
-            // Load office name from config
-            fetch('/vo-config').then(r=>r.json()).then(d=>{
-                var el=document.getElementById('brand-title');
-                if(el&&d.office&&d.office.name) el.textContent=d.office.name.toUpperCase();
-                document.title=d.office.name||'My Virtual Office';
-            }).catch(()=>{});
+            // Office name from config (brand, phone top bar, tab title)
+            fetch('/vo-config').then(function (r) { return r.json(); }).then(function (d) {
+                var name = (d.office && d.office.name) || 'My Virtual Office';
+                var el = document.getElementById('brand-title');
+                if (el) el.textContent = name.toUpperCase();
+                var top = document.getElementById('vo-topbar-title');
+                if (top) top.textContent = name;
+                document.title = name;
+            }).catch(function () {});
             </script>
+        </aside>
+    </div>
 
-            <div class="sidebar-bulk-actions">
-                <button class="sidebar-bulk-btn" onclick="sidebarExpandAll()" title="Expand all widgets">▼ Expand All</button>
-                <button class="sidebar-bulk-btn" onclick="sidebarCollapseAll()" title="Collapse all widgets">▲ Collapse All</button>
+    <!-- Office editing tools (shown only while editing). Every finished edit saves itself; game.js keeps the undo/redo/save buttons in sync by id and "Retry save" only shows after a failed save. -->
+    <div class="ui-edit-toolbar" role="toolbar" aria-label="Office editing tools">
+        <button type="button" id="btn-undo-edit" class="vo-btn" title="Undo last change (Ctrl+Z)" onclick="undoEdit()" style="display:none" disabled><svg class="vo-icon" aria-hidden="true"><use href="#i-undo"/></svg>Undo</button>
+        <button type="button" id="btn-redo-edit" class="vo-btn" title="Redo (Ctrl+Shift+Z)" onclick="redoEdit()" style="display:none" disabled><svg class="vo-icon vo-icon-flip" aria-hidden="true"><use href="#i-undo"/></svg>Redo</button>
+        <span id="vo-edit-save-state" class="ui-edit-save-state" aria-hidden="true" hidden></span>
+        <button type="button" id="btn-save-edits" class="vo-btn ui-primary-action" title="Save failed: try again" onclick="saveEdits()" style="display:none" disabled><svg class="vo-icon" aria-hidden="true"><use href="#i-save"/></svg>Retry save</button>
+        <button type="button" class="vo-btn" data-vo-map="fit"><svg class="vo-icon" aria-hidden="true"><use href="#i-target"/></svg>Fit view</button>
+        <button type="button" class="vo-btn ui-danger-action" data-vo-edit="cancel">Cancel</button>
+        <button type="button" class="vo-btn ui-primary-action" data-vo-edit="done"><svg class="vo-icon" aria-hidden="true"><use href="#i-check"/></svg>Done</button>
+    </div>
+
+    <!-- Settings window (moved out of the office container so the rest of the page can be made inert while it is open) -->
+    <div id="main-menu-panel" class="main-menu-panel" role="dialog" aria-modal="true" aria-labelledby="mm-title">
+        <div class="main-menu-header">
+            <svg class="vo-icon vo-window-icon" aria-hidden="true"><use href="#i-gear"/></svg>
+            <div class="main-menu-title-wrap">
+                <h2 class="main-menu-title" id="mm-title">Settings</h2>
+                <span class="main-menu-subtitle">Office, themes, connections, integrations and data</span>
+            </div>
+            <span class="ui-unsaved-indicator" aria-live="polite">Unsaved changes</span>
+            <button type="button" class="catalog-close-btn vo-btn vo-btn--icon vo-btn--ghost" aria-label="Close settings" title="Close (Esc)" onclick="toggleMainMenu()"><svg class="vo-icon" aria-hidden="true"><use href="#i-close"/></svg></button>
+        </div>
+        <div class="main-menu-body">
+            <!-- General -->
+            <div class="mm-section" data-category="general">
+                <h3 class="mm-section-title">Office</h3>
+                <label class="mm-label" for="mm-office-name">Office name</label>
+                <input type="text" id="mm-office-name" class="mm-input" placeholder="My Virtual Office">
+                <label class="mm-label" for="mm-weather-city">Weather location</label>
+                <div class="mm-row">
+                    <input type="text" id="mm-weather-city" class="mm-input mm-grow-2" placeholder="City, for example Lisbon" aria-label="Weather city">
+                    <input type="text" id="mm-weather-state" class="mm-input mm-grow-1" placeholder="Region or state" aria-label="Weather region or state">
+                </div>
+                <p class="mm-hint">Used for the weather outside the office windows and for day and night.</p>
+            </div>
+            <div class="mm-section" data-category="general">
+                <h3 class="mm-section-title">Display</h3>
+                <label class="mm-check"><input type="checkbox" id="mm-show-bubbles" checked> Show chat bubbles</label>
+                <label class="mm-check"><input type="checkbox" id="mm-show-names" checked> Show agent names</label>
+                <label class="mm-check"><input type="checkbox" id="mm-show-weather" checked> Show weather effects</label>
+                <label class="mm-label" for="mm-office-fit">Office size</label>
+                <select id="mm-office-fit" class="mm-input">
+                    <option value="sharp">Sharp pixels</option>
+                    <option value="fill">Fill the screen</option>
+                </select>
+                <p class="mm-hint">Sharp pixels keeps every pixel of the office crisp and may leave a margin around it. Fill the screen uses all the space; the art is a little softer.</p>
+                <label class="mm-label" for="mm-night-look">Night inside</label>
+                <select id="mm-night-look" class="mm-input">
+                    <option value="lit">Lights on</option>
+                    <option value="dim">Dim (moonlight)</option>
+                </select>
+                <p class="mm-hint">After dark the windows show the night. Lights on keeps the office bright inside. Dim lights it only with screens, lamps and the moon.</p>
+            </div>
+            <div class="mm-section" data-category="general">
+                <h3 class="mm-section-title">Preview bubbles</h3>
+                <p class="mm-hint">Show live files, media, web pages and Agent Browser activity above each agent's desk.</p>
+                <label class="mm-label" for="mm-preview-display">Display size</label>
+                <select id="mm-preview-display" class="mm-input" title="Consistent stays the same screen size. World-scaled changes with office zoom.">
+                    <option value="consistent">Consistent size</option>
+                    <option value="world">World-scaled</option>
+                </select>
+                <label class="mm-label" for="mm-preview-size">Bubble size</label>
+                <select id="mm-preview-size" class="mm-input">
+                    <option value="large">Large</option>
+                    <option value="medium">Medium</option>
+                    <option value="small">Small</option>
+                </select>
+                <label class="mm-label mm-label-split" for="mm-preview-zoom">
+                    <span>Content zoom</span><output id="mm-preview-zoom-value" for="mm-preview-zoom">100%</output>
+                </label>
+                <input type="range" id="mm-preview-zoom" class="mm-range" min="50" max="200" step="10" value="100">
+            </div>
+            <div class="mm-section" data-category="general" id="mm-version-section">
+                <h3 class="mm-section-title">Version</h3>
+                <p class="mm-version-current" id="mm-version-current">My Virtual Office</p>
+                <p class="mm-hint mm-version-status" id="mm-version-status" role="status" aria-live="polite">Not checked yet.</p>
+                <div class="mm-row mm-version-actions">
+                    <button type="button" class="mm-btn" id="mm-version-check">Check now</button>
+                    <button type="button" class="mm-btn" id="mm-version-notes" hidden>What's new</button>
+                    <a class="mm-btn" id="mm-version-howto" href="https://github.com/eliautobot/my-virtual-office/blob/HEAD/docs/UPDATING.md" target="_blank" rel="noopener noreferrer">How to update</a>
+                </div>
+                <label class="mm-check"><input type="checkbox" id="mm-update-check" checked> Tell me when a new version is out</label>
+                <p class="mm-hint">While the office is open it asks GitHub for the latest release about twice a day. Nothing about your office is sent.</p>
             </div>
 
-            <div class="pc-monitor" id="pc-monitor">
-                <h4 class="pc-monitor-toggle" onclick="togglePcMonitor()">
-                    <span id="pc-toggle-arrow">▶</span> 🖥️ PC PERFORMANCE
-                    <span id="pc-status-dot" class="pc-dot offline" title="Offline"></span>
-                </h4>
-                <div id="pc-monitor-body" class="pc-monitor-body" style="display:none">
-                    <div class="pc-metric-row">
-                        <div class="pc-metric">
-                            <div class="pc-metric-header">
-                                <span class="pc-label">CPU</span>
-                                <span class="pc-value" id="pc-cpu-val">--%</span>
-                            </div>
-                            <div class="pc-bar-track"><div class="pc-bar cpu" id="pc-cpu-bar" style="width:0%"></div></div>
-                            <canvas id="pc-cpu-graph" class="pc-graph" width="260" height="40"></canvas>
-                            <div class="pc-detail" id="pc-cpu-detail">-- cores / -- MHz</div>
-                        </div>
-                    </div>
-                    <div class="pc-metric-row">
-                        <div class="pc-metric">
-                            <div class="pc-metric-header">
-                                <span class="pc-label">RAM</span>
-                                <span class="pc-value" id="pc-ram-val">--%</span>
-                            </div>
-                            <div class="pc-bar-track"><div class="pc-bar ram" id="pc-ram-bar" style="width:0%"></div></div>
-                            <canvas id="pc-ram-graph" class="pc-graph" width="260" height="40"></canvas>
-                            <div class="pc-detail" id="pc-ram-detail">-- / -- GB</div>
-                        </div>
-                    </div>
-                    <div id="pc-gpus-container"></div>
+            <!-- Office life (office-life/settings.js renders its own form, Save button and dirty state) -->
+            <div class="mm-section" data-category="life">
+                <div id="voLifeSettings" class="vo-life-settings"><p class="mm-hint">Loading Office life settings...</p></div>
+            </div>
+
+            <!-- Voice (uV-voice: the provider layer's office-voice-settings.js draws it into #voVoiceSettings) -->
+            <div class="mm-section" data-category="voice">
+                <div id="voVoiceSettings" class="vo-voice-settings"><p class="mm-hint">Loading the voice settings...</p></div>
+                <!-- An agent's own voice (free; ui-modern.js mountAgentVoicePicker, drawn by the layer's mountAgentVoice) -->
+                <div id="voAgentVoice" class="vo-agent-voice"></div>
+            </div>
+
+            <!-- Connections -->
+            <div class="mm-section" data-category="connections">
+                <h3 class="mm-section-title">Provider SDK</h3>
+                <p class="mm-hint">Configure every installed agent framework from its manifest: connections, models, permissions, discovery and live session streaming.</p>
+                <a href="/providers.html" class="mm-btn mm-btn-primary">Open provider settings</a>
+            </div>
+            <div class="mm-section" data-category="connections">
+                <h3 class="mm-section-title">OpenClaw connection</h3>
+                <p class="mm-hint">Address, gateway token, access level and OpenClaw's own settings are managed in Agent Providers.</p>
+                <div class="mm-ap-list" id="mm-ap-openclaw-list" data-ap-kind="openclaw" role="status" aria-live="polite"><div class="mm-status info">Loading connections…</div></div>
+                <a href="/providers.html?provider=openclaw" target="_blank" rel="noopener" class="mm-btn mm-btn-primary" data-ap-manage="openclaw">Manage in Agent Providers</a>
+            </div>
+            <div class="mm-section" data-category="connections">
+                <h3 class="mm-section-title">Hermes connections</h3>
+                <label class="mm-check"><input type="checkbox" id="mm-hermes-enable" checked> Show native Hermes agents</label>
+                <p class="mm-hint">Add, sign in, test and switch Hermes connections in Agent Providers. Hermes keeps ownership of its processes, tools, sessions and terminal.</p>
+                <div class="mm-ap-list" id="mm-ap-hermes-list" data-ap-kind="hermes" role="status" aria-live="polite"><div class="mm-status info">Loading connections…</div></div>
+                <a href="/providers.html?provider=hermes" target="_blank" rel="noopener" class="mm-btn mm-btn-primary" data-ap-manage="hermes">Manage in Agent Providers</a>
+                <details id="mm-hermes-fields" class="mm-subfields mm-ap-bridge">
+                    <summary>Messaging gateway bridge (optional)</summary>
+                    <label class="mm-check"><input type="checkbox" id="mm-hermes-platform-enable"> Hermes messaging gateway platform</label>
+                    <label class="mm-label" for="mm-hermes-platform-token">Gateway platform token <span class="mm-label-note">(shared with MY_VIRTUAL_OFFICE_TOKEN)</span></label>
+                    <input type="password" id="mm-hermes-platform-token" class="mm-input" placeholder="Long shared token" autocomplete="off">
+                    <label class="mm-label" for="mm-hermes-platform-agent">Gateway platform agent ID</label>
+                    <input type="text" id="mm-hermes-platform-agent" class="mm-input" placeholder="hermes-gateway">
+                    <p class="mm-hint">Optional separate bridge for a Hermes messaging gateway plugin. Saved with Save settings.</p>
+                </details>
+            </div>
+
+            <!-- Usage and performance -->
+            <div class="mm-section" data-category="performance">
+                <h3 class="mm-section-title">API usage</h3>
+                <label class="mm-check"><input type="checkbox" id="mm-apiusage-enable" checked> Show API usage in the dashboard</label>
+                <p class="mm-hint">Finds providers in your OpenClaw config (Anthropic, OpenAI, Google and others) and shows live quotas, key health and token expiry. No extra setup.</p>
+                <div id="mm-apiusage-status" role="status"></div>
+            </div>
+            <div class="mm-section" data-category="performance">
+                <h3 class="mm-section-title">PC performance</h3>
+                <label class="mm-check"><input type="checkbox" id="mm-pcmetrics-enable"> Show PC performance in the dashboard</label>
+                <div id="mm-pcmetrics-fields" class="mm-subfields" style="display:none">
+                    <label class="mm-label" for="mm-pcmetrics-url">Metrics server URL</label>
+                    <input type="text" id="mm-pcmetrics-url" class="mm-input" placeholder="http://192.168.1.100:8099">
+                    <p class="mm-hint">Address of the computer running pc-metrics-server.py. It can be this machine or another one.</p>
+                    <button type="button" class="mm-btn mm-btn-primary" onclick="mmTestPcMetrics()">Test connection</button>
+                    <div id="mm-pcmetrics-status" role="status"></div>
                 </div>
             </div>
 
-            <div class="api-usage-monitor" id="api-usage-monitor">
-                <h4 class="api-usage-toggle" onclick="toggleApiUsage()">
-                    <span id="api-toggle-arrow">▶</span> ☁️ API USAGE
-                    <span id="api-status-dot" class="pc-dot offline" title="Loading..."></span>
-                </h4>
-                <div id="api-usage-body" class="api-usage-body" style="display:none">
-                    <div id="api-usage-cards"></div>
+            <!-- Browser and integrations -->
+            <div class="mm-section" data-category="integrations">
+                <h3 class="mm-section-title">Agent browser</h3>
+                <p class="mm-hint">Give your agents a real web browser they control while you watch in a live viewer window. Agents drive it with the Chrome DevTools Protocol (CDP); the viewer is any VNC, noVNC or web view of the same browser. Works with KasmVNC, headless Chromium, browserless.io, Playwright or any setup that exposes CDP.</p>
+                <label class="mm-check"><input type="checkbox" id="mm-browser-enable"> Enable the agent browser</label>
+                <div id="mm-browser-fields" class="mm-subfields" style="display:none">
+                    <label class="mm-label" for="mm-cdp-url">CDP URL <span class="mm-label-note">(how agents control the browser)</span></label>
+                    <input type="text" id="mm-cdp-url" class="mm-input" placeholder="http://127.0.0.1:9222">
+                    <p class="mm-hint">Usually on the same machine as the office. Use 127.0.0.1 when the browser container is local.</p>
+                    <button type="button" class="mm-btn" onclick="mmTestCdp()">Test CDP</button>
+                    <div id="mm-cdp-status" role="status"></div>
+                    <label class="mm-label" for="mm-viewer-url">Browser viewer URL <span class="mm-label-note">(the live view you watch)</span></label>
+                    <input type="text" id="mm-viewer-url" class="mm-input" placeholder="http://192.168.1.100:6902">
+                    <p class="mm-hint">Loads in the floating browser window, so it must be reachable from your device (not localhost when you open the office remotely). Plain HTTP avoids certificate warnings.</p>
+                    <button type="button" class="mm-btn" onclick="mmTestViewer()">Test viewer</button>
+                    <div id="mm-viewer-status" role="status"></div>
                 </div>
             </div>
 
-            <div class="branch-manager-panel collapsible">
-                <h4 onclick="toggleSection(this)"><span class="section-arrow">▶</span> 🏢 BRANCHES</h4>
-                <div class="section-body" style="display:none">
-                    <div class="branch-manager-actions">
-                        <button onclick="branchCreatePrompt()">➕ Add Branch</button>
-                    </div>
-                    <div id="branch-sections-container"></div>
+            <!-- Security (C1: vo-auth.js renders the passcode card into #voAccessSettings) -->
+            <div class="mm-section" data-category="security">
+                <div id="voAccessSettings" class="vo-access-settings"><p class="mm-hint">Loading access settings...</p></div>
+            </div>
+
+            <!-- Data -->
+            <div class="mm-section" data-category="data">
+                <h3 class="mm-section-title">Office data</h3>
+                <p class="mm-hint">Export saves the office layout, agents and branches to a file you can import later or on another machine.</p>
+                <div class="mm-actions">
+                    <button type="button" class="mm-btn" onclick="mmExportConfig()">Export office config</button>
+                    <button type="button" class="mm-btn" onclick="mmImportConfig()">Import office config</button>
                 </div>
+                <input type="file" id="mm-import-file" accept=".json" hidden>
+            </div>
+            <div class="mm-section mm-section-danger" data-category="data">
+                <h3 class="mm-section-title">Full reset</h3>
+                <p class="mm-warning">Resets all furniture, agents and branches to the defaults. Export first if you may want them back.</p>
+                <button type="button" class="mm-btn mm-btn-danger" onclick="mmFullReset()">Full reset</button>
             </div>
 
-            <div class="projects-leaderboard collapsible">
-                <h4 onclick="toggleSection(this)"><span class="section-arrow">▶</span> 🏆 LEADERBOARD</h4>
-                <div class="section-body" style="display:none">
-                    <div id="sidebar-projects-lb" class="proj-leaderboard">
-                        <div class="proj-lb-empty">No scores yet — complete tasks to earn XP!</div>
-                    </div>
+            <!-- Help -->
+            <div class="mm-section" data-category="help" id="mm-help-section">
+                <h3 class="mm-section-title">Help and shortcuts</h3>
+                <div class="mm-help">
+                    <h4>Office</h4>
+                    <dl class="vo-keys">
+                        <dt>Drag, or one finger</dt><dd>Pan the office</dd>
+                        <dt>Scroll, pinch, <kbd>+</kbd> <kbd>-</kbd></dt><dd>Zoom</dd>
+                        <dt><kbd>0</kbd></dt><dd>Fit the whole office</dd>
+                        <dt>Click an agent</dt><dd>Chat, open its PC, bubble or settings</dd>
+                        <dt>Arrow keys, <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></dt><dd>Move around the office</dd>
+                        <dt><kbd>B</kbd></dt><dd>Expand or minimize all chat bubbles</dd>
+                    </dl>
+                    <h4>Windows and chat</h4>
+                    <dl class="vo-keys">
+                        <dt><kbd>C</kbd></dt><dd>Open or close chat</dd>
+                        <dt><kbd>Enter</kbd></dt><dd>Send a chat message (<kbd>Shift</kbd>+<kbd>Enter</kbd> adds a new line)</dd>
+                        <dt><kbd>Esc</kbd></dt><dd>Close the open window or menu</dd>
+                        <dt><kbd>,</kbd></dt><dd>Settings</dd>
+                        <dt><kbd>G</kbd> <kbd>E</kbd> <kbd>P</kbd></dt><dd>Agents, Edit office, Projects</dd>
+                        <dt><kbd>?</kbd></dt><dd>This help</dd>
+                        <dt>Chat window title bar</dt><dd>Drag to move; drop on the left or right edge to snap</dd>
+                    </dl>
+                    <h4>Editing the office</h4>
+                    <dl class="vo-keys">
+                        <dt>Edit office</dt><dd>Place and move furniture, walls and floor colors</dd>
+                        <dt>Resize the office</dt><dd>Use + and &minus; for one tile, or drag the yellow grip on the right or bottom edge</dd>
+                        <dt>Multi-select</dt><dd>Double-click empty space and drag, or hold <kbd>Ctrl</kbd> (<kbd>Cmd</kbd> on Mac) and click items</dd>
+                        <dt>Move a group</dt><dd>After selecting, press and hold any selected item and drag</dd>
+                        <dt><kbd>Del</kbd> / <kbd>Esc</kbd></dt><dd>Delete the selection / cancel; click empty space to deselect</dd>
+                        <dt><kbd>Ctrl</kbd>+<kbd>Z</kbd></dt><dd>Undo the last change</dd>
+                    </dl>
                 </div>
+                <a href="/setup" class="mm-btn">Run the setup wizard</a>
             </div>
-
-            <div class="meetings-sidebar collapsible">
-                <h4 onclick="toggleSection(this)"><span class="section-arrow">▶</span> 📊 MEETINGS</h4>
-                <div class="section-body" style="display:none">
-                    <div id="sidebar-mtg-active" class="sidebar-mtg-list"></div>
-                    <button class="sidebar-mtg-btn" onclick="openMeetingsDashboard()">📊 Open Meetings</button>
-                </div>
-            </div>
-
-            <div class="projects-sidebar collapsible">
-                <h4 onclick="toggleSection(this)"><span class="section-arrow">▶</span> 📋 PROJECTS</h4>
-                <div class="section-body" style="display:none">
-                    <div id="sidebar-projects-list" class="sidebar-projects-list"></div>
-                    <button class="sidebar-mtg-btn" onclick="openProjectsManager()">📋 Open Projects</button>
-                </div>
-            </div>
-
-            <div class="skills-library-sidebar collapsible">
-                <h4 onclick="toggleSection(this)"><span class="section-arrow">▶</span> 📚 SKILLS LIBRARY</h4>
-                <div class="section-body" style="display:none">
-                    <button class="sidebar-mtg-btn" onclick="openSkillsLibrary()">📚 Open Skills Library</button>
-                </div>
-            </div>
-
-            <div class="status-panel">
-                <p>🔴 Working: <span id="count-working">0</span></p>
-                <p>🟢 Idle: <span id="count-idle">0</span></p>
-                <p>🔵 Meeting: <span id="count-meeting">0</span></p>
-                <p>☕ Break: <span id="count-break">0</span></p>
-            </div>
-
-            <div class="activity-feed collapsible">
-                <h4 onclick="toggleSection(this)"><span class="section-arrow">▶</span> > ACTIVITY LOG</h4>
-                <div class="section-body" style="display:none">
-                    <ul id="log-list">
-                        <li>System initialized...</li>
-                    </ul>
-                </div>
-            </div>
-
+            <button type="button" class="mm-btn mm-btn-primary mm-save-all" onclick="mmSaveSettings()">Save settings</button>
         </div>
     </div>
 
-    <div id="agentModal" class="modal hidden">
+
+    <div id="agentModal" class="modal hidden" aria-labelledby="modal-name">
         <div class="modal-content">
             <div class="modal-header">
                 <span id="modal-emoji" class="modal-emoji"></span>
                 <h2 id="modal-name">Agent Name</h2>
-                <span class="close-btn" onclick="closeModal()">&times;</span>
+                <button type="button" class="close-btn" aria-label="Close agent details" title="Close (Esc)" onclick="closeModal()"><svg class="vo-icon" aria-hidden="true"><use href="#i-close"/></svg></button>
             </div>
             <p id="modal-role" class="modal-role"></p>
             <div class="modal-grid">
@@ -377,80 +566,81 @@
                     <p>Updated: <span id="modal-updated">—</span></p>
                 </div>
                 <div class="modal-section full-width">
-                    <h3>⚡ MODEL</h3>
+                    <h3>MODEL</h3>
                     <div class="model-settings-row">
-                        <select id="modal-model-select"></select>
-                        <button id="modal-model-apply" onclick="applyModelChange()">Apply</button>
+                        <select id="modal-model-select" aria-label="Model for this agent"></select>
+                        <button type="button" id="modal-model-apply" class="vo-btn vo-btn--primary" onclick="applyModelChange()">Apply</button>
                     </div>
-                    <p id="modal-model-status" class="model-status-msg"></p>
+                    <p id="modal-model-status" class="model-status-msg" role="status"></p>
+                    <p id="modal-model-note" class="model-status-msg model-provider-note" hidden></p>
                 </div>
                 <div class="modal-section full-width io-section">
-                    <h3>📥 LAST REQUEST</h3>
+                    <h3>LAST REQUEST</h3>
                     <div id="modal-input" class="scroll-box io-box"></div>
                 </div>
                 <div class="modal-section full-width io-section">
-                    <h3>📤 RESPONSE</h3>
+                    <h3>RESPONSE</h3>
                     <div id="modal-output" class="scroll-box io-box"></div>
                 </div>
             <div class="modal-section full-width bio-section">
-                <h3 class="bio-toggle" onclick="toggleBio('agents')">▶ AGENTS.md</h3>
+                <button type="button" class="bio-toggle" aria-expanded="false" aria-controls="modal-bio-agents" onclick="toggleBio('agents')"><svg class="vo-icon vo-chev" aria-hidden="true" focusable="false"><use href="#i-chev"/></svg>AGENTS.md</button>
                 <div id="modal-bio-agents" class="bio-content" style="display:none">
                     <textarea id="bio-edit-agents" class="bio-editor" spellcheck="false" readonly></textarea>
                     <div class="bio-btn-row">
-                        <button class="bio-edit-btn" onclick="enableBioEdit('agents')">✏️ Edit</button>
-                        <button class="bio-save-btn" onclick="saveBioFile('AGENTS.md', 'bio-edit-agents')" style="display:none" id="bio-save-agents">💾 Save</button>
+                        <button type="button" class="bio-edit-btn" onclick="enableBioEdit('agents')">Edit</button>
+                        <button class="bio-save-btn" onclick="saveBioFile('AGENTS.md', 'bio-edit-agents')" style="display:none" id="bio-save-agents">Save</button>
                     </div>
                 </div>
             </div>
             <div class="modal-section full-width bio-section">
-                <h3 class="bio-toggle" onclick="toggleBio('soul')">▶ SOUL.md</h3>
+                <button type="button" class="bio-toggle" aria-expanded="false" aria-controls="modal-bio-soul" onclick="toggleBio('soul')"><svg class="vo-icon vo-chev" aria-hidden="true" focusable="false"><use href="#i-chev"/></svg>SOUL.md</button>
                 <div id="modal-bio-soul" class="bio-content" style="display:none">
                     <textarea id="bio-edit-soul" class="bio-editor" spellcheck="false" readonly></textarea>
                     <div class="bio-btn-row">
-                        <button class="bio-edit-btn" onclick="enableBioEdit('soul')">✏️ Edit</button>
-                        <button class="bio-save-btn" onclick="saveBioFile('SOUL.md', 'bio-edit-soul')" style="display:none" id="bio-save-soul">💾 Save</button>
+                        <button type="button" class="bio-edit-btn" onclick="enableBioEdit('soul')">Edit</button>
+                        <button class="bio-save-btn" onclick="saveBioFile('SOUL.md', 'bio-edit-soul')" style="display:none" id="bio-save-soul">Save</button>
                     </div>
                 </div>
             </div>
             <div class="modal-section full-width bio-section">
-                <h3 class="bio-toggle" onclick="toggleBio('memory')">▶ MEMORY.md</h3>
+                <button type="button" class="bio-toggle" aria-expanded="false" aria-controls="modal-bio-memory" onclick="toggleBio('memory')"><svg class="vo-icon vo-chev" aria-hidden="true" focusable="false"><use href="#i-chev"/></svg>MEMORY.md</button>
                 <div id="modal-bio-memory" class="bio-content" style="display:none">
                     <textarea id="bio-edit-memory" class="bio-editor" spellcheck="false" readonly></textarea>
                     <div class="bio-btn-row">
-                        <button class="bio-edit-btn" onclick="enableBioEdit('memory')">✏️ Edit</button>
-                        <button class="bio-save-btn" onclick="saveBioFile('MEMORY.md', 'bio-edit-memory')" style="display:none" id="bio-save-memory">💾 Save</button>
+                        <button type="button" class="bio-edit-btn" onclick="enableBioEdit('memory')">Edit</button>
+                        <button class="bio-save-btn" onclick="saveBioFile('MEMORY.md', 'bio-edit-memory')" style="display:none" id="bio-save-memory">Save</button>
                     </div>
                 </div>
             </div>
             <div class="modal-section full-width bio-section">
-                <h3 class="bio-toggle" onclick="toggleBio('tools')">▶ TOOLS.md</h3>
+                <button type="button" class="bio-toggle" aria-expanded="false" aria-controls="modal-bio-tools" onclick="toggleBio('tools')"><svg class="vo-icon vo-chev" aria-hidden="true" focusable="false"><use href="#i-chev"/></svg>TOOLS.md</button>
                 <div id="modal-bio-tools" class="bio-content" style="display:none">
                     <textarea id="bio-edit-tools" class="bio-editor" spellcheck="false" readonly></textarea>
                     <div class="bio-btn-row">
-                        <button class="bio-edit-btn" onclick="enableBioEdit('tools')">✏️ Edit</button>
-                        <button class="bio-save-btn" onclick="saveBioFile('TOOLS.md', 'bio-edit-tools')" style="display:none" id="bio-save-tools">💾 Save</button>
+                        <button type="button" class="bio-edit-btn" onclick="enableBioEdit('tools')">Edit</button>
+                        <button class="bio-save-btn" onclick="saveBioFile('TOOLS.md', 'bio-edit-tools')" style="display:none" id="bio-save-tools">Save</button>
                     </div>
                 </div>
             </div>
             <div class="modal-section full-width bio-section">
-                <h3 class="bio-toggle" onclick="toggleBio('identity')">▶ IDENTITY.md</h3>
+                <button type="button" class="bio-toggle" aria-expanded="false" aria-controls="modal-bio-identity" onclick="toggleBio('identity')"><svg class="vo-icon vo-chev" aria-hidden="true" focusable="false"><use href="#i-chev"/></svg>IDENTITY.md</button>
                 <div id="modal-bio-identity" class="bio-content" style="display:none">
                     <textarea id="bio-edit-identity" class="bio-editor" spellcheck="false" readonly></textarea>
                     <div class="bio-btn-row">
-                        <button class="bio-edit-btn" onclick="enableBioEdit('identity')">✏️ Edit</button>
-                        <button class="bio-save-btn" onclick="saveBioFile('IDENTITY.md', 'bio-edit-identity')" style="display:none" id="bio-save-identity">💾 Save</button>
+                        <button type="button" class="bio-edit-btn" onclick="enableBioEdit('identity')">Edit</button>
+                        <button class="bio-save-btn" onclick="saveBioFile('IDENTITY.md', 'bio-edit-identity')" style="display:none" id="bio-save-identity">Save</button>
                     </div>
                 </div>
             </div>
             <div class="modal-section full-width bio-section">
-                <h3 class="bio-toggle" onclick="toggleBio('daily')">▶ DAILY NOTES</h3>
+                <button type="button" class="bio-toggle" aria-expanded="false" aria-controls="modal-bio-daily" onclick="toggleBio('daily')"><svg class="vo-icon vo-chev" aria-hidden="true" focusable="false"><use href="#i-chev"/></svg>DAILY NOTES</button>
                 <div id="modal-bio-daily" class="bio-content" style="display:none">
                     <textarea id="bio-edit-daily" class="bio-editor" spellcheck="false" readonly></textarea>
-                    <span style="color:#666;font-size:10px;">Daily notes are read-only</span>
+                    <span class="mm-hint">Daily notes are read-only.</span>
                 </div>
             </div>
             <div class="modal-section full-width bio-section">
-                <h3 class="bio-toggle" onclick="toggleBio('skills')">▶ SKILLS</h3>
+                <button type="button" class="bio-toggle" aria-expanded="false" aria-controls="modal-bio-skills" onclick="toggleBio('skills')"><svg class="vo-icon vo-chev" aria-hidden="true" focusable="false"><use href="#i-chev"/></svg>SKILLS</button>
                 <div id="modal-bio-skills" class="bio-content" style="display:none">
                     <div id="skills-list"></div>
                     <div class="skill-workshop-panel">
@@ -459,17 +649,17 @@
                             <button type="button" onclick="refreshSkillWorkshopQueue()">Refresh</button>
                         </div>
                         <div id="skill-workshop-list" class="skill-workshop-list">
-                            <span style="color:#666;font-size:11px;">Loading proposals...</span>
+                            <span class="mm-hint">Loading proposals...</span>
                         </div>
                     </div>
                     <div class="bio-btn-row">
-                        <button class="bio-edit-btn" onclick="showAddSkillForm()">➕ Add Skill</button>
-                        <button class="bio-edit-btn" onclick="showLibraryPicker()">📚 Add from Library</button>
+                        <button class="bio-edit-btn" onclick="showAddSkillForm()">Add skill</button>
+                        <button class="bio-edit-btn" onclick="showLibraryPicker()">Add from library</button>
                     </div>
                     <div id="skill-library-picker" style="display:none;">
                         <select id="skill-library-select" class="skill-form-input" style="margin-bottom:4px;"></select>
                         <div class="bio-btn-row">
-                            <button class="bio-save-btn" style="display:inline-flex" onclick="applyLibrarySkill()">📋 Apply</button>
+                            <button class="bio-save-btn" style="display:inline-flex" onclick="applyLibrarySkill()">Apply</button>
                             <button class="bio-edit-btn" onclick="hideLibraryPicker()">Cancel</button>
                         </div>
                     </div>
@@ -477,15 +667,15 @@
                         <input id="skill-new-name" type="text" placeholder="Skill name" class="skill-form-input">
                         <textarea id="skill-new-content" placeholder="Paste SKILL.md content here..." class="skill-form-textarea"></textarea>
                         <div class="bio-btn-row">
-                            <button class="bio-save-btn" style="display:inline-flex" onclick="saveNewSkill()">💾 Save Skill</button>
+                            <button class="bio-save-btn" style="display:inline-flex" onclick="saveNewSkill()">Save skill</button>
                             <button class="bio-edit-btn" onclick="hideAddSkillForm()">Cancel</button>
                         </div>
                     </div>
                     <div id="skill-edit-form" style="display:none;">
-                        <h4 id="skill-edit-title" style="color:#ffd700;font-size:12px;margin:0 0 4px 0;"></h4>
+                        <h4 id="skill-edit-title" class="skill-edit-title"></h4>
                         <textarea id="skill-edit-content" class="skill-form-textarea" style="min-height:180px;"></textarea>
                         <div class="bio-btn-row">
-                            <button class="bio-save-btn" style="display:inline-flex" onclick="saveEditedSkill()">💾 Save</button>
+                            <button class="bio-save-btn" style="display:inline-flex" onclick="saveEditedSkill()">Save</button>
                             <button class="bio-edit-btn" onclick="hideEditSkillForm()">Cancel</button>
                         </div>
                     </div>
@@ -501,50 +691,50 @@
                 </div>
             </div>
             <div class="modal-controls">
-                <button onclick="overrideAgent('working')">🖥️ Work</button>
-                <button onclick="overrideAgent('meeting')">📊 Meet</button>
-                <button onclick="overrideAgent('break')">💧 Break</button>
-                <button onclick="overrideAgent('lounge')">🛋️ Lounge</button>
-                <span class="modal-controls-sep">|</span>
-                <button id="btn-trigger-thought">💭 Think</button>
-                <button id="btn-trigger-speech">💬 Say</button>
-                <button id="btn-clear-bubbles">🧹 Clear</button>
+                <button type="button" class="vo-btn" onclick="overrideAgent('working')" title="Send to their desk">Work</button>
+                <button type="button" class="vo-btn" onclick="overrideAgent('meeting')" title="Send to the meeting table">Meet</button>
+                <button type="button" class="vo-btn" onclick="overrideAgent('break')" title="Send on a break">Break</button>
+                <button type="button" class="vo-btn" onclick="overrideAgent('lounge')" title="Send to the lounge">Lounge</button>
+                <span class="modal-controls-sep" aria-hidden="true"></span>
+                <button type="button" class="vo-btn" id="btn-trigger-thought">Think bubble</button>
+                <button type="button" class="vo-btn" id="btn-trigger-speech">Speech bubble</button>
+                <button type="button" class="vo-btn" id="btn-clear-bubbles">Clear bubbles</button>
             </div>
         </div>
     </div>
 
     <!-- Meetings Dashboard Modal -->
-    <div id="meetingsModal" class="modal hidden">
+    <div id="meetingsModal" class="modal hidden" aria-labelledby="meetingsModalTitle">
         <div class="modal-content meetings-modal-content">
             <div class="modal-header">
-                <span class="modal-emoji">📊</span>
-                <h2>Meetings</h2>
-                <span class="close-btn" onclick="closeMeetingsModal()">&times;</span>
+                <svg class="vo-icon vo-window-icon" aria-hidden="true"><use href="#i-meetings"/></svg>
+                <h2 id="meetingsModalTitle">Meetings</h2>
+                <button type="button" class="close-btn" aria-label="Close meetings" title="Close (Esc)" onclick="closeMeetingsModal()"><svg class="vo-icon" aria-hidden="true"><use href="#i-close"/></svg></button>
             </div>
-            <div class="mtg-tabs">
-                <button class="mtg-tab active" data-tab="active" onclick="switchMtgTab('active')">Active</button>
-                <button class="mtg-tab" data-tab="completed" onclick="switchMtgTab('completed')">History</button>
+            <div class="mtg-tabs" role="tablist" aria-label="Meetings">
+                <button type="button" class="mtg-tab active" role="tab" data-tab="active" onclick="switchMtgTab('active')">Active</button>
+                <button type="button" class="mtg-tab" role="tab" data-tab="completed" onclick="switchMtgTab('completed')">History</button>
             </div>
             <div class="mtg-bulk-actions">
-                <button class="mtg-btn" onclick="mtgExpandAll()">▼ Expand All</button>
-                <button class="mtg-btn" onclick="mtgCollapseAll()">▲ Collapse All</button>
+                <button type="button" class="mtg-btn" onclick="mtgExpandAll()">Expand all</button>
+                <button type="button" class="mtg-btn" onclick="mtgCollapseAll()">Collapse all</button>
             </div>
             <div id="mtg-cards" class="mtg-cards"></div>
         </div>
     </div>
 
     <!-- Skills Library Modal -->
-    <div id="skillsLibraryModal" class="modal hidden">
+    <div id="skillsLibraryModal" class="modal hidden" aria-labelledby="skillsLibraryModalTitle">
         <div class="modal-content skills-library-modal">
             <div class="modal-header">
-                <span class="modal-emoji">📚</span>
-                <h2>Skills Library</h2>
-                <span class="close-btn" onclick="closeSkillsLibrary()">&times;</span>
+                <svg class="vo-icon vo-window-icon" aria-hidden="true"><use href="#i-book"/></svg>
+                <h2 id="skillsLibraryModalTitle">Skills library</h2>
+                <button type="button" class="close-btn" aria-label="Close skills library" title="Close (Esc)" onclick="closeSkillsLibrary()"><svg class="vo-icon" aria-hidden="true"><use href="#i-close"/></svg></button>
             </div>
             <div class="skl-topbar">
-                <button class="mtg-btn" onclick="openSkillEditor(null)">➕ Add Skill</button>
-                <label class="mtg-btn skl-upload-label">📎 Upload
-                    <input type="file" accept=".md" id="skl-upload-input" style="display:none" onchange="handleSkillUpload(this)">
+                <button type="button" class="mtg-btn vo-btn--primary" onclick="openSkillEditor(null)"><svg class="vo-icon" aria-hidden="true"><use href="#i-plus"/></svg>New skill</button>
+                <label class="mtg-btn skl-upload-label" tabindex="0" role="button" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();this.querySelector('input').click();}">Upload SKILL.md
+                    <input type="file" accept=".md" id="skl-upload-input" hidden onchange="handleSkillUpload(this)">
                 </label>
             </div>
             <div id="skl-cards" class="skl-cards"></div>
@@ -552,12 +742,12 @@
     </div>
 
     <!-- Skill Editor Sub-Modal -->
-    <div id="skillEditorModal" class="modal hidden">
-        <div class="modal-content" style="max-width:640px;">
+    <div id="skillEditorModal" class="modal hidden" aria-labelledby="skl-editor-title">
+        <div class="modal-content vo-window--md">
             <div class="modal-header">
-                <span class="modal-emoji">✏️</span>
-                <h2 id="skl-editor-title">Add Skill</h2>
-                <span class="close-btn" onclick="closeSkillEditor()">&times;</span>
+                <svg class="vo-icon vo-window-icon" aria-hidden="true"><use href="#i-edit"/></svg>
+                <h2 id="skl-editor-title">Add skill</h2>
+                <button type="button" class="close-btn" aria-label="Close skill editor" title="Close (Esc)" onclick="closeSkillEditor()"><svg class="vo-icon" aria-hidden="true"><use href="#i-close"/></svg></button>
             </div>
             <div class="skl-editor-body">
                 <label class="skl-field-label">Skill Name</label>
@@ -565,7 +755,7 @@
                 <label class="skl-field-label">SKILL.md Content</label>
                 <textarea id="skl-editor-content" class="skl-textarea" placeholder="---&#10;name: skill-name&#10;description: What this skill does&#10;---&#10;&#10;# Skill Title&#10;&#10;Instructions..."></textarea>
                 <div class="skl-editor-actions">
-                    <button class="mtg-btn" onclick="saveSkill()">💾 Save</button>
+                    <button class="mtg-btn" onclick="saveSkill()">Save</button>
                     <button class="mtg-btn" onclick="closeSkillEditor()">Cancel</button>
                 </div>
             </div>
@@ -573,14 +763,14 @@
     </div>
 
     <!-- Projects Manager Modal -->
-    <div id="projectsModal" class="modal hidden" onclick="if(event.target===this)closeProjectsModal()">
+    <div id="projectsModal" class="modal hidden" aria-labelledby="projectsModalTitle" onclick="if(event.target===this)closeProjectsModal()">
         <div class="modal-content projects-modal-content">
-            <div class="modal-header" style="flex-shrink:0;padding:10px 16px;background:#0d0d1e;border-bottom:2px solid #ffd700">
-                <span class="modal-emoji">📋</span>
-                <h2 style="font-size:16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">Projects</h2>
-                <span class="close-btn" onclick="closeProjectsModal()">&times;</span>
+            <div class="modal-header">
+                <svg class="vo-icon vo-window-icon" aria-hidden="true"><use href="#i-projects"/></svg>
+                <h2 id="projectsModalTitle">Projects</h2>
+                <button type="button" class="close-btn" aria-label="Close projects" title="Close (Esc)" onclick="closeProjectsModal()"><svg class="vo-icon" aria-hidden="true"><use href="#i-close"/></svg></button>
             </div>
-            <div id="proj-main-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+            <div id="proj-main-content" class="proj-main-content">
                 <!-- Populated by projects.js -->
             </div>
         </div>
@@ -594,24 +784,24 @@
     </div>
 
     <!-- End Meeting Sub-Modal -->
-    <div id="endMeetingModal" class="modal hidden">
-        <div class="modal-content" style="max-width:480px;">
+    <div id="endMeetingModal" class="modal hidden" aria-labelledby="endMeetingModalTitle">
+        <div class="modal-content vo-window--sm">
             <div class="modal-header">
-                <span class="modal-emoji">✅</span>
-                <h2>End Meeting</h2>
-                <span class="close-btn" onclick="closeEndMeetingModal()">&times;</span>
+                <svg class="vo-icon vo-window-icon" aria-hidden="true"><use href="#i-check"/></svg>
+                <h2 id="endMeetingModalTitle">End meeting</h2>
+                <button type="button" class="close-btn" aria-label="Close end meeting" title="Close (Esc)" onclick="closeEndMeetingModal()"><svg class="vo-icon" aria-hidden="true"><use href="#i-close"/></svg></button>
             </div>
             <input type="hidden" id="end-mtg-id">
             <div class="mtg-form">
-                <label class="mtg-label">Summary <span style="color:#e74c3c">*</span></label>
-                <textarea id="end-mtg-summary" class="mtg-textarea" rows="3" placeholder="What happened in this meeting?"></textarea>
-                <label class="mtg-label">Resolution</label>
+                <label class="mtg-label" for="end-mtg-summary">Summary <span class="vo-required" aria-hidden="true">*</span></label>
+                <textarea id="end-mtg-summary" class="mtg-textarea" rows="3" required placeholder="What happened in this meeting?"></textarea>
+                <label class="mtg-label" for="end-mtg-resolution">Resolution</label>
                 <textarea id="end-mtg-resolution" class="mtg-textarea" rows="2" placeholder="Outcome / decisions made (optional)"></textarea>
-                <label class="mtg-label">Action Items <span style="color:#666;font-size:9px">(one per line)</span></label>
-                <textarea id="end-mtg-actions" class="mtg-textarea" rows="3" placeholder="e.g. Cody: implement auth module&#10;Usy: update login UI"></textarea>
+                <label class="mtg-label" for="end-mtg-actions">Action items <span class="mm-label-note">(one per line)</span></label>
+                <textarea id="end-mtg-actions" class="mtg-textarea" rows="3" placeholder="For example: Ada: write the auth module&#10;Lin: update the login screen"></textarea>
                 <div id="end-mtg-responses-section"></div>
-                <div id="end-mtg-error" style="color:#e74c3c;font-size:10px;margin:6px 0;display:none;"></div>
-                <button class="mtg-btn mtg-btn-end" onclick="submitEndMeeting()">End Meeting</button>
+                <div id="end-mtg-error" class="vo-form-error" role="alert" style="display:none;"></div>
+                <button type="button" class="mtg-btn mtg-btn-end vo-btn--primary" onclick="submitEndMeeting()">End meeting</button>
             </div>
         </div>
     </div>
@@ -627,11 +817,11 @@
         <div class="sms-resize-handle bottom-left"></div>
         <div class="sms-resize-handle left"></div>
         <div class="sms-header">
-            <span>📞 SMS Inbox</span>
+            <span><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-phone"/></svg> SMS Inbox</span>
             <span id="sms-count" class="sms-count">0</span>
             <span style="flex:1"></span>
             <div class="sms-header-btns">
-                <button id="sms-close" class="sms-close">&times;</button>
+                <button id="sms-close" class="sms-close" type="button" title="Close SMS panel" aria-label="Close SMS panel">&times;</button>
             </div>
         </div>
         <div class="sms-owner-strip">
@@ -640,18 +830,18 @@
         <div class="sms-layout">
             <div class="sms-sidebar">
                 <div class="sms-thread-picker">
-                    <select id="sms-recipient" class="sms-recipient">
+                    <select id="sms-recipient" class="sms-recipient" aria-label="Contact">
                         <option value="">Select contact...</option>
                     </select>
-                    <input type="text" id="sms-phone-manual" class="sms-phone-manual" placeholder="+1XXXXXXXXXX" style="display:none">
-                    <button id="sms-toggle-manual" class="sms-toggle-manual" title="Type number manually">✏️</button>
+                    <input type="text" id="sms-phone-manual" class="sms-phone-manual" placeholder="+1XXXXXXXXXX" aria-label="Phone number" style="display:none">
+                    <button id="sms-toggle-manual" class="sms-toggle-manual" type="button" title="Type a number" aria-label="Type a number"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-edit"/></svg></button>
                     <button id="sms-open-thread" class="sms-open-thread" title="Open thread">Open</button>
                 </div>
                 <div id="sms-threads" class="sms-threads"></div>
             </div>
             <div class="sms-conversation">
                 <div class="sms-thread-header">
-                    <button id="sms-back-to-inbox" class="sms-back-to-inbox" type="button">← Inbox</button>
+                    <button id="sms-back-to-inbox" class="sms-back-to-inbox" type="button" aria-label="Back to inbox">← Inbox</button>
                     <div class="sms-thread-header-main">
                         <div id="sms-thread-title" class="sms-thread-title">Select a contact</div>
                         <div id="sms-thread-subtitle" class="sms-thread-subtitle">Choose a thread to view the conversation.</div>
@@ -659,7 +849,7 @@
                     <div class="sms-mode-toggle">
                         <span id="sms-mode-label" class="sms-mode-label">Agent</span>
                         <label class="sms-switch">
-                            <input type="checkbox" id="sms-mode-check">
+                            <input type="checkbox" id="sms-mode-check" aria-label="Reply as user instead of the agent">
                             <span class="sms-slider"></span>
                         </label>
                     </div>
@@ -667,29 +857,17 @@
                 <div id="sms-empty-state" class="sms-empty-state">Select a contact thread on the left, or open a number to start a new one.</div>
                 <div id="sms-messages" class="sms-messages"></div>
                 <div class="sms-input-row sms-compose-row">
-                    <textarea id="sms-input" class="sms-input" placeholder="Switch this thread to User to reply manually..." rows="2"></textarea>
-                    <button id="sms-send" class="sms-send-btn">▶</button>
+                    <textarea id="sms-input" class="sms-input" placeholder="Switch this thread to User to reply manually..." rows="2" aria-label="SMS message"></textarea>
+                    <button id="sms-send" class="sms-send-btn" type="button" title="Send" aria-label="Send SMS"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-play"/></svg></button>
                 </div>
             </div>
         </div>
     </div>
 
     <!-- Chat Panel -->
-    <button id="chat-toggle" class="chat-toggle-btn">💬</button>
-    <div id="chat-exterior-tabs" class="chat-exterior-tabs" title="Chat windows">
-        <button type="button" class="chat-slot-tab state-hidden" data-chat-slot-toggle="1" data-chat-slot-state="hidden" aria-pressed="false" title="Open chat window 1">
-            <span class="chat-slot-tab-label">1</span>
-        </button>
-        <button type="button" class="chat-slot-tab state-hidden" data-chat-slot-toggle="2" data-chat-slot-state="hidden" aria-pressed="false" title="Open chat window 2">
-            <span class="chat-slot-tab-label">2</span>
-        </button>
-        <button type="button" class="chat-slot-tab state-hidden" data-chat-slot-toggle="3" data-chat-slot-state="hidden" aria-pressed="false" title="Open chat window 3">
-            <span class="chat-slot-tab-label">3</span>
-        </button>
-        <button type="button" class="chat-slot-tab chat-slot-tab-reset" id="chat-reset-layout" title="Reset all chat windows to equal size">
-            <span class="chat-slot-tab-label">↺</span>
-        </button>
-    </div>
+    <button id="chat-toggle" class="chat-toggle-btn" type="button" aria-label="Open chat" title="Chat">💬</button>
+    <!-- One button per open chat window, stacked above the chat launcher (painted by the chat script). -->
+    <div id="chat-window-rail" class="chat-window-rail" role="group" aria-label="Your chat windows" hidden></div>
     <div id="chat-panel" class="chat-panel">
         <div id="chat-resize-handle-top-left"      class="chat-resize-handle top-left"></div>
         <div id="chat-resize-handle-top"           class="chat-resize-handle top"></div>
@@ -699,16 +877,23 @@
         <div id="chat-resize-handle-bottom"        class="chat-resize-handle bottom"></div>
         <div id="chat-resize-handle-bottom-left"   class="chat-resize-handle bottom-left"></div>
         <div id="chat-resize-handle-left"          class="chat-resize-handle left"></div>
+        <button type="button" class="chat-sheet-grip" aria-label="Chat height" title="Drag to resize. Tap: half or full height."><span aria-hidden="true"></span></button>
         <div class="chat-header">
-                <button id="chat-sessions-toggle" class="chat-sessions-toggle" title="Sessions">☰</button>
-                <select id="chat-agent-select" class="chat-agent-select" title="Switch agent">
-                <option value="main" data-emoji="🤖" data-name="Main Agent" selected>🤖 Main Agent</option>
-            </select>
+                <button id="chat-sessions-toggle" class="chat-sessions-toggle" type="button" title="Sessions" aria-label="Show sessions"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-menu"/></svg></button>
+                <div class="chat-agent-pick" title="Switch agent">
+                    <span class="chat-agent-pick-face" aria-hidden="true"><span class="chat-agent-pick-av">🤖</span><span class="chat-agent-pick-name">Main Agent</span><svg class="vo-icon chat-agent-pick-chev"><use href="#i-chev"/></svg></span>
+                    <select id="chat-agent-select" class="chat-agent-select" title="Switch agent" aria-label="Agent">
+                    <option value="main" data-emoji="🤖" data-name="Main Agent" selected>🤖 Main Agent</option>
+                    </select>
+                </div>
+                <button id="chat-new-window" class="chat-new-window" type="button" title="Open another chat window" aria-label="Open another chat window"><svg class="vo-icon" aria-hidden="true"><use href="#i-plus"/></svg></button>
             <span id="chat-status" class="chat-status">Offline</span>
             <span style="flex:1"></span>
             <div class="chat-header-btns">
-                <button id="chat-new-session" class="chat-new-session" title="New Session">🔄</button>
-                <button id="chat-close" class="chat-close">&times;</button>
+                <button id="chat-new-session" class="chat-new-session" type="button" title="New session" aria-label="New session"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-plus"/></svg></button>
+                <button id="chat-put-away" class="chat-put-away" type="button" title="Put away (it keeps its button on the side and keeps working)" aria-label="Put this chat away"><svg class="vo-icon" aria-hidden="true"><use href="#i-minus"/></svg></button>
+                <button class="chat-more-tools" type="button" title="More chat tools" aria-label="More chat tools" aria-haspopup="menu" aria-expanded="false"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-more"/></svg></button>
+                <button id="chat-close" class="chat-close" type="button" title="Close chat" aria-label="Close chat"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
             </div>
         </div>
         <div id="chat-model-bar" class="chat-model-bar">
@@ -719,7 +904,7 @@
             <div id="chat-sessions-panel" class="chat-sessions-panel" aria-label="Sessions">
                 <div class="chat-sessions-head">
                     <span class="chat-sessions-title">Sessions</span>
-                    <button id="chat-sessions-new" class="chat-sessions-new" title="New session">＋</button>
+                    <button id="chat-sessions-new" class="chat-sessions-new" type="button" title="New session" aria-label="New session">＋</button>
                 </div>
                 <div id="chat-sessions-list" class="chat-sessions-list"></div>
             </div>
@@ -728,12 +913,12 @@
         </div>
         <div id="chat-attachments-preview" class="chat-attachments-preview"></div>
         <div class="chat-input-row">
-            <button id="chat-attach" class="chat-attach-btn" title="Attach file">📎</button>
+            <button id="chat-attach" class="chat-attach-btn" type="button" title="Attach file" aria-label="Attach file"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-attach"/></svg></button>
             <input type="file" id="chat-file-input" class="chat-file-input" multiple accept="image/*,.pdf,.txt,.csv,.json,.md,.py,.js" style="display:none">
-            <textarea id="chat-input" class="chat-input" placeholder="Type a message..." rows="1"></textarea>
-            <button id="chat-mic" class="chat-mic-btn" title="Voice input (Whisper)">🎙️</button>
-            <button id="chat-stop" class="chat-stop-btn" title="Stop current model response">⏹</button>
-            <button id="chat-send" class="chat-send-btn">▶</button>
+            <textarea id="chat-input" class="chat-input" placeholder="Type a message..." rows="1" aria-label="Message"></textarea>
+            <button id="chat-mic" class="chat-mic-btn" type="button" title="Voice input (Whisper)" aria-label="Voice input"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-mic"/></svg></button>
+            <button id="chat-stop" class="chat-stop-btn" type="button" title="Stop current model response" aria-label="Stop response"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-stop"/></svg></button>
+            <button id="chat-send" class="chat-send-btn" type="button" title="Send (Enter)" aria-label="Send message"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-play"/></svg></button>
         </div>
     </div>
 
@@ -753,10 +938,10 @@
         <div class="browser-resize-handle bottom-left" data-resize="sw"></div>
         <div class="browser-resize-handle bottom-right" data-resize="se"></div>
         <div class="browser-header" id="browser-drag-handle">
-            <span class="browser-title">🌐 Agent Browser</span>
+            <span class="browser-title"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-globe"/></svg> Agent Browser</span>
             <span id="browser-status" class="browser-status">Idle</span>
             <div class="browser-controls">
-                <button id="browser-take-control" class="browser-ctrl-btn" title="Take manual control">🖱️ Take Control</button>
+                <button id="browser-take-control" class="browser-ctrl-btn" title="Take manual control"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-pointer"/></svg> Take Control</button>
                 <button id="browser-release" class="browser-ctrl-btn browser-release-btn" title="Release control back to AI" style="display:none">🤖 Release to AI</button>
                 <div class="browser-snap-group">
                     <button class="browser-snap-btn" data-zone="4" title="Snap top-left">4</button>
@@ -764,20 +949,21 @@
                     <button class="browser-snap-btn" data-zone="2" title="Snap bottom-left">2</button>
                     <button class="browser-snap-btn active" data-zone="1" title="Snap bottom-right (default)">1</button>
                 </div>
-                <button id="browser-minimize" class="browser-minimize" title="Minimize">—</button>
-                <button id="browser-maximize" class="browser-maximize" title="Maximize">□</button>
-                <button id="browser-close" class="browser-close">&times;</button>
+                <button id="browser-minimize" class="browser-minimize" type="button" title="Minimize" aria-label="Minimize browser"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-minus"/></svg></button>
+                <button id="browser-maximize" class="browser-maximize" type="button" title="Maximize" aria-label="Maximize browser"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-maximize"/></svg></button>
+                <button id="browser-close" class="browser-close" type="button" title="Close browser" aria-label="Close browser">&times;</button>
             </div>
         </div>
         <div id="browser-url-bar" class="browser-url-bar">
             <span id="browser-current-url" class="browser-current-url">about:blank</span>
         </div>
         <div id="browser-frame-container" class="browser-frame-container">
-            <iframe id="browser-neko-frame" class="browser-neko-frame" tabindex="0" allow="autoplay; clipboard-read; clipboard-write; pointer-lock; keyboard-map"></iframe>
+            <iframe id="browser-neko-frame" class="browser-neko-frame" title="Agent browser live view" tabindex="0" allow="autoplay; clipboard-read; clipboard-write; pointer-lock; keyboard-map"></iframe>
         </div>
     </div>
 
-    <!-- Shared live agent preview window -->
+    <!-- Shared Agent PC window. Preview Bubbles, characters, and desk monitors
+         all open this same read-mostly provider workspace surface. -->
     <div id="agentPreviewPanel" class="agent-preview-panel" style="display:none" role="dialog" aria-modal="false" aria-labelledby="agentPreviewPanelTitle">
         <div class="browser-resize-handle top" data-resize="n"></div>
         <div class="browser-resize-handle bottom" data-resize="s"></div>
@@ -788,19 +974,47 @@
         <div class="browser-resize-handle bottom-left" data-resize="sw"></div>
         <div class="browser-resize-handle bottom-right" data-resize="se"></div>
         <div class="agent-preview-panel-header">
-            <span id="agentPreviewPanelTitle">🖥️ Agent Preview</span>
+            <svg class="vo-icon agent-preview-title-icon" aria-hidden="true" focusable="false"><use href="#i-monitor"/></svg><span id="agentPreviewPanelTitle">Agent PC</span>
             <div class="agent-preview-panel-controls">
-                <button type="button" data-preview-action="refresh" title="Refresh current preview" aria-label="Refresh current preview">↻</button>
-                <button type="button" data-preview-action="open" title="Open original" aria-label="Open original">↗</button>
-                <button type="button" class="agent-preview-snap-control" data-preview-action="snap-left" title="Snap left" aria-label="Snap left">◧</button>
-                <button type="button" class="agent-preview-snap-control" data-preview-action="snap-right" title="Snap right" aria-label="Snap right">◨</button>
-                <button type="button" data-preview-action="maximize" title="Maximize or restore" aria-label="Maximize or restore">□</button>
-                <button type="button" class="agent-preview-close" data-preview-action="close" title="Close preview window" aria-label="Close preview window">×</button>
+                <button type="button" data-preview-action="refresh" title="Refresh Agent PC" aria-label="Refresh Agent PC"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg></button>
+                <button type="button" data-preview-action="save" title="Save a copy" aria-label="Save a copy"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-save"/></svg></button>
+                <button type="button" data-preview-action="open" title="Open original" aria-label="Open original"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-window"/></svg></button>
+                <button type="button" class="agent-preview-snap-control" data-preview-action="snap-left" title="Snap left" aria-label="Snap left"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-snap-left"/></svg></button>
+                <button type="button" class="agent-preview-snap-control" data-preview-action="snap-right" title="Snap right" aria-label="Snap right"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-snap-right"/></svg></button>
+                <button type="button" data-preview-action="maximize" title="Maximize or restore" aria-label="Maximize or restore"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-maximize"/></svg></button>
+                <button type="button" class="agent-preview-close" data-preview-action="close" title="Close Agent PC" aria-label="Close Agent PC"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
             </div>
         </div>
-        <div class="agent-preview-tabs" role="tablist" aria-label="Open agent previews"></div>
-        <div class="agent-preview-meta" role="status" aria-live="polite">Waiting for agent work</div>
-        <div class="agent-preview-stage"></div>
+        <div class="agent-pc-shell">
+            <aside class="agent-pc-sidebar" aria-label="Agent PC navigation">
+                <div class="agent-pc-identity">
+                    <span class="agent-pc-identity-icon">🤖</span>
+                    <span><strong data-agent-pc-name>Agent</strong><small data-agent-pc-provider>Workspace</small></span>
+                </div>
+                <nav class="agent-pc-nav">
+                    <button type="button" data-agent-pc-section="recent" class="active"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-clock"/></svg>Recent <b data-agent-pc-count="recent">0</b></button>
+                    <button type="button" data-agent-pc-section="sources"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-book"/></svg>Sources <b data-agent-pc-count="sources">0</b></button>
+                    <button type="button" data-agent-pc-section="outputs"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-sparkle"/></svg>Outputs <b data-agent-pc-count="outputs">0</b></button>
+                    <button type="button" data-agent-pc-section="files"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-folder"/></svg>Files</button>
+                    <button type="button" data-agent-pc-section="saved"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-save"/></svg>Saved <b data-agent-pc-count="saved">0</b></button>
+                    <button type="button" data-agent-pc-section="screen" hidden><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-monitor"/></svg><span data-agent-pc-screen-label>Screen</span></button>
+                </nav>
+                <div class="agent-pc-roots" data-agent-pc-roots></div>
+                <button type="button" class="agent-pc-connect" data-agent-pc-action="connect">＋ Connect Folder</button>
+                <div class="agent-pc-connect-form" data-agent-pc-connect-form hidden>
+                    <label>Approved location<select data-agent-pc-mapping></select></label>
+                    <label>Subfolder<input data-agent-pc-connect-path placeholder="Optional folder inside location"></label>
+                    <label>Display name<input data-agent-pc-connect-label placeholder="Folder name"></label>
+                    <div><button type="button" data-agent-pc-action="connect-save">Connect</button><button type="button" data-agent-pc-action="connect-cancel">Cancel</button></div>
+                    <small data-agent-pc-connect-help></small>
+                </div>
+            </aside>
+            <main class="agent-pc-main">
+                <div class="agent-preview-tabs" role="tablist" aria-label="Open Agent PC files"></div>
+                <div class="agent-preview-meta" role="status" aria-live="polite">Open an agent PC to browse its work</div>
+                <div class="agent-preview-stage"></div>
+            </main>
+        </div>
     </div>
     <div id="previewBubbleContainer" aria-label="Live agent preview bubbles"></div>
 
@@ -826,9 +1040,9 @@
                 </div>
             </div>
             <div class="agent-workspace-controls">
-                <button id="agent-workspace-refresh" type="button" title="Refresh">↻</button>
-                <button id="agent-workspace-maximize" type="button" title="Maximize">□</button>
-                <button id="agent-workspace-close" type="button" title="Close">&times;</button>
+                <button id="agent-workspace-refresh" type="button" title="Refresh" aria-label="Refresh workspace"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-refresh"/></svg></button>
+                <button id="agent-workspace-maximize" type="button" title="Maximize" aria-label="Maximize workspace"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-maximize"/></svg></button>
+                <button id="agent-workspace-close" type="button" title="Close" aria-label="Close workspace"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-close"/></svg></button>
             </div>
         </div>
         <div class="agent-workspace-tabs">
@@ -844,53 +1058,63 @@
     </div>
 
     <script>
+    // Legacy collapsible sections (game.js branch headers call this with their <h4>).
     function toggleSection(h4) {
         const body = h4.nextElementSibling;
         const arrow = h4.querySelector('.section-arrow');
         const isHidden = body.style.display === 'none';
         body.style.display = isHidden ? '' : 'none';
-        arrow.textContent = isHidden ? '▼' : '▶';
+        if (arrow) arrow.classList.toggle('is-collapsed', !isHidden);
+        h4.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
     }
+    // Dashboard cards: ui-modern.js owns the card state; these keep the old global names working.
     function sidebarExpandAll() {
-        // Collapsible sections (branches, activity log, meetings)
-        document.querySelectorAll('.sidebar .section-body, .sidebar .sidebar-mtg-list').forEach(function(el) { el.style.display = ''; });
-        document.querySelectorAll('.sidebar .section-arrow').forEach(function(el) { el.textContent = '▼'; });
-        // PC monitor
-        var pcBody = document.getElementById('pc-monitor-body');
-        if (pcBody) pcBody.style.display = 'block';
-        var pcArrow = document.getElementById('pc-toggle-arrow');
-        if (pcArrow) pcArrow.textContent = '▼';
-        // API usage
-        var apiBody = document.getElementById('api-usage-body');
-        if (apiBody) apiBody.style.display = 'block';
-        var apiArrow = document.getElementById('api-toggle-arrow');
-        if (apiArrow) apiArrow.textContent = '▼';
+        if (window.VODashboard) return window.VODashboard.setAll(true);
+        document.querySelectorAll('.sidebar .section-body').forEach(function(el) { el.style.display = ''; });
     }
     function sidebarCollapseAll() {
-        // Collapsible sections
+        if (window.VODashboard) return window.VODashboard.setAll(false);
         document.querySelectorAll('.sidebar .section-body').forEach(function(el) { el.style.display = 'none'; });
-        document.querySelectorAll('.sidebar .section-arrow').forEach(function(el) { el.textContent = '▶'; });
-        // PC monitor
-        var pcBody = document.getElementById('pc-monitor-body');
-        if (pcBody) pcBody.style.display = 'none';
-        var pcArrow = document.getElementById('pc-toggle-arrow');
-        if (pcArrow) pcArrow.textContent = '▶';
-        // API usage
-        var apiBody = document.getElementById('api-usage-body');
-        if (apiBody) apiBody.style.display = 'none';
-        var apiArrow = document.getElementById('api-toggle-arrow');
-        if (apiArrow) apiArrow.textContent = '▶';
     }
     function toggleSidebar() {
         const sidebar = document.getElementById('sidebar');
+        const edge = document.getElementById('sidebar-edge');
         const arrow = document.getElementById('sidebar-edge-arrow');
         sidebar.classList.toggle('collapsed');
-        arrow.textContent = sidebar.classList.contains('collapsed') ? '▶' : '◀';
+        const collapsed = sidebar.classList.contains('collapsed');
+        document.body.classList.toggle('vo-dash-hidden', collapsed);
+        arrow.classList.toggle('is-collapsed', collapsed);
+        if (edge) {
+            edge.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            edge.setAttribute('aria-label', collapsed ? 'Show dashboard' : 'Hide dashboard');
+            edge.title = collapsed ? 'Show dashboard' : 'Hide dashboard';
+        }
+        try { localStorage.setItem('vo-dashboard-hidden', collapsed ? '1' : '0'); } catch (e) {}
         // Single resize after transition finishes (300ms transition)
         setTimeout(resizeCanvas, 320);
     }
     </script>
-    <script src="game.js?v=20260814-agent-preview-r1"></script>
+    <script src="pixel-font.js?v=20261103-polish"></script>
+    <!-- v0.13 furniture variants (desk / boss desk): read by game.js while it loads -->
+    <script src="furniture-variants/desk.js?v=20261113-v13"></script>
+    <script src="furniture-variants/boss-desk.js?v=20261113-v13"></script>
+    <script src="game.js?v=20261113-deskpick"></script>
+    <!-- Office editor UI (v10-editor.js) and Agent Studio (v10-studio.js + CSS) load on first use (Q-13):
+         game.js puts each file where its rel="x-vo-lazy" link is (an unknown rel fetches nothing). -->
+    <link rel="x-vo-lazy" data-part="editor" href="v10-editor.js?v=20261103-v10">
+    <!-- Office life (v0.9): right after game.js (they use VOLifeHost); life.js boots after DOMContentLoaded. -->
+    <script src="office-life/sprites.js?v=20261102-life-l2"></script>
+    <script src="office-life/director.js?v=20261102-life-l2"></script>
+    <script src="office-life/life.js?v=20261107-ptcore"></script>
+    <script src="office-life/needs.js?v=20261102-life-l2"></script>
+    <script src="office-life/crew.js?v=20261102-life-l2"></script>
+    <script src="office-life/moods.js?v=20261102-life-l2"></script>
+    <script src="office-life/celebrate.js?v=20261102-life-l2"></script>
+    <script src="office-life/standup.js?v=20261102-life-l2"></script>
+    <script src="office-life/tournament.js?v=20261102-life-l2"></script>
+    <script src="office-life/decor.js?v=20261102-life-l2"></script>
+    <script src="office-life/paper.js?v=20261102-life-l2"></script>
+    <script src="office-life/settings.js?v=20261102-life-l2"></script>
     <script src="office-layouts.js?v=20260723-place-only-1"></script>
     <script src="browser-panel.js?v=20260722-ui-perf-1"></script>
     <script src="projects.js?v=20260722-ui-perf-1"></script>
@@ -901,48 +1125,42 @@
         const el = document.getElementById('modal-bio-' + section);
         const h3 = el.previousElementSibling;
         const isHidden = el.style.display === 'none';
+        h3.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
         if (isHidden) {
             el.style.display = 'block';
-            h3.textContent = h3.textContent.replace('▶', '▼');
             if (!el.dataset.loaded) {
                 el.dataset.loaded = '1';
-                loadBio();
+                loadBio(section);
             }
         } else {
             el.style.display = 'none';
-            h3.textContent = h3.textContent.replace('▼', '▶');
         }
     }
-    async function loadBio() {
+    // Each section loads its own file when first opened. A textarea being edited is
+    // never overwritten, so unsaved edits survive opening another section (CH-37).
+    var BIO_FILES = { agents: 'AGENTS.md', soul: 'SOUL.md', memory: 'MEMORY.md', tools: 'TOOLS.md', identity: 'IDENTITY.md', daily: 'daily' };
+    function _bioData(key) {
+        if (!_bioCache[key]) {
+            _bioCache[key] = fetch('/agent-bio/' + encodeURIComponent(key)).then(function(res) {
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                return res.json();
+            });
+            _bioCache[key].catch(function() { delete _bioCache[key]; });
+        }
+        return _bioCache[key];
+    }
+    async function loadBio(section) {
         const agent = window.selectedAgent;
-        if (!agent) return;
-        const key = agent.statusKey;
-        // Set loading state in textareas
-        var fileMap = {
-            'AGENTS.md': 'bio-edit-agents',
-            'SOUL.md': 'bio-edit-soul',
-            'MEMORY.md': 'bio-edit-memory',
-            'TOOLS.md': 'bio-edit-tools',
-            'IDENTITY.md': 'bio-edit-identity'
-        };
-        Object.values(fileMap).forEach(id => {
-            var el = document.getElementById(id);
-            if (el) el.value = 'Loading...';
-        });
+        if (!agent || !BIO_FILES[section]) return;
+        const el = document.getElementById('bio-edit-' + section);
+        if (!el || el.classList.contains('is-editing')) return;
+        el.value = 'Loading...';
         try {
-            const res = await fetch('/agent-bio/' + key);
-            const data = await res.json();
-            Object.entries(fileMap).forEach(([fname, id]) => {
-                var el = document.getElementById(id);
-                if (el) el.value = data[fname] || '';
-            });
-            var dailyEl = document.getElementById('bio-edit-daily');
-            if (dailyEl) dailyEl.value = data['daily'] || '(no daily notes)';
+            const data = await _bioData(agent.statusKey);
+            if (window.selectedAgent !== agent || el.classList.contains('is-editing')) return;
+            el.value = data[BIO_FILES[section]] || (section === 'daily' ? '(no daily notes)' : '');
         } catch(e) {
-            Object.values(fileMap).forEach(id => {
-                var el = document.getElementById(id);
-                if (el) el.value = '(error: ' + e.message + ')';
-            });
+            if (!el.classList.contains('is-editing')) el.value = '(error: ' + e.message + ')';
         }
     }
 
@@ -954,7 +1172,7 @@
         if (ta) {
             ta.readOnly = false;
             ta.removeAttribute('readonly');
-            ta.style.borderColor = '#ffd600';
+            ta.classList.add('is-editing');
             ta.focus();
         }
         if (saveBtn) { saveBtn.style.display = 'inline-block'; saveBtn.disabled = false; }
@@ -970,7 +1188,7 @@
         const btn = bioContent ? bioContent.querySelector('.bio-save-btn') : null;
         if (!btn) return;
         const origText = btn.textContent;
-        btn.textContent = '⏳ Saving...';
+        btn.textContent = 'Saving...';
         btn.disabled = true;
         try {
             const res = await fetch('/agent-bio-save/' + agent.statusKey, {
@@ -980,12 +1198,13 @@
             });
             const data = await res.json();
             if (data.ok) {
-                btn.textContent = '✅ Saved!';
+                _bioData(agent.statusKey).then(function(cached) { cached[filename] = textarea.value; }, function() {});
+                btn.textContent = 'Saved';
                 btn.classList.add('saved');
                 // Reset to read-only after save
                 textarea.readOnly = true;
                 textarea.setAttribute('readonly', '');
-                textarea.style.borderColor = '#30363d';
+                textarea.classList.remove('is-editing');
                 // Find edit button in the same bio-content parent
                 var bioContent = textarea.closest('.bio-content');
                 var editBtn = bioContent ? bioContent.querySelector('.bio-edit-btn') : null;
@@ -997,11 +1216,11 @@
                     if (editBtn) editBtn.style.display = 'inline-block';
                 }, 2000);
             } else {
-                btn.textContent = '❌ Error: ' + (data.error || 'unknown');
+                btn.textContent = 'Could not save: ' + (data.error || 'unknown error');
                 setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 3000);
             }
         } catch(e) {
-            btn.textContent = '❌ ' + e.message;
+            btn.textContent = 'Could not save: ' + e.message;
             setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 3000);
         }
     };
@@ -1011,25 +1230,66 @@
     const _origOpenModal = window.openModal;
     window.openModal = function(agent) {
         _origOpenModal(agent);
-        // Reset bio sections (collapsed)
+        _bioCache = {};
+        // Reset bio sections (collapsed, read-only)
         ['agents','soul','memory','tools','identity','daily'].forEach(s => {
             const el = document.getElementById('modal-bio-' + s);
             if (el) {
                 el.style.display = 'none';
                 el.dataset.loaded = '';
-                // Clear textareas
                 var ta = el.querySelector('.bio-editor');
-                if (ta) ta.value = '';
+                if (ta) {
+                    ta.value = '';
+                    ta.readOnly = true;
+                    ta.setAttribute('readonly', '');
+                    ta.classList.remove('is-editing');
+                }
+                var saveBtn = el.querySelector('.bio-save-btn');
+                if (saveBtn) saveBtn.style.display = 'none';
+                var editBtn = el.querySelector('.bio-edit-btn');
+                if (editBtn) editBtn.style.display = '';
             }
         });
         document.querySelectorAll('.bio-toggle').forEach(h => {
-            h.textContent = h.textContent.replace('▼', '▶');
+            h.setAttribute('aria-expanded', 'false');
         });
         loadModelSelect(agent);
     };
+    // Only OpenClaw agents pick a model here. Other providers keep their model in
+    // their own settings, so the dialog points there instead (CH-37).
+    var MODEL_PROVIDER_LABELS = { hermes: 'Hermes', codex: 'Codex CLI', 'claude-code': 'Claude Code', opencode: 'OpenCode', antigravity: 'Antigravity', builtin: 'Built-in', 'built-in': 'Built-in' };
+    function _agentProviderKind(agent) {
+        return String((agent && agent.providerKind) || 'openclaw').toLowerCase();
+    }
+    function _showModelPicker(agent) {
+        const kind = _agentProviderKind(agent);
+        const isOpenClaw = typeof window._isOpenClawAgent === 'function' ? window._isOpenClawAgent(agent) : kind === 'openclaw';
+        const row = document.querySelector('#modal-model-select') && document.querySelector('#modal-model-select').closest('.model-settings-row');
+        const note = document.getElementById('modal-model-note');
+        const status = document.getElementById('modal-model-status');
+        if (row) row.hidden = !isOpenClaw;
+        // game.js hides the whole section for other providers; keep it, with the note instead.
+        const section = row && row.closest('.modal-section');
+        if (section) section.style.display = '';
+        if (status && !isOpenClaw) status.textContent = '';
+        if (note) {
+            note.hidden = isOpenClaw;
+            note.textContent = '';
+            if (!isOpenClaw) {
+                const label = MODEL_PROVIDER_LABELS[kind] || (typeof window._providerKindDisplay === 'function' ? window._providerKindDisplay(kind, agent) : kind);
+                note.appendChild(document.createTextNode(label + ' agents choose their model in the ' + label + ' provider settings. '));
+                const link = document.createElement('a');
+                link.href = 'providers.html?provider=' + encodeURIComponent(kind);
+                link.textContent = 'Open provider settings';
+                note.appendChild(link);
+            }
+        }
+        return isOpenClaw;
+    }
     async function loadModelSelect(agent) {
         const sel = document.getElementById('modal-model-select');
         const status = document.getElementById('modal-model-status');
+        if (!_showModelPicker(agent)) return;
         sel.innerHTML = '<option>Loading...</option>';
         status.textContent = '';
         try {
@@ -1039,11 +1299,14 @@
             }
             const nativeData = _modelsCache;
             const data = nativeData.openclaw || {};
-            const currentModel = ((data.agents || {})[agent.statusKey] || {}).model || data.defaultModel || '';
+            // Only a model pinned for this agent is pre-selected; otherwise "(default)" stays
+            // selected, so Apply never pins the default by accident.
+            const currentModel = ((data.agents || {})[agent.statusKey] || {}).model || '';
             sel.innerHTML = '';
             const defOpt = document.createElement('option');
             defOpt.value = '';
-            defOpt.textContent = '(default: ' + (data.defaultModel || '?') + ')';
+            defOpt.textContent = '(default)' + (data.defaultModel ? ' ' + data.defaultModel : '');
+            defOpt.selected = !currentModel;
             sel.appendChild(defOpt);
 
             // Group models by provider
@@ -1083,18 +1346,16 @@
                 }
                 sel.appendChild(grp);
             }
-            if (currentModel) {
-                status.textContent = 'Current: ' + currentModel;
-            }
+            status.textContent = currentModel ? 'Pinned: ' + currentModel : 'Uses the default model' + (data.defaultModel ? ' (' + data.defaultModel + ')' : '') + '.';
         } catch(e) {
-            sel.innerHTML = '<option>Error loading models</option>';
+            sel.innerHTML = '<option value="">Could not load models</option>';
         }
     }
     async function applyModelChange() {
         const sel = document.getElementById('modal-model-select');
         const status = document.getElementById('modal-model-status');
         const agent = window.selectedAgent;
-        if (!agent) return;
+        if (!agent || !_showModelPicker(agent)) return;
         const model = sel.value;
         status.textContent = 'Applying...';
         try {
@@ -1105,46 +1366,58 @@
             });
             const data = await res.json();
             if (data.ok) {
-                status.textContent = '✅ ' + (model || 'default');
+                status.textContent = model ? 'Pinned: ' + model : 'Uses the default model.';
                 _modelsCache = null; // invalidate
             } else {
-                status.textContent = '❌ ' + (data.error || 'Failed');
+                status.textContent = 'Could not change the model: ' + (data.error || 'unknown error');
             }
         } catch(e) {
-            status.textContent = '❌ ' + e.message;
+            status.textContent = 'Could not change the model: ' + e.message;
         }
     }
     </script>
     <!-- marked.js v15.0.12 - bundled locally for airgapped/offline use -->
-    <script src="marked.min.js"></script>
+    <script src="marked.min.js?v=1"></script>
     <script src="chat-markdown.js?v=20260814-provider-markdown-1"></script>
-    <script src="chat-events.js?v=20260807-provider-sdk-1"></script>
-    <script src="chat.js?v=20260814-agent-preview-r1"></script>
-    <script type="module" src="agent-preview-bootstrap.mjs?v=20260814-agent-preview-r1"></script>
+    <script src="chat-events.js?v=20261109-relhfix"></script>
+    <link rel="stylesheet" href="session-progress.css?v=20261101-v08">
+    <link rel="stylesheet" href="office-task-progress.css?v=20261101-v08">
+    <link rel="stylesheet" href="v08-office.css?v=20261101-v08">
+    <link rel="x-vo-lazy" data-part="studio" href="v10-studio.css?v=20261103-v10">
+    <link rel="x-vo-lazy" data-part="editor" href="v10-editor.css?v=20261103-v10">
+    <link rel="stylesheet" href="v08-chat.css?v=20261101-v08">
+    <link rel="stylesheet" href="hp-chat.css?v=20261101-hp-fx">
+    <link rel="stylesheet" href="v08-panels.css?v=20261101-v08">
+    <link rel="stylesheet" href="office-life/life.css?v=20261102-life-l2">
+    <link rel="stylesheet" href="office-life/paper.css?v=20261102-life-l2">
+    <link rel="stylesheet" href="v10-ui.css?v=20261103-v10">
+    <script src="office-chat-references.js?v=20260907-office-r2"></script>
+    <script src="session-progress.js?v=20260906-drawer-r3"></script>
+    <script src="chat-caps.js?v=20261101-hp-b4"></script>
+    <script src="chat-universal.js?v=20261101-hp-d1"></script>
+    <script src="chat-cards.js?v=20261107-ptcore"></script>
+    <script src="chat-queue.js?v=20261101-hp-c2"></script>
+    <script src="chat-pickers.js?v=20261109-relux-b"></script>
+    <script src="chat-media.js?v=20261101-hp-d1"></script>
+    <script src="chat-sidepanel.js?v=20261101-hp-d1"></script>
+    <script src="chat-windows.js?v=20261102-chat-ux"></script>
+    <script src="chat.js?v=20261109-relhfix"></script>
+    <script src="vo-provider-layer.js?v=20261109-plui"></script>
+    <script type="module" src="agent-preview-bootstrap.mjs?v=20261101-v08-agent-pc"></script>
     <script src="sms-panel.js?v=20260722-ui-perf-1"></script>
     <script src="pc-monitor.js?v=0"></script>
     <script src="api-usage.js?v=20260610-native-usage"></script>
-    <script src="ui-modern.js?v=20260814-agent-preview-r2"></script>
-    <script src="ui-themes.js?v=20260722-5"></script>
+    <script src="ui-modern.js?v=20261109-relfix2"></script>
+    <link rel="x-vo-lazy" data-part="studio" href="v10-studio.js?v=20261113-deskpick">
+    <script src="ui-themes.js?v=20261101-v08"></script>
     <script>
-    // License check — demo watermark + feature gates
+    // License check: demo pill + lock marks (visual only; gating lives in the server and game.js).
     (function() {
         fetch('/api/license').then(function(r){return r.json();}).then(function(lic) {
             window._voLicense = lic;
+            if (window.VOUI && window.VOUI.applyLicense) window.VOUI.applyLicense(lic);
+            else window.addEventListener('DOMContentLoaded', function () { if (window.VOUI && window.VOUI.applyLicense) window.VOUI.applyLicense(lic); });
             if (lic.demo) {
-                // Watermark banner
-                var banner = document.createElement('div');
-                banner.id = 'demo-banner';
-                banner.style.cssText = 'width:100%;background:linear-gradient(90deg,#ff6b00,#ff9500);color:#000;text-align:center;padding:5px 12px;font-size:11px;font-weight:bold;cursor:pointer;flex-shrink:0;';
-                banner.innerHTML = '⚡ DEMO — 3 agents max, some features locked. <u>Get a license key</u>';
-                banner.onclick = function() { window.open('/setup','_blank'); };
-                // Insert above the toolbar
-                var toolbar = document.querySelector('.toolbar');
-                if (toolbar && toolbar.parentElement) {
-                    toolbar.parentElement.insertBefore(banner, toolbar);
-                } else {
-                    document.body.prepend(banner);
-                }
                 // Watermark on canvas
                 if (typeof window._drawDemoWatermark === 'undefined') {
                     window._drawDemoWatermark = function(ctx, w, h) {

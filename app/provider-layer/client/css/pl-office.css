@@ -1,0 +1,234 @@
+/* My Virtual Office. Copyright (c) 2026 My Virtual Office. Licensed under the GNU AGPL-3.0 (see LICENSE). */
+/* The copied OpenClaw + Hermes chat window and Agent Providers window in the office (v0.11, VO_PROVIDER_LAYER=1;
+   loaded by js/vo-mount.mjs after chat.css and agent-providers.css). Everything here is scoped to the copied windows'
+   own roots (.chat-layer, .ap-back, #floatbtns.pl-rail): the office's own classes and windows are never touched.
+   1. Place: the windows join the office's window stack (vo-window-stack.js), the providers window its modal band.
+   2. The few generic rules the copied windows took from My Virtual World's app.css (buttons, panels, fields, hints).
+   3. The "put away" buttons: a second .chat-window-rail (VO's rules place it) lifted above the office's own. */
+
+/* 0. the copied windows' colour tokens, from the office's own (--vo-*, ui-tokens.css): every office theme and preset,
+   light and dark, reaches them. Set on their roots only (providers.html and models pages use some of these names). */
+.chat-layer, .ap-back, #floatbtns.pl-rail {
+  --text: var(--vo-text-1); --strong: var(--vo-text-1); --dim: var(--vo-text-2); --muted-2: var(--vo-text-3);
+  --line: var(--vo-border-subtle); --line-2: color-mix(in srgb, var(--vo-border-strong) 55%, var(--vo-border-subtle)); --line-3: var(--vo-border-strong);
+  --bg: var(--vo-surface-1); --bg2: var(--vo-surface-2); --panel-strong: var(--vo-surface-1); --page: var(--vo-surface-0);
+  --btn: var(--vo-surface-2); --btn-hover: var(--vo-surface-3); --btn-on-a: var(--vo-accent-soft); --btn-on-b: var(--vo-accent-soft);
+  --hl-line: var(--vo-accent); --field: var(--vo-surface-0); --bar: var(--vo-surface-3);
+  --primary: var(--vo-accent-fill); --on-primary: var(--vo-accent-fill-ink); --accent: var(--vo-accent);
+  --good: var(--vo-success); --bad: var(--vo-danger); --warn: var(--vo-warning); --gold: var(--vo-accent);
+  --good-soft: var(--vo-success-soft); --gold-soft: var(--vo-accent-soft);
+  --bad-soft: var(--vo-danger-soft); --bad-line: color-mix(in srgb, var(--vo-danger) 45%, transparent);
+  --scrim: var(--vo-scrim); --shadow: var(--vo-shadow-2); --shadow-c4: rgba(0, 0, 0, .45); --shadow-c5: rgba(0, 0, 0, .3);
+  --topbar-height: var(--vo-topbar-h, 56px); --mono: var(--vo-font-mono); --r: var(--vo-radius-md);
+  --vw-border-strong: var(--vo-border-strong);
+  --win-w: min(1260px, calc(100vw - 24px)); --win-h: min(840px, calc(100dvh - var(--vo-topbar-h, 56px) - 20px));
+  font-family: var(--vo-font-ui); color: var(--text); font-size: var(--vo-text-sm, 14px); line-height: var(--vo-leading, 1.45);
+}
+
+/* 1. place: no stacking context of their own, so each window (.chat-back) takes its z-index from the office stack */
+.chat-layer { position: static; inset: auto; z-index: auto; pointer-events: none; }
+.ap-back { z-index: var(--vo-z-modal, 600); }
+
+/* 2. generic rules (from app.css), only inside the copied windows */
+/* (:where: no class weight, so the copied windows' own one-class rules (.cw-send's ink and size) still win) */
+:where(.chat-layer, .ap-back) :is(button, input, select, textarea) { font: inherit; color: inherit; }
+:is(.chat-layer, .ap-back) button { cursor: pointer; }
+/* (the office's own button rule (ui-modern.css: min-height 38px, padding 8px 12px) is not My Virtual World's: in the chat
+   window it made every button 38 px tall and left the round Send and "go to the latest" buttons a 12 px content box, so
+   their icons sat off-centre and the circles became ovals. Buttons there size as the copied window says (the browser's
+   own padding where it says nothing); :where: no weight, so every one-class rule of the copied window still wins) */
+:where(.chat-layer) button { min-height: revert; padding: revert; }
+:is(.chat-layer, .ap-back) :is(input, select, textarea) { color: var(--text); }
+:is(.chat-layer, .ap-back, .pl-rail) .hidden { display: none !important; }
+:is(.chat-layer, .ap-back) .panel { background: var(--bg); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); }
+:is(.chat-layer, .ap-back, .pl-rail) .btn { background: var(--btn); border: 1px solid var(--line); border-radius: 9px; padding: 6px 10px; color: var(--text);
+  transition: background .15s, border-color .15s; }
+:is(.chat-layer, .ap-back, .pl-rail) .btn:hover { background: var(--btn-hover); }
+:is(.chat-layer, .ap-back, .pl-rail) .btn:active { transform: translateY(1px); }
+:is(.chat-layer, .ap-back) .btn.on { background: var(--btn-on-a); border-color: var(--hl-line); color: var(--strong); }
+:is(.chat-layer, .ap-back) .btn.primary { background: var(--primary); border-color: var(--primary); color: var(--on-primary); font-weight: 600; }
+:is(.chat-layer, .ap-back) .btn.primary:hover { filter: brightness(1.08); }
+:is(.chat-layer, .ap-back) .btn.danger { background: var(--bad-soft); border-color: var(--bad-line); }
+:is(.chat-layer, .ap-back) .btn.small { padding: 3px 8px; font-size: 12px; border-radius: 7px; }
+:is(.chat-layer, .ap-back) .btn.icon { width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; font-size: 15px; }
+/* (the Agent Providers close button: a long title squeezed it to 20 px on a phone; touch screens get 44 px) */
+.ap-back .ap-x { flex: none; }
+@media (pointer: coarse) { .ap-back .btn.icon.ap-x { width: 44px; height: 44px; } }
+:is(.chat-layer, .ap-back) .btn:disabled { opacity: .4; cursor: default; }
+:is(.chat-layer, .ap-back, .pl-rail) svg.mvi { display: inline-block; width: 1.2em; height: 1.2em; vertical-align: -.24em; flex: none; overflow: visible;
+  fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+:is(.chat-layer, .ap-back, .pl-rail) svg.mvi .f { fill: currentColor; stroke: currentColor; stroke-width: .5; }
+:is(.chat-layer, .ap-back) svg.mvi.t-good { color: var(--good); }
+:is(.chat-layer, .ap-back) svg.mvi.t-bad { color: var(--bad); }
+:is(.chat-layer, .ap-back) svg.mvi.t-gold { color: var(--gold); }
+:is(.chat-layer, .ap-back) svg.mvi.t-dim { color: var(--dim); }
+:is(.chat-layer, .ap-back) .btn svg.mvi:only-child,:is(.chat-layer, .ap-back) .icon svg.mvi:only-child { vertical-align: -.2em; }
+:is(.chat-layer, .ap-back) .dim { color: var(--dim); }
+:is(.chat-layer, .ap-back) .hint { color: var(--dim); font-size: 12px; margin-top: 6px; }
+:is(.chat-layer, .ap-back) .hint.bad, :is(.chat-layer, .ap-back) .bad { color: var(--bad); }
+:is(.chat-layer, .ap-back) .spacer { flex: 1; }
+:is(.chat-layer, .ap-back) .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+:is(.chat-layer, .ap-back) .kv2 { display: grid; grid-template-columns: 110px 1fr; gap: 4px 8px; font-size: 13px; }
+:is(.chat-layer, .ap-back) .kv2 span { color: var(--dim); }
+:is(.chat-layer, .ap-back) .aform { display: grid; gap: 10px; }
+:is(.chat-layer, .ap-back) .aform label { display: grid; gap: 4px; color: var(--dim); font-size: 12px; }
+:is(.chat-layer, .ap-back) select { background-color: var(--field); border: 1px solid var(--line); border-radius: 8px; }
+:is(.chat-layer, .ap-back) select option { background-color: var(--panel-strong); color: var(--text); }
+:is(.chat-layer, .ap-back) :is(p, h1, h2, h3, h4, ul, ol) { margin-block: .4em; }
+.chat-layer .chat-back.modal-back, .ap-back.modal-back { position: fixed; inset: 0; background: var(--scrim); display: grid; place-items: center; pointer-events: auto; }
+.chat-layer .chat-back.min { display: none; }
+
+/* 3. the windows' "put away" buttons (one per copied window; the office's own are in #chat-window-rail) */
+#floatbtns.pl-rail { translate: 0 calc(-1 * var(--pl-rail-lift, 0px)); }
+#floatbtns.pl-rail:not(:has(.fb-win)) { display: none; }
+#floatbtns.pl-rail .fb-chat, #floatbtns.pl-rail .fb-wins { display: flex; flex-direction: column-reverse; align-items: center; gap: 6px; }
+#floatbtns.pl-rail .fb-win { pointer-events: auto; position: relative; width: 40px; height: 40px; padding: 0; display: inline-grid; place-items: center;
+  border: 2px solid var(--vo-border-strong, #5b6f8c); border-radius: var(--vo-radius-md, 12px); background: var(--vo-surface-2, #131c2c);
+  color: var(--vo-text-1, #f3f6fb); box-shadow: var(--vo-shadow-pixel, 2px 2px 0 rgba(0,0,0,.35)); font-size: 18px; }
+#floatbtns.pl-rail .fb-win:hover { border-color: var(--vo-accent, #f5c84c); }
+#floatbtns.pl-rail .fb-win.on { border-color: var(--vo-accent, #f5c84c); }
+#floatbtns.pl-rail .fb-win:not(.on) { opacity: .78; border-style: dashed; }
+#floatbtns.pl-rail .fb-win.front { background: color-mix(in srgb, var(--vo-accent, #f5c84c) 22%, var(--vo-surface-2, #131c2c)); box-shadow: var(--vo-shadow-pixel, 2px 2px 0 rgba(0,0,0,.35)); }
+#floatbtns.pl-rail .fb-win.working { outline: 2px solid var(--vo-info, #60a5fa); outline-offset: 1px; }
+#floatbtns.pl-rail .fb-win.waiting { outline: 2px solid var(--vo-warning, #f59e0b); outline-offset: 1px; }
+#floatbtns.pl-rail .fb-win-n { position: absolute; right: -5px; top: -5px; min-width: 16px; height: 16px; padding: 0 3px; border-radius: 8px;
+  background: var(--vo-accent-fill, #f5c84c); color: var(--vo-accent-fill-ink, #1a1405); font: 700 10px/16px var(--vo-font-ui, sans-serif); }
+
+/* 4. the office look: the chat window takes the frame of the office's own chat window (.chat-panel: ui-modern.css and
+   ui-themes.css, the same tokens: 1 px border, its soft window shadow, a tinted header, 14 px body text; 2 px border in
+   the pixel font style, the cut corners of Cyberpunk); the providers window keeps the office dialogs' pixel frame. Also
+   its pixel font on titles and tabs, its accent instead of My Virtual World's sky blue (chat) and violet (providers),
+   its buttons, and squarer icon strokes. Light, dark and every preset follow the --vo-* tokens. */
+.chat-layer .chatwin { --cw-acc: var(--vo-accent); --cw-bg: var(--vo-surface-1); }
+.chat-layer .cw-vm-state { color: var(--vo-accent); border-color: color-mix(in srgb, var(--vo-accent) 35%, transparent);
+  background: color-mix(in srgb, var(--vo-accent) 8%, transparent); }
+.ap-back .ap { --ac: var(--vo-accent); }
+.ap-back .ap.panel {
+  border: 2px solid var(--vo-border-strong); border-radius: var(--vo-radius-lg); box-shadow: var(--vo-shadow-pixel);
+  backdrop-filter: none; -webkit-backdrop-filter: none; }
+.chat-layer .chatwin.panel, .chat-layer .chat-back.floating .chatwin {
+  border: 1px solid var(--vo-border-strong); border-radius: var(--vo-radius-lg); box-shadow: var(--vo-shadow-3);
+  background: var(--vo-surface-1); font-size: var(--vo-text-md, 14px); line-height: var(--vo-leading, 1.5);
+  backdrop-filter: none; -webkit-backdrop-filter: none; }
+html[data-ui-font-style="pixel"] .chat-layer .chatwin.panel { border-width: 2px; }
+html[data-ui-preset="cyberpunk"] .chat-layer .chat-back.floating .chatwin {
+  clip-path: polygon(0 10px, 10px 0, calc(100% - 28px) 0, 100% 28px, 100% 100%, 0 100%); }
+/* (the composer's round and icon buttons: the icon centred in the button, whatever the font's line box. Attach is its "+"
+   alone: chat.css's narrow-window .cw-tool padding (5px 8px, a later one-class rule) overrode its padding 0 and cut the
+   icon to "+…") */
+.chat-layer .chatwin :is(.cw-send, .cw-down, .cw-tool.cw-attach) { display: inline-grid; place-items: center; padding: 0; text-overflow: clip; }
+.chat-layer .chatwin :is(.cw-send, .cw-down, .cw-tool.cw-attach) > svg.mvi { display: block; }
+/* (the model chip: a long model name is cut to its chip's width (90 px in a narrow window), its ▾ stays: the cut was the
+   whole button's, so "Claude Opus ▾" became "Claude …" and no longer looked like a menu) */
+.chat-layer .chatwin .cw-tool.cw-model { display: inline-flex; align-items: center; gap: 4px; }
+.chat-layer .chatwin .cw-tool.cw-model > .cw-tool-lb { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.chat-layer .chatwin .cw-tool.cw-model > svg.mvi { flex: none; }
+/* (the ▾ is the office's 17 px caret icon, so the narrow window's 90 px chip (chat.css) would leave a short name like
+   "Stub One" cut too; 112 px still leaves the row room for Send without wrapping in the 380 px window) */
+@container cw (max-width: 520px) { .chat-layer .chatwin .cw-tools .cw-tool.cw-model { max-width: 112px; } }
+/* ("go to the latest": just above the composer stack (progress card, files, a long message: chat.css's fixed 150/120 px
+   from the bottom put it on the progress card), centred over the thread. Placed in the composer's grid row (row 3 of
+   .cw-main: header, thread, composer), so it follows the composer's height; centred by margins, not a transform, which
+   the office's button:active nudge replaced while pressed) */
+.chat-layer .chatwin .cw-main > .cw-down { grid-row: 3; grid-column: 1; top: auto; bottom: calc(100% + 10px); left: 0; right: 0;
+  margin: 0 auto; transform: none; }
+.chat-layer .chatwin .cw-main > .cw-down:active { transform: translateY(1px); }
+/* (its header: the office window's title bar, tinted, 54 px at least, the window's top corners) */
+.chat-layer .chatwin .cw-head { min-height: 54px; padding: 8px 10px; box-sizing: border-box; background: var(--vo-surface-2);
+  border-bottom: 1px solid var(--vo-border-subtle); }
+.chat-layer .chatwin:not(.wide) .cw-head { border-radius: var(--vo-radius-lg) var(--vo-radius-lg) 0 0; }
+.chat-layer .chatwin .cw-head .cw-agent { padding-block: 2px; }   /* (34 px face + 2 + 2: the title bar's 38 px row) */
+/* (the office window's 380 px: six 32 px title-bar buttons left the agent's name 2 letters; with a mouse they are
+   26 px wide and closer, so a short name shows whole; touch screens keep their targets) */
+@container cw (max-width: 430px) { @media (pointer: fine) {
+  .chat-layer .cw-head .cw-acts { gap: 0; }
+  .chat-layer .cw-head .cw-acts .btn.icon { width: 26px; }
+} }
+.chat-layer.multi .chat-back.front .chatwin { border-color: var(--vo-accent); box-shadow: var(--vo-shadow-3); }
+/* window titles: the office's pixel title (accent, uppercase) */
+.ap-back .ap-head h2, .chat-layer .cw-side-title, .chat-layer .cw-view-title {
+  color: var(--vo-accent); font: var(--vo-pixel-md)/1.5 var(--vo-font-pixel); letter-spacing: .02em; text-transform: uppercase; }
+.ap-back .ap-kicker { color: var(--vo-text-3); font: var(--vo-pixel-sm)/1.4 var(--vo-font-pixel); text-transform: uppercase; }
+/* the agent's name in the chat header: pixel font, its own case (names are the agent's) */
+.chat-layer .cw-name { font: var(--vo-pixel-md)/1.4 var(--vo-font-pixel); letter-spacing: .01em; }
+/* tabs (Agent Providers and each provider's own menu) and section labels: pixel labels, uppercase */
+.ap-back .ap-tabs .btn.tab, .ap-back :is(.op-sec > h3, .op-secs h3) {
+  font: var(--vo-pixel-sm)/1.4 var(--vo-font-pixel); text-transform: uppercase; letter-spacing: .02em; }
+.ap-back .ap-tabs .btn.tab.on { color: var(--vo-accent-fill-ink); background: var(--vo-accent-fill); border-color: var(--vo-accent-fill); }
+/* buttons: the office's control shape */
+:is(.chat-layer, .ap-back) .btn { border-radius: var(--vo-radius-sm); border-color: var(--vo-border-subtle); }
+:is(.chat-layer, .ap-back) .btn:focus-visible { outline: none; box-shadow: var(--vo-focus); }
+:is(.chat-layer, .ap-back) .btn.primary { background: var(--vo-accent-fill); border-color: var(--vo-accent-fill); color: var(--vo-accent-fill-ink); }
+/* icons: square ends and corners, like the office's pixel icons */
+:is(.chat-layer, .ap-back, .pl-rail) svg.mvi { stroke-linecap: square; stroke-linejoin: miter; }
+/* the office's scrim behind the providers window and a full-screen chat */
+.ap-back.modal-back, .chat-layer .chat-back.modal-back { background: var(--vo-scrim); }
+
+/* 5. phones and narrow windows (the office's one-window width, 900 px, as VO's chat): the shown chat is the office's
+   bottom sheet above the action bar, its grip drags it (vo-mount.mjs sheet(); the height is kept like VO's chat sheet),
+   the office stays visible and usable above it, the on-screen keyboard lifts it. */
+.chat-layer .pl-sheet-grip { display: none; }
+@media (max-width: 900px) {
+  .chat-layer .chat-back.modal-back { background: none; pointer-events: none; display: block; }
+  .chat-layer .chat-back.modal-back .chatwin { position: fixed; left: 0; right: 0; top: auto; margin: 0; width: 100vw; pointer-events: auto;
+    bottom: var(--pl-sheet-bottom, calc(var(--vo-actionbar-h, 52px) + env(safe-area-inset-bottom, 0px)));
+    height: var(--pl-sheet-h, calc(50dvh - var(--vo-actionbar-h, 52px))) !important; min-height: 0; max-height: none;
+    border-left: 0; border-right: 0; border-bottom: 0; border-radius: var(--vo-radius-lg) var(--vo-radius-lg) 0 0;
+    box-shadow: var(--vo-shadow-3); }   /* (the office's chat sheet keeps its window shadow too) */
+  .chat-layer .chat-back.modal-back .pl-sheet-grip { display: grid; place-items: center; position: absolute; z-index: 11; top: 0; left: 50%;
+    width: 72px; height: 16px; transform: translateX(-50%); padding: 0; border: 0; background: none; cursor: ns-resize; touch-action: none; }
+  .chat-layer .pl-sheet-grip span { display: block; width: 40px; height: 4px; border-radius: 2px; background: var(--vo-border-strong); }
+  .chat-layer .pl-sheet-grip:is(:hover, .is-dragging) span { background: var(--vo-accent-fill); }
+  .chat-layer .pl-sheet-grip:focus-visible { outline: none; }
+  .chat-layer .pl-sheet-grip:focus-visible span { box-shadow: var(--vo-focus); }
+  html.pl-sheet-open #floatbtns.pl-rail { visibility: hidden; }
+}
+/* (the message box: the office's own focus outline (2 px) and ring (3 px) around inputs reach past the box, so with no
+   gap they ran into the + and Send buttons' outlines below it; a small gap keeps them apart) */
+.chat-layer .chatwin .cw-box .cw-in { margin-bottom: 8px; }
+/* 6. (unify) one window for every agent: an office provider's agent (the layer's kind `office`) shows its model as the
+   agent's own setting, not a picker (chat-window.js fixedModel); an agent with one conversation and no chat list
+   (caps.sessions false: Antigravity) has no Sidebar and no New chat; dictation's 🎤 while it writes what was said. */
+.chat-layer .cw-tools .cw-model.cw-fixed { cursor: default; }
+.chat-layer .cw-tools .cw-model.cw-fixed:hover { background: transparent; color: var(--dim); }
+.chat-layer .cw-tools .cw-model.cw-fixed > :not(.cw-tool-lb) { display: none; }
+.chat-layer .chatwin.cw-one-chat :is(.cw-side, .cw-burger, .cw-new) { display: none; }
+.chat-layer .chatwin.wide.cw-one-chat { grid-template-columns: 0 minmax(0, 1fr); }
+.chat-layer .chatwin.wide.cw-one-chat.dock-beside { grid-template-columns: 0 minmax(0, 1fr) var(--cw-dock-w); }
+.chat-layer .cw-mic.busy { opacity: .55; cursor: progress; }
+/* 7. phones (<= 640 px wide): a compact chat, as a phone's chat app has it — a 40 px title bar, 14 px messages at line
+   height 1.42 with tighter spacing, a compact composer and progress card, so far more of the conversation shows. Tap
+   targets keep their sizes (title bar 32 px, composer 36 px), text stays 13 px or more (the small meta and status lines
+   as before), the message box keeps 16 px (a phone zooms in on a smaller one). Tablets and desktops are unchanged. */
+@media (max-width: 640px) {
+  .chat-layer .chatwin .cw-head { min-height: 0; padding: 3px 4px 3px 6px; gap: 2px; }
+  .chat-layer .chatwin .cw-head .cw-agent { padding: 1px 4px 1px 2px; gap: 6px; }
+  .chat-layer .chatwin .cw-head .cw-av { width: 28px; height: 28px; border-radius: 8px; font-size: 16px; }
+  .chat-layer .chatwin .cw-thread { padding: 8px 10px 10px; gap: 10px; }
+  .chat-layer .chatwin .cw-main:has(.cw-rail:not([hidden])) .cw-thread { padding-right: 24px; }
+  .chat-layer .chatwin .cw-msg.user { max-width: 90%; gap: 2px; }
+  .chat-layer .chatwin .cw-msg.assistant { grid-template-columns: 22px minmax(0, 1fr); gap: 6px; }
+  .chat-layer .chatwin .cw-mav { width: 22px; height: 22px; border-radius: 7px; font-size: 13px; }
+  .chat-layer .chatwin .cw-md { font-size: 14px; line-height: 1.42; }
+  .chat-layer .chatwin .cw-md :is(p, ul, ol, blockquote, .md-table, .md-code) { margin-bottom: 8px; }
+  .chat-layer .chatwin .cw-md :is(h1, h2, h3, h4, h5, h6) { margin: 12px 0 6px; }
+  .chat-layer .chatwin .cw-md li { margin: 1px 0; }
+  .chat-layer .chatwin .cw-md hr { margin: 10px 0; }
+  .chat-layer .chatwin .cw-bubble { font-size: 14px; line-height: 1.42; padding: 6px 11px; border-radius: 16px 16px 5px 16px; }
+  .chat-layer .chatwin .cw-mact { margin-top: 0; min-height: 24px; }
+  .chat-layer .chatwin .cw-foot { padding: 0 6px max(6px, env(safe-area-inset-bottom)); }
+  .chat-layer .chatwin .cw-box { padding: 3px 4px 3px 8px; border-radius: 18px; }
+  .chat-layer .chatwin .cw-box .cw-in { min-height: 36px; line-height: 1.3; padding: 7px 2px; margin-bottom: 2px; }   /* (the office's 42 px for inputs) */
+  .chat-layer .chatwin .cw-tools { gap: 2px; row-gap: 2px; }
+  .chat-layer .chatwin .cw-tools .cw-tool:not(.cw-attach) { min-height: 36px; min-width: 36px; padding: 4px 7px; font-size: 13px; }
+  .chat-layer .chatwin .cw-tools .cw-tool.cw-model { max-width: 104px; }
+  .chat-layer .chatwin .cw-tools .cw-tool:is(.cw-ctx, .cw-mic, .cw-vm) { justify-content: center; }   /* (their icon centred in 36 px) */
+  .chat-layer .chatwin .cw-tool.cw-attach { width: 36px; height: 36px; }
+  .chat-layer .chatwin .cw-card { margin: 0 -1px 3px -5px; border-radius: 14px; }
+  .chat-layer .chatwin .cw-card-h { padding: 0 3px 0 0; }
+  .chat-layer .chatwin .cw-card-tg { padding: 4px 8px; gap: 6px; }
+  .chat-layer .chatwin .cw-card-st { padding: 0 10px 4px 28px; }
+  .chat-layer .chatwin .cw-tchip { margin: 0 0 4px; padding: 3px 10px 3px 8px; gap: 6px; font-size: 13px; }
+  .chat-layer .chatwin .cw-vq { margin-bottom: 4px; }
+}
+@media (max-width: 380px) { .chat-layer .chatwin .cw-tools .cw-tool.cw-model { max-width: 84px; } }   /* (one row of tools at 360 px) */

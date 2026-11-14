@@ -1,0 +1,92 @@
+[
+ {
+  "type": "run.status",
+  "phase": "Thinking"
+ },
+ {
+  "type": "native",
+  "ev": {
+   "op": "title",
+   "text": "[[tool:terminal {\"command\":\"echo…"
+  }
+ },
+ {
+  "type": "run.status",
+  "phase": "Preparing Terminal"
+ },
+ {
+  "type": "tool.start",
+  "toolId": "call_1792222881872",
+  "name": "terminal",
+  "title": "Terminal",
+  "toolKind": "execute",
+  "input": "echo hello-from-tool + 1 command",
+  "raw": "{\"command\":\"echo hello-from-tool && echo second-line\"}"
+ },
+ {
+  "type": "tool.end",
+  "toolId": "call_1792222881872",
+  "name": "terminal",
+  "title": "Terminal",
+  "ok": true,
+  "status": "completed",
+  "text": "hello-from-tool\nsecond-line",
+  "exitCode": 0,
+  "ms": 168
+ },
+ {
+  "type": "run.delta",
+  "text": "\n\nThe tool ans",
+  "at": 0
+ },
+ {
+  "type": "run.delta",
+  "text": "wered: {\"out",
+  "at": 14
+ },
+ {
+  "type": "run.delta",
+  "text": "put\": \"hello",
+  "at": 26
+ },
+ {
+  "type": "run.delta",
+  "text": "-from-tool\\n",
+  "at": 38
+ },
+ {
+  "type": "run.delta",
+  "text": "second-line\"",
+  "at": 50
+ },
+ {
+  "type": "run.delta",
+  "text": ", \"exit_code",
+  "at": 62
+ },
+ {
+  "type": "run.delta",
+  "text": "\": 0, \"error",
+  "at": 74
+ },
+ {
+  "type": "run.delta",
+  "text": "\": null}",
+  "at": 86
+ },
+ {
+  "type": "usage.update",
+  "used": 14541,
+  "size": 256000
+ },
+ {
+  "type": "run.end",
+  "status": "ok",
+  "text": "The tool answered: {\"output\": \"hello-from-tool\\nsecond-line\", \"exit_code\": 0, \"error\": null}",
+  "ms": 0,
+  "model": "custom:stub-1",
+  "tokensIn": 28995,
+  "tokensOut": 30,
+  "title": "[[tool:terminal {\"command\":\"echo…"
+ }
+]

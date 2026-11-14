@@ -9,7 +9,7 @@ Convert the hardcoded furniture/environment system in game.js to a data-driven J
 - Do NOT break existing rendering. Every current visual must still appear.
 - Do NOT touch agent-related code (AGENT_DEFS, Agent class, draw(), update(), etc.)
 - Do NOT touch chat bubble code, weather code, or mini-game logic (dart, pong, RPS, social interactions)
-- DO preserve all existing draw functions (drawDesk, drawPlant, etc.) — they become renderers called from the data loop
+- DO preserve all existing draw functions (drawDesk, drawPlant, etc.): they become renderers called from the data loop
 - Test by loading the local product app after changes
 
 ## Phase 1: Data Model (officeConfig)
@@ -53,7 +53,7 @@ Each furniture item in the array:
     x: 820,                   // world x position
     y: 540,                   // world y position
     // Optional per-type properties:
-    label: 'PRO QUALITY',     // for labels/signs
+    label: 'MAIN OFFICE',     // for labels/signs
     color: '#1565c0',         // for customizable items
 }
 ```

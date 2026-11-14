@@ -4,6 +4,7 @@
 __pycache__/
 .git/
 .gitignore
-vo-config.eli.json
+vo-config.*.json
 *.pyc
 .DS_Store
+provider-layer/node_modules/

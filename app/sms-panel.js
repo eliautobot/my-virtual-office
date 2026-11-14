@@ -1,6 +1,8 @@
 // SMS Panel — threaded inbox with per-contact takeover
 (function() {
     const panel = document.getElementById('sms-panel');
+    // Pixel attachment icon from the shared sprite (UI-07).
+    const attachIcon = () => { const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); svg.setAttribute('class', 'vo-icon'); svg.setAttribute('aria-hidden', 'true'); const use = document.createElementNS('http://www.w3.org/2000/svg', 'use'); use.setAttribute('href', '#i-attach'); svg.appendChild(use); return svg; };
     const toggle = document.getElementById('sms-toggle');
     const closeBtn = document.getElementById('sms-close');
     const header = panel ? panel.querySelector('.sms-header') : null;
@@ -29,6 +31,14 @@
     if (!panel || !toggle) return;
 
     let isOpen = false;
+    // P3-10: the closed panel sits off-screen; keep its controls out of the
+    // Tab order and the accessibility tree until it opens.
+    function syncPanelInert() {
+        panel.inert = !isOpen;
+        if (isOpen) panel.removeAttribute('inert');
+        else panel.setAttribute('inert', '');
+    }
+    syncPanelInert();
     let manualMode = false;
     let pollTimer = null;
     let selectedPhone = '';
@@ -37,6 +47,9 @@
     let ownerAgent = null;
     let dragPending = false;
     let dragging = false;
+    let renderedConversation = null;
+    let contactsSignature = '';
+    let pollInFlight = false;
     let dragStartX = 0;
     let dragStartY = 0;
     let dragOriginLeft = 0;
@@ -69,21 +82,38 @@
     toggle.addEventListener('click', () => {
         isOpen = !isOpen;
         panel.classList.toggle('open', isOpen);
+        syncPanelInert();
         if (isOpen) {
             updateWindowLayoutState();
             setPanelView('list');
             loadPanel();
+            // CH-42: keyboard users land inside the panel.
+            window.requestAnimationFrame(() => closeBtn.focus({ preventScroll: true }));
         } else {
             resetWindowState();
             setPanelView('list');
         }
     });
 
-    closeBtn.addEventListener('click', () => {
+    function closePanel({ restoreFocus = false } = {}) {
         isOpen = false;
+        if (panel.contains(document.activeElement)) document.activeElement.blur();
         panel.classList.remove('open');
+        syncPanelInert();
         resetWindowState();
         setPanelView('list');
+        if (restoreFocus && toggle.offsetParent !== null) toggle.focus({ preventScroll: true });
+    }
+
+    closeBtn.addEventListener('click', () => closePanel({ restoreFocus: true }));
+
+    // CH-42: Escape closes the panel when focus is in it (an open menu or
+    // field inside handles its own Escape first).
+    panel.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' || !isOpen || e.defaultPrevented) return;
+        e.preventDefault();
+        e.stopPropagation();
+        closePanel({ restoreFocus: true });
     });
 
     if (backBtn) {
@@ -97,7 +127,7 @@
         manualMode = !manualMode;
         recipientSelect.style.display = manualMode ? 'none' : 'block';
         phoneManual.style.display = manualMode ? 'block' : 'none';
-        toggleManual.textContent = manualMode ? '📋' : '✏️';
+        toggleManual.innerHTML = '<svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-' + (manualMode ? 'list' : 'edit') + '"/></svg>';
         toggleManual.title = manualMode ? 'Select from contacts' : 'Type number manually';
         if (manualMode) phoneManual.focus();
     });
@@ -219,6 +249,9 @@
             const data = await resp.json();
             if (!data.ok) return;
             contactsMap = data.contacts || {};
+            const signature = JSON.stringify(contactsMap);
+            if (signature === contactsSignature && recipientSelect.options.length > 1) return;
+            contactsSignature = signature;
             recipientSelect.innerHTML = '<option value="">Select contact...</option>';
             Object.entries(contactsMap)
                 .sort((a, b) => (a[1]?.name || a[0]).localeCompare(b[1]?.name || b[0]))
@@ -380,25 +413,40 @@
         threadSubtitle.textContent = formatPhone(thread.phone);
         applyMode(thread.activeMode || 'agent');
 
-        messagesDiv.innerHTML = '';
         emptyState.style.display = messages.length ? 'none' : 'block';
         emptyState.textContent = messages.length ? '' : 'No messages in this thread yet.';
-        let lastDate = '';
-        messages.forEach(msg => {
+        // CH-43: the 5 s poll appends only new messages to an open thread, so
+        // the reader's scroll position, playing media and images stay put.
+        const keys = messages.map(messageKey);
+        const previous = renderedConversation;
+        const sameThread = previous && previous.phone === thread.phone && messagesDiv.childElementCount > 0 &&
+            keys.length >= previous.keys.length && previous.keys.every((key, idx) => key === keys[idx]);
+        if (sameThread && keys.length === previous.keys.length) return;
+        const nearBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 80;
+        let lastDate = sameThread ? previous.lastDate : '';
+        if (!sameThread) messagesDiv.innerHTML = '';
+        messages.slice(sameThread ? previous.keys.length : 0).forEach(msg => {
             const msgDate = formatDate(msg.timestamp);
             if (msgDate !== lastDate) {
                 lastDate = msgDate;
                 const sep = document.createElement('div');
-                sep.style.cssText = 'text-align:center;font-size:10px;color:#888;padding:4px 0;';
+                sep.style.cssText = 'text-align:center;font-size:var(--vo-text-xs);color:var(--vo-text-3);padding:4px 0;';
                 sep.textContent = `— ${msgDate} —`;
                 messagesDiv.appendChild(sep);
             }
             appendMessage(msg, thread);
         });
-        scrollToBottom(true);
+        renderedConversation = { phone: thread.phone, keys, lastDate };
+        if (!sameThread || nearBottom) scrollToBottom(!sameThread);
+    }
+
+    function messageKey(msg) {
+        return String(msg?.id || msg?.sid || msg?.messageSid || '') ||
+            [msg?.timestamp, msg?.type, msg?.body, (msg?.media || msg?.mediaUrls || []).length].join('|');
     }
 
     function renderInboxPlaceholder() {
+        renderedConversation = null;
         messagesDiv.innerHTML = '';
         messagesDiv.style.display = 'none';
         emptyState.style.display = 'block';
@@ -408,6 +456,7 @@
     }
 
     function renderEmptyConversation(message) {
+        renderedConversation = null;
         messagesDiv.innerHTML = '';
         messagesDiv.style.display = 'none';
         emptyState.style.display = 'block';
@@ -462,9 +511,15 @@
             label = `${thread.name && thread.name !== 'Unknown' ? thread.name : formatPhone(thread.phone)} · ${formatTime(msg.timestamp)}`;
         }
 
-        const body = escapeHtml(msg.body || '');
-        const mediaHtml = renderMessageMedia(msg.media || msg.mediaUrls || msg.attachments || []);
-        div.innerHTML = `<div class="sms-msg-meta">${escapeHtml(label)}</div><div class="sms-msg-body">${body}${mediaHtml}</div>`;
+        const meta = document.createElement('div');
+        meta.className = 'sms-msg-meta';
+        meta.textContent = label;
+        const body = document.createElement('div');
+        body.className = 'sms-msg-body';
+        body.textContent = msg.body || '';
+        const media = renderMessageMedia(msg.media || msg.mediaUrls || msg.attachments || []);
+        if (media) body.appendChild(media);
+        div.append(meta, body);
         messagesDiv.appendChild(div);
     }
 
@@ -489,26 +544,79 @@
 
     function renderMessageMedia(media) {
         const items = normalizeMessageMedia(media);
-        if (!items.length) return '';
-        return `<div class="sms-media-list">${items.map(renderMediaItem).join('')}</div>`;
+        if (!items.length) return null;
+        const list = document.createElement('div');
+        list.className = 'sms-media-list';
+        items.forEach(item => list.appendChild(renderMediaItem(item)));
+        return list;
+    }
+
+    // Media links and players only ever point at a web address or this
+    // office's own /sms-media proxy (CH-06).
+    function safeMediaUrl(value) {
+        const raw = String(value || '').trim();
+        if (/^\/sms-media(?:[/?]|$)/.test(raw)) return raw;
+        try {
+            const parsed = new URL(raw);
+            if (parsed.protocol === 'https:' || parsed.protocol === 'http:') return parsed.href;
+        } catch (_) {}
+        return '';
+    }
+
+    function mediaLink(url, label, className = 'sms-media-link') {
+        const a = document.createElement('a');
+        if (className) a.className = className;
+        a.href = url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        if (label) a.textContent = label;
+        return a;
     }
 
     function renderMediaItem(item) {
-        const url = item.url;
-        const type = (item.contentType || '').toLowerCase();
-        const label = escapeHtml(item.filename || item.contentType || 'Open media');
-        const safeUrl = escapeHtml(url);
-        const link = `<a class="sms-media-link" href="${safeUrl}" target="_blank" rel="noopener">${label}</a>`;
+        const url = safeMediaUrl(item.url);
+        const type = String(item.contentType || '').toLowerCase();
+        const label = String(item.filename || item.contentType || 'Open media');
+        if (!url) {
+            const blocked = document.createElement('div');
+            blocked.className = 'sms-media-file';
+            blocked.append(attachIcon(), ' ' + label + ' (not a web address, not opened)');
+            return blocked;
+        }
+        const figure = document.createElement('figure');
+        figure.className = 'sms-media-item';
+        const caption = document.createElement('figcaption');
         if (type.startsWith('image/')) {
-            return `<figure class="sms-media-item"><a href="${safeUrl}" target="_blank" rel="noopener"><img class="sms-media-image" src="${safeUrl}" alt="${label}" loading="lazy"></a><figcaption>${label}</figcaption></figure>`;
+            const link = mediaLink(url, '', '');
+            const img = document.createElement('img');
+            img.className = 'sms-media-image';
+            img.src = url;
+            img.alt = label;
+            img.loading = 'lazy';
+            link.appendChild(img);
+            caption.textContent = label;
+            figure.append(link, caption);
+            return figure;
         }
-        if (type.startsWith('video/')) {
-            return `<figure class="sms-media-item"><video class="sms-media-video" src="${safeUrl}" controls preload="metadata"></video><figcaption>${link}</figcaption></figure>`;
+        if (type.startsWith('video/') || type.startsWith('audio/')) {
+            const player = document.createElement(type.startsWith('video/') ? 'video' : 'audio');
+            player.className = type.startsWith('video/') ? 'sms-media-video' : 'sms-media-audio';
+            player.setAttribute('src', url);
+            player.setAttribute('controls', '');
+            player.setAttribute('preload', 'metadata');
+            caption.appendChild(mediaLink(url, label));
+            figure.append(player, caption);
+            return figure;
         }
-        if (type.startsWith('audio/')) {
-            return `<figure class="sms-media-item"><audio class="sms-media-audio" src="${safeUrl}" controls preload="metadata"></audio><figcaption>${link}</figcaption></figure>`;
+        const file = document.createElement('div');
+        file.className = 'sms-media-file';
+        file.append(attachIcon(), ' ', mediaLink(url, label));
+        if (type) {
+            const span = document.createElement('span');
+            span.textContent = type;
+            file.appendChild(span);
         }
-        return `<div class="sms-media-file">📎 ${link}${type ? `<span>${escapeHtml(type)}</span>` : ''}</div>`;
+        return file;
     }
 
     async function sendSms() {
@@ -521,7 +629,7 @@
         if (!body || !thread || thread.activeMode !== 'user') return;
 
         sendBtn.disabled = true;
-        sendBtn.textContent = '⏳';
+        sendBtn.textContent = '…';
         try {
             const resp = await fetch('/sms-send', {
                 method: 'POST',
@@ -541,7 +649,7 @@
         } catch (e) {
             alert('SMS failed: ' + e.message);
         } finally {
-            sendBtn.textContent = '▶';
+            sendBtn.innerHTML = '<svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-play"/></svg>';
             updateComposerState();
         }
     }
@@ -996,10 +1104,16 @@
     function startPolling() {
         if (pollTimer) return;
         const tick = async () => {
-            await loadThreads();
-            if (isOpen) {
-                await loadContacts();
-                if (selectedPhone) await loadThread(selectedPhone);
+            if (pollInFlight || document.hidden) return;
+            pollInFlight = true;
+            try {
+                await loadThreads();
+                if (isOpen) {
+                    await loadContacts();
+                    if (selectedPhone) await loadThread(selectedPhone);
+                }
+            } finally {
+                pollInFlight = false;
             }
         };
         tick();
@@ -1084,8 +1198,11 @@
     }
 
     function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text == null ? '' : String(text);
-        return div.innerHTML;
+        return String(text == null ? '' : text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 })();
