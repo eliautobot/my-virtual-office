@@ -217,13 +217,25 @@ html[data-ui-preset="cyberpunk"] .chat-layer .chat-back.floating .chatwin {
   .chat-layer .chatwin .cw-bubble { font-size: 14px; line-height: 1.42; padding: 6px 11px; border-radius: 16px 16px 5px 16px; }
   .chat-layer .chatwin .cw-mact { margin-top: 0; min-height: 24px; }
   .chat-layer .chatwin .cw-foot { padding: 0 6px max(6px, env(safe-area-inset-bottom)); }
-  .chat-layer .chatwin .cw-box { padding: 3px 4px 3px 8px; border-radius: 18px; }
+  .chat-layer .chatwin .cw-box { padding: 3px 4px 4px 8px; border-radius: 18px; }
+  /* (0.12.1: one focus ring on a phone. The office's own 2 px outline around the message box stacked inside the
+     composer's ring and ran into the + and Send buttons below it: the composer's border is the ring while the message
+     box has focus (the office's accent, 2 px), the box draws none) */
+  .chat-layer .chatwin .cw-box .cw-in:is(:focus, :focus-visible) { outline: none !important; box-shadow: none; }
+  .chat-layer .chatwin .cw-box:has(.cw-in:focus) { border-color: var(--vo-accent); box-shadow: 0 0 0 1px var(--vo-accent), 0 6px 24px var(--shadow-c5); }
   .chat-layer .chatwin .cw-box .cw-in { min-height: 36px; line-height: 1.3; padding: 7px 2px; margin-bottom: 2px; }   /* (the office's 42 px for inputs) */
   .chat-layer .chatwin .cw-tools { gap: 2px; row-gap: 2px; }
   .chat-layer .chatwin .cw-tools .cw-tool:not(.cw-attach) { min-height: 36px; min-width: 36px; padding: 4px 7px; font-size: 13px; }
   .chat-layer .chatwin .cw-tools .cw-tool.cw-model { max-width: 104px; }
   .chat-layer .chatwin .cw-tools .cw-tool:is(.cw-ctx, .cw-mic, .cw-vm) { justify-content: center; }   /* (their icon centred in 36 px) */
-  .chat-layer .chatwin .cw-tool.cw-attach { width: 36px; height: 36px; }
+  /* (0.12.1: + and Send draw a 32 px circle with a 15 px icon in their 36 px tap area: a 2 px clear border, the fill
+     and the +'s line inside it; their focus ring sits 1 px into that border, 1 px clear of the circle. The other tools'
+     ring is on their edge. So every ring stays >= 2 px inside the composer's border, corners included) */
+  .chat-layer .chatwin :is(.cw-tool.cw-attach, .cw-send) { width: 36px; height: 36px; border: 2px solid transparent; background-clip: padding-box; }
+  .chat-layer .chatwin .cw-tool.cw-attach { box-shadow: inset 0 0 0 1px var(--line-3); }
+  .chat-layer .chatwin :is(.cw-tool.cw-attach, .cw-send) > svg.mvi { width: 15px; height: 15px; }
+  .chat-layer .chatwin .cw-tools :is(button, [tabindex]):focus-visible { outline-offset: 0; }
+  .chat-layer .chatwin .cw-tools :is(.cw-tool.cw-attach, .cw-send):focus-visible { outline-offset: -1px; }
   .chat-layer .chatwin .cw-card { margin: 0 -1px 3px -5px; border-radius: 14px; }
   .chat-layer .chatwin .cw-card-h { padding: 0 3px 0 0; }
   .chat-layer .chatwin .cw-card-tg { padding: 4px 8px; gap: 6px; }

@@ -61,6 +61,9 @@
       <symbol id="i-plus" viewBox="0 0 10 10"><path d="M4 0h2v1h-2zM4 1h2v1h-2zM4 2h2v1h-2zM4 3h2v1h-2zM0 4h10v1h-10zM0 5h10v1h-10zM4 6h2v1h-2zM4 7h2v1h-2zM4 8h2v1h-2zM4 9h2v1h-2z"/></symbol>
       <symbol id="i-minus" viewBox="0 0 10 10"><path d="M0 4h10v1h-10zM0 5h10v1h-10z"/></symbol>
       <symbol id="i-target" viewBox="0 0 10 10"><path d="M4 0h2v1h-2zM2 1h6v1h-6zM1 2h1v1h-1zM4 2h2v1h-2zM8 2h1v1h-1zM1 3h1v1h-1zM8 3h1v1h-1zM0 4h3v1h-3zM4 4h2v1h-2zM7 4h3v1h-3zM0 5h3v1h-3zM4 5h2v1h-2zM7 5h3v1h-3zM1 6h1v1h-1zM8 6h1v1h-1zM1 7h1v1h-1zM4 7h2v1h-2zM8 7h1v1h-1zM2 8h6v1h-6zM4 9h2v1h-2z"/></symbol>
+      <symbol id="i-turn-r" viewBox="0 0 10 10"><path d="M2 0h5v1h-5zM1 1h1v1h-1zM6 1h4v1h-4zM0 2h1v1h-1zM7 2h2v1h-2zM0 3h1v3h-1zM9 5h1v2h-1zM1 6h1v2h-1zM8 7h1v1h-1zM2 8h6v1h-6z"/></symbol>
+      <symbol id="i-turn-l" viewBox="0 0 10 10"><path d="M3 0h5v1h-5zM8 1h1v1h-1zM0 1h4v1h-4zM9 2h1v1h-1zM1 2h2v1h-2zM9 3h1v3h-1zM0 5h1v2h-1zM8 6h1v2h-1zM1 7h1v1h-1zM2 8h6v1h-6z"/></symbol>
+      <symbol id="i-cube" viewBox="0 0 10 10"><path d="M4 0h2v1h-2zM2 1h2v1h-2zM6 1h2v1h-2zM0 2h2v1h-2zM8 2h2v1h-2zM0 3h1v4h-1zM9 3h1v4h-1zM2 3h2v1h-2zM6 3h2v1h-2zM4 4h2v1h-2zM4 5h1v4h-1zM1 7h1v1h-1zM8 7h1v1h-1zM2 8h2v1h-2zM6 8h2v1h-2zM5 9h1v1h-1z"/></symbol>
       <symbol id="i-minimap" viewBox="0 0 10 10"><path d="M0 1h10v1h-10zM0 8h10v1h-10zM0 2h1v6h-1zM9 2h1v6h-1zM2 3h3v3h-3zM6 5h2v2h-2z"/></symbol>
       <symbol id="i-bubbles" viewBox="0 0 10 10"><path d="M0 0h6v1h-6zM0 1h1v1h-1zM5 1h1v1h-1zM0 2h1v1h-1zM2 2h2v1h-2zM5 2h1v1h-1zM0 3h6v1h-6zM1 4h1v1h-1zM4 4h6v1h-6zM4 5h1v1h-1zM9 5h1v1h-1zM4 6h1v1h-1zM6 6h2v1h-2zM9 6h1v1h-1zM4 7h6v1h-6zM7 8h1v1h-1z"/></symbol>
       <symbol id="i-lock" viewBox="0 0 10 10"><path d="M3 0h4v1h-4zM2 1h1v1h-1zM7 1h1v1h-1zM2 2h1v1h-1zM7 2h1v1h-1zM1 3h8v1h-8zM1 4h8v1h-8zM1 5h3v1h-3zM6 5h3v1h-3zM1 6h3v1h-3zM6 6h3v1h-3zM1 7h8v1h-8zM1 8h8v1h-8z"/></symbol>
@@ -132,6 +135,9 @@
                     <button type="button" class="vo-btn vo-btn--icon" data-vo-map="zoom-in" aria-label="Zoom in" title="Zoom in (+)"><svg class="vo-icon" aria-hidden="true"><use href="#i-plus"/></svg></button>
                     <button type="button" class="vo-btn vo-btn--icon" data-vo-map="zoom-out" aria-label="Zoom out" title="Zoom out (-)"><svg class="vo-icon" aria-hidden="true"><use href="#i-minus"/></svg></button>
                     <button type="button" class="vo-btn vo-btn--icon" data-vo-map="fit" aria-label="Fit the whole office" title="Fit the whole office (0)"><svg class="vo-icon" aria-hidden="true"><use href="#i-target"/></svg></button>
+                    <button type="button" class="vo-btn vo-btn--icon" data-vo-map="turn-left" data-vo-stack-ctl aria-label="Turn the office left" title="Turn the office left (Q)" hidden><svg class="vo-icon" aria-hidden="true"><use href="#i-turn-l"/></svg></button>
+                    <button type="button" class="vo-btn vo-btn--icon" data-vo-map="turn-right" data-vo-stack-ctl aria-label="Turn the office right" title="Turn the office right (R)" hidden><svg class="vo-icon" aria-hidden="true"><use href="#i-turn-r"/></svg></button>
+                    <button type="button" class="vo-btn vo-btn--icon" data-vo-map="straight-view" data-vo-stack-ctl aria-pressed="false" aria-label="Straight top-down view" title="Straight top-down view (V)" hidden><svg class="vo-icon" aria-hidden="true"><use href="#i-cube"/></svg></button>
                     <button type="button" class="vo-btn vo-btn--icon" data-vo-map="minimap" aria-pressed="false" aria-label="Mini-map" title="Mini-map (M)" hidden><svg class="vo-icon" aria-hidden="true"><use href="#i-minimap"/></svg></button>
                     <hr aria-hidden="true">
                     <button type="button" class="vo-btn vo-btn--icon" data-vo-map="bubbles" aria-pressed="false" aria-label="Expand all chat bubbles" title="Chat bubbles: expand or minimize all (B)"><svg class="vo-icon" aria-hidden="true"><use href="#i-bubbles"/></svg></button>
@@ -373,6 +379,14 @@
                     <option value="dim">Dim (moonlight)</option>
                 </select>
                 <p class="mm-hint">After dark the windows show the night. Lights on keeps the office bright inside. Dim lights it only with screens, lamps and the moon.</p>
+                <label class="mm-label" for="mm-graphics">Graphics</label>
+                <select id="mm-graphics" class="mm-input">
+                    <option value="auto">Auto</option>
+                    <option value="3d">3D (turnable office)</option>
+                    <option value="2d">Classic 2D</option>
+                </select>
+                <p class="mm-hint">3D draws the office as a pixel-art diorama you can turn (Q / R, or the map buttons). Classic 2D is the original flat look and is lighter on older devices. Auto picks 3D when this browser has graphics hardware. Saved for this browser.</p>
+                <p class="mm-hint" id="mm-graphics-status" role="status" aria-live="polite"></p>
             </div>
             <div class="mm-section" data-category="general">
                 <h3 class="mm-section-title">Preview bubbles</h3>
@@ -1098,7 +1112,10 @@
     <!-- v0.13 furniture variants (desk / boss desk): read by game.js while it loads -->
     <script src="furniture-variants/desk.js?v=20261113-v13"></script>
     <script src="furniture-variants/boss-desk.js?v=20261113-v13"></script>
-    <script src="game.js?v=20261113-deskpick"></script>
+    <!-- Graphics setting (3D sprite-stack diorama or classic 2D): the loader is small and always here;
+         it loads the 3D files (stack/*.js, see stack/README.md) only when 3D is used -->
+    <script src="stack/stack-loader.js?v=20261121-v013"></script>
+    <script src="game.js?v=20261121-v013"></script>
     <!-- Office editor UI (v10-editor.js) and Agent Studio (v10-studio.js + CSS) load on first use (Q-13):
          game.js puts each file where its rel="x-vo-lazy" link is (an unknown rel fetches nothing). -->
     <link rel="x-vo-lazy" data-part="editor" href="v10-editor.js?v=20261103-v10">

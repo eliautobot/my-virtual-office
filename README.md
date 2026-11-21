@@ -18,6 +18,14 @@ and Antigravity) and shows what each agent is really doing, live: the command it
 it reads, the file it edits, the approval it waits for. Click an agent to chat with it, open its
 PC, or change its settings.
 
+Version 0.13.0 is the **3D** release: the office becomes a turnable 3D pixel-art diorama. Every
+piece of furniture, every desk design, the walls, every character look and pose and every pet is
+rebuilt as a stacked-slice 3D model, with shadows that follow the time of day and lamps and screens
+that light the room at night. Turn it with the new map buttons (or Q and R), or look straight down
+(V). The classic 2D office is still there: **Settings > General > Display > Graphics** switches
+between Auto, 3D and Classic 2D in place, per browser. Nothing else changes, and there are no
+breaking changes from 0.12.0. See the [0.13.0 release notes](docs/RELEASE-NOTES-0.13.0.md).
+
 Version 0.12.0 is the **Characters** release and the first GitHub release since 0.7.4: 21 hair
 styles, faces that show how each agent is doing, tops, neckwear, costumes and hats, work
 animations at the desk from what the agent really does, a signature victory move on real wins,
@@ -60,12 +68,12 @@ exactly the source you checked out (for example before its image is published), 
 point Compose at it:
 
 ```bash
-docker build -t my-virtual-office:0.12.0 ./app
-VO_IMAGE=my-virtual-office:0.12.0 docker compose up -d virtual-office
+docker build -t my-virtual-office:0.13.0 ./app
+VO_IMAGE=my-virtual-office:0.13.0 docker compose up -d virtual-office
 ```
 
 Check which version is running at `http://localhost:8090/health` (it answers
-`{"ok": true, "status": "running", "version": "0.12.0"}`).
+`{"ok": true, "status": "running", "version": "0.13.0"}`).
 
 The image includes Node.js 24 and the npm packages OpenClaw and Hermes need. The compose file uses
 Docker's bridge network, so the office reaches OpenClaw on your computer at
@@ -125,7 +133,7 @@ approval" and the `openclaw devices approve <id>` command to run on the OpenClaw
 ### Images and platforms
 
 - `ghcr.io/eliautobot/my-virtual-office:latest`
-- `ghcr.io/eliautobot/my-virtual-office:<version>` for release tags, such as `0.12.0`
+- `ghcr.io/eliautobot/my-virtual-office:<version>` for release tags, such as `0.13.0`
 - `ghcr.io/eliautobot/my-virtual-office:<commit-sha-prefix>` for exact pins
 
 Images are published for `linux/amd64` and `linux/arm64`, so the office itself runs on x86_64
@@ -271,6 +279,14 @@ shows provider credentials. You can add your own provider as a Python extension,
 ## Features
 
 ### 🏢 Live office
+- **3D or classic 2D.** The office is a turnable 3D pixel-art diorama (sprite stacking: every
+  object is a stack of thin pixel-art layers, so it stays crisp at every angle), or the classic flat
+  office. **Settings > General > Display > Graphics** picks **Auto** (3D when the browser draws with
+  a graphics card), **3D** or **Classic 2D**, per browser and without a reload. The 3D files load
+  only when 3D is used, and the 3D view needs WebGL 2.
+- Turn the 3D office with the map buttons or `Q` / `R` (45° steps); `V` (or the cube button)
+  looks straight down. Edit office always works in the straight view and turns back into 3D on
+  Done. Clicks, name tags, chips, bubbles and menus follow the 3D figures at every angle.
 - The whole office fits the window when it opens; phones open framed on the agents and their desks.
 - Crisp pixel art at every size: the office is drawn at whole pixel steps and phones use their
   full screen resolution. **Settings > General > Office size** picks **Sharp pixels** (default, may
@@ -780,8 +796,8 @@ Or build the source you checked out:
 
 ```bash
 git pull
-docker build -t my-virtual-office:0.12.0 ./app
-VO_IMAGE=my-virtual-office:0.12.0 docker compose up -d virtual-office
+docker build -t my-virtual-office:0.13.0 ./app
+VO_IMAGE=my-virtual-office:0.13.0 docker compose up -d virtual-office
 ```
 
 `docker compose up -d virtual-office` recreates only the office container. The `vo-data` volume,
@@ -799,7 +815,9 @@ Checking out an older git tag alone does not change the running image. If the ol
 trouble with data written by the newer one, restore the backup into the volume (stop the
 container first, then extract `vo-data-backup.tgz` into it the same way).
 
-Read the [0.12.0 release notes](docs/RELEASE-NOTES-0.12.0.md) before upgrading. Coming from 0.7.x,
+Read the [0.13.0 release notes](docs/RELEASE-NOTES-0.13.0.md) before upgrading (no breaking changes
+from 0.12.0). Read the [0.12.0 release notes](docs/RELEASE-NOTES-0.12.0.md) too if you upgrade from
+an older version. Coming from 0.7.x,
 their first section lists every breaking change since then (OpenClaw pairing, Node.js, host names
 behind a reverse proxy, the data folder, API routes); [docs/UPDATING.md](docs/UPDATING.md#upgrading-from-07x)
 has the details per install type.
@@ -851,7 +869,7 @@ are missing. Live tests need `VO_TEST_URL` pointing at a disposable office.
 
 ## Documentation
 
-- [Release notes 0.12.0](docs/RELEASE-NOTES-0.12.0.md) (start here coming from 0.7.x), [0.11.0](docs/RELEASE-NOTES-0.11.0.md), [0.10.1](docs/RELEASE-NOTES-0.10.1.md), [0.10.0](docs/RELEASE-NOTES-0.10.0.md), [0.9.0](docs/RELEASE-NOTES-0.9.0.md),
+- [Release notes 0.13.0](docs/RELEASE-NOTES-0.13.0.md), [0.12.0](docs/RELEASE-NOTES-0.12.0.md) (start here coming from 0.7.x), [0.11.0](docs/RELEASE-NOTES-0.11.0.md), [0.10.1](docs/RELEASE-NOTES-0.10.1.md), [0.10.0](docs/RELEASE-NOTES-0.10.0.md), [0.9.0](docs/RELEASE-NOTES-0.9.0.md),
   [0.8.0](docs/RELEASE-NOTES-0.8.0.md),
   [0.7.4](docs/RELEASE-NOTES-0.7.4.md),
   [0.7.3](docs/RELEASE-NOTES-0.7.3.md), [0.7.2](docs/RELEASE-NOTES-0.7.2.md)

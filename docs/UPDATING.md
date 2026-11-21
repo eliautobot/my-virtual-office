@@ -44,15 +44,15 @@ docker compose up -d virtual-office
 ```
 
 To stay on a chosen version instead of `latest`, set `VO_IMAGE` (in `.env` or on the command
-line), for example `VO_IMAGE=ghcr.io/eliautobot/my-virtual-office:0.12.0`.
+line), for example `VO_IMAGE=ghcr.io/eliautobot/my-virtual-office:0.13.0`.
 
 ### Docker Compose, built from the source you checked out
 
 ```bash
 cd my-virtual-office
 git pull
-docker build -t my-virtual-office:0.12.0 ./app
-VO_IMAGE=my-virtual-office:0.12.0 docker compose up -d virtual-office
+docker build -t my-virtual-office:0.13.0 ./app
+VO_IMAGE=my-virtual-office:0.13.0 docker compose up -d virtual-office
 ```
 
 Use the version you pulled in the tag (it is `VO_VERSION` in `app/server.py`).

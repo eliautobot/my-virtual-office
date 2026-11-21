@@ -78,7 +78,7 @@ class ResponseLayerTests(HttpLayerBase):
     def test_health_reports_version(self):
         status, _h, data = self.json_request("GET", "/health")
         self.assertEqual(200, status)
-        self.assertEqual({"ok": True, "version": "0.12.0"}, {k: data[k] for k in ("ok", "version")})
+        self.assertEqual({"ok": True, "version": "0.13.0"}, {k: data[k] for k in ("ok", "version")})
 
     def test_route_exception_becomes_json_500(self):
         with mock.patch.object(server, "_get_normalized_presence_state", side_effect=RuntimeError("boom")):

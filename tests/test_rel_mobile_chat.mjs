@@ -10,6 +10,10 @@
 //     opened again and a reload; opened by the person, it is open again after a reload;
 //   - a desktop (1600x1000): the window's sizes as 0.12 (title bar 55 px, 15 px / 24.3 px messages, the card 37 px),
 //     and a card closed there stays closed through the window opening again and a send.
+// 0.12.1 composer (phone report: the message box's focus outline ran into the + and Send buttons): on a phone, dark
+// and light, the message box focused draws one ring (the composer's border, the accent, 2 px; the box itself none),
+// + and Send are 32 px circles with 15 px icons and a >= 36 px tap area, and every composer tool's focus ring (+ and
+// Send included) stays >= 2 px inside the composer's rounded border; the desktop composer is as 0.12.0.
 // Office: VO_URL=http://127.0.0.1:<port> LAB_OC=<its LABS_ROOT>/oc LAB_OC_PORT=<its gateway> (tests/tools/office-labs.sh
 // with the OpenClaw lab; the office's connection is paired as tests/e2e/pl_lib.mjs ensureOpenClaw does), or none:
 // this test starts one (LABS_ROOT /tmp/vo-rel-mobile-chat, LABS_PORT 19650, LABS_OC_PORT 19654; no Hermes) and stops it.
@@ -54,10 +58,10 @@ const results = [], detail = {};
 const check = (name, ok, info = '') => { results.push({ name, ok: !!ok }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${ok ? '' : ` -- ${String(info).slice(0, 160)}`}`); };
 const W_ = '.chat-back:not(.min) .chatwin';
 
-async function page(browser, vp, phone, { ctx: shared, half = false } = {}) {
+async function page(browser, vp, phone, { ctx: shared, half = false, theme = 'dark' } = {}) {
   const ctx = shared || await browser.newContext(phone ? { viewport: vp, isMobile: true, hasTouch: true, deviceScaleFactor: 1 } : { viewport: vp });
   // (half: the phone's default sheet, as the office opens it when no height was saved)
-  if (!shared) await ctx.addInitScript(half => { try { if (half) localStorage.removeItem('vo-chat-sheet-share'); else if (!localStorage.getItem('vo-chat-sheet-share')) localStorage.setItem('vo-chat-sheet-share', '1'); localStorage.setItem('vo-ui-theme', 'dark'); } catch { /* private */ } }, half);
+  if (!shared) await ctx.addInitScript(half => { try { if (half.half) localStorage.removeItem('vo-chat-sheet-share'); else if (!localStorage.getItem('vo-chat-sheet-share')) localStorage.setItem('vo-chat-sheet-share', '1'); localStorage.setItem('vo-ui-theme', half.theme); } catch { /* private */ } }, { half, theme });
   const p = await ctx.newPage();
   await p.goto(`${VO}/`, { waitUntil: 'domcontentloaded' });
   if (!(await p.evaluate(async () => !!(await window.voPLReady)))) throw new Error('the provider layer did not mount');
@@ -109,12 +113,76 @@ async function measure(p) {
     }
     const md = q('.cw-msg.assistant .cw-md p') || q('.cw-msg.assistant .cw-md');
     const chip = q('.cw-tchip'), chipB = chip?.querySelector('b');
-    const tools = [...w.querySelectorAll('.cw-tools button')].filter(b => b.offsetParent && b.getBoundingClientRect().width > 0).map(b => Math.round(Math.min(b.getBoundingClientRect().width, b.getBoundingClientRect().height)));
+    const tools = [...w.querySelectorAll('.cw-tools button:not(.cw-attach, .cw-send)')].filter(b => b.offsetParent && b.getBoundingClientRect().width > 0).map(b => Math.round(Math.min(b.getBoundingClientRect().width, b.getBoundingClientRect().height)));
     return { vw: innerWidth, vh: innerHeight, docW: document.documentElement.scrollWidth, win: R(w), head: R(q('.cw-head')), scroll: R(sc), foot: R(q('.cw-foot')),
       input: R(q('.cw-in')), card: R(q('.cw-card')), chip: R(chip), chipLines: chipB ? Math.round(chipB.getBoundingClientRect().height / parseFloat(cs(chipB, 'lineHeight'))) : 0,
       lines: tops.size, mdFont: parseFloat(cs(md, 'fontSize')), mdLH: parseFloat(cs(md, 'lineHeight')), inFont: parseFloat(cs(q('.cw-in'), 'fontSize')),
-      bubbleFont: parseFloat(cs(q('.cw-bubble'), 'fontSize') || '0'), minTool: Math.min(...tools), tools: R(q('.cw-tools')), send: R(q('.cw-send')), headBtn: R(q('.cw-head .cw-acts .btn.icon')) };
+      bubbleFont: parseFloat(cs(q('.cw-bubble'), 'fontSize') || '0'), minTool: Math.min(...tools), tools: R(q('.cw-tools')), send: R(q('.cw-send')), attach: R(q('.cw-attach')), headBtn: R(q('.cw-head .cw-acts .btn.icon')) };
   }, W_);
+}
+// 0.12.1 composer: with the message box focused, which focus rings are drawn, and how far the + and Send buttons (with
+// the ring each draws when focused from the keyboard) and the other tools' rings keep from the composer's inner edge
+// (its rounded border, corners included); a button's tap area is probed 1.5 px outside each side of its circle
+async function composer(p, phone) {
+  const W = W_;
+  const idleBc = await p.evaluate(W => getComputedStyle(document.querySelector(`${W} .cw-box`)).borderTopColor, W);
+  if (phone) await p.tap(`${W} .cw-in`); else await p.click(`${W} .cw-in`);
+  await sleep(400);
+  const st = await p.evaluate(W => {
+    const w = document.querySelector(W), q = s => w.querySelector(s), box = q('.cw-box'), inn = q('.cw-in'), bs = getComputedStyle(box), is = getComputedStyle(inn);
+    // the drawn circle: the button inside its border (a clear border widens the tap area around it)
+    const vis = e => { const b = e.getBoundingClientRect(), s = getComputedStyle(e), bl = parseFloat(s.borderLeftWidth), bt = parseFloat(s.borderTopWidth);
+      return { l: b.left + bl, t: b.top + bt, r: b.right - parseFloat(s.borderRightWidth), b: b.bottom - parseFloat(s.borderBottomWidth), w: e.clientWidth, h: e.clientHeight, tapW: Math.round(b.width), tapH: Math.round(b.height) }; };
+    const hit = e => { const b = vis(e), cx = (b.l + b.r) / 2, cy = (b.t + b.b) / 2, at = (x, y) => { const h = document.elementFromPoint(x, y); return !!h && e.contains(h); };
+      return [at(b.l - 1.5, cy), at(b.r + 1.5, cy), at(cx, b.t - 1.5), at(cx, b.b + 1.5)].every(Boolean); };
+    const svg = e => Math.round(e.querySelector('svg')?.getBoundingClientRect().width || 0);
+    return { focused: document.activeElement === inn, inOutline: is.outlineStyle === 'none' ? 0 : parseFloat(is.outlineWidth), inOff: parseFloat(is.outlineOffset), inShadow: is.boxShadow,
+      boxBc: bs.borderTopColor, boxShadow: bs.boxShadow, boxRad: bs.borderTopLeftRadius, boxPad: bs.padding,
+      attachHit: hit(q('.cw-attach')), sendHit: hit(q('.cw-send')), attachVis: vis(q('.cw-attach')), sendVis: vis(q('.cw-send')), attachSvg: svg(q('.cw-attach')), sendSvg: svg(q('.cw-send')),
+      after: ['.cw-attach', '.cw-send'].map(s => getComputedStyle(q(s), '::after').content) };
+  }, W);
+  // each tool focused from the keyboard: its ring's reach (outline width + offset) and the gap to the composer's inner edge
+  // (a draft in the box, so Send is enabled and can take focus)
+  await p.fill(`${W} .cw-in`, 'draft');
+  const gaps = {};
+  const n = await p.evaluate(W => document.querySelectorAll(`${W} .cw-tools button`).length, W);
+  for (let i = 0; i < n; i++) {
+    await p.keyboard.press('Shift');
+    const g = await p.evaluate(([W, i]) => {
+      const w = document.querySelector(W), box = w.querySelector('.cw-box'), e = w.querySelectorAll('.cw-tools button')[i];
+      if (!e.offsetParent || !e.getBoundingClientRect().width) return null;
+      e.focus(); const s = getComputedStyle(e), bs = getComputedStyle(box);
+      const ext = e.matches(':focus-visible') && s.outlineStyle !== 'none' ? parseFloat(s.outlineWidth) + parseFloat(s.outlineOffset) : 0;
+      const bb = box.getBoundingClientRect(), bw = parseFloat(bs.borderTopWidth), R = Math.max(0, parseFloat(bs.borderTopLeftRadius) - bw);
+      const l = bb.left + bw, t = bb.top + bw, r = bb.right - bw, b = bb.bottom - bw, cx = (l + r) / 2, cy = (t + b) / 2, hx = (r - l) / 2 - R, hy = (b - t) / 2 - R;
+      const inside = (x, y) => { const qx = Math.abs(x - cx) - hx, qy = Math.abs(y - cy) - hy; return R - Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) - Math.min(Math.max(qx, qy), 0); };
+      const eb = e.getBoundingClientRect(), er = Math.min(parseFloat(s.borderTopLeftRadius) || 0, eb.width / 2, eb.height / 2) + ext;
+      // the ring's outline: a rounded rect (the button's own radius + the ring's reach), sampled
+      const rl = eb.left - ext, rt = eb.top - ext, rr = eb.right + ext, rb = eb.bottom + ext; let gap = Infinity;
+      for (let k = 0; k < 360; k++) {
+        const a = k / 360 * 2 * Math.PI, ux = Math.cos(a), uy = Math.sin(a);
+        const ccx = ux < 0 ? rl + er : rr - er, ccy = uy < 0 ? rt + er : rb - er;
+        gap = Math.min(gap, inside(ccx + er * ux, ccy + er * uy));
+      }
+      return { cls: String(e.className).split(' ').filter(c => c.startsWith('cw-') && c !== 'cw-tool')[0] || 'tool', w: Math.round(eb.width), h: Math.round(eb.height), ext, gap: Math.round(gap * 100) / 100 };
+    }, [W, i]);
+    if (g) gaps[g.cls] = g;
+  }
+  await p.evaluate(() => document.activeElement?.blur());
+  await p.fill(`${W} .cw-in`, '');
+  return { ...st, idleBc, gaps };
+}
+function composerChecks(tag, m, c) {
+  check(`${tag}: the message box focused, one focus ring: the composer's (the accent, 2 px), none on the box itself`,
+    c.focused && c.inOutline === 0 && c.inShadow === 'none' && c.boxBc !== c.idleBc && /0px 0px 0px 1px/.test(c.boxShadow), JSON.stringify([c.focused, c.inOutline, c.inShadow, c.idleBc, c.boxBc, c.boxShadow]));
+  const av = c.attachVis, sv = c.sendVis;
+  check(`${tag}: + and Send 32 px circles, 15 px icons, a tap area >= 36 px`,
+    av.w === 32 && av.h === 32 && sv.w === 32 && sv.h === 32 && av.tapW >= 36 && av.tapH >= 36 && sv.tapW >= 36 && sv.tapH >= 36 && c.attachSvg === 15 && c.sendSvg === 15 && c.attachHit && c.sendHit,
+    JSON.stringify([av.w, av.h, av.tapW, sv.w, sv.h, sv.tapW, c.attachSvg, c.sendSvg, c.attachHit, c.sendHit]));
+  const a = c.gaps['cw-attach'], s = c.gaps['cw-send'];
+  check(`${tag}: + and Send, with their focus rings, >= 2 px inside the composer's border (corners too)`, a && s && a.ext > 0 && s.ext > 0 && a.gap >= 2 && s.gap >= 2, JSON.stringify([a, s]));
+  const bad = Object.values(c.gaps).filter(g => !(g.gap >= 2));
+  check(`${tag}: every composer tool's focus ring >= 2 px inside the composer's border`, Object.keys(c.gaps).length >= 4 && !bad.length, JSON.stringify(bad.length ? bad : Object.keys(c.gaps)));
 }
 async function chip(p) {   // (the row as chat-dock.js draws it for two running tasks with a long title)
   await p.evaluate(W => { const c = document.querySelector(`${W} .cw-tchip`); c.classList.remove('hidden');
@@ -152,7 +220,7 @@ try {
     check(`${tag}: title bar <= 44 px`, m.head.h <= 44, m.head.h);
     check(`${tag}: messages 13-15 px, line height <= 1.45`, m.mdFont >= 13 && m.mdFont <= 15 && m.mdLH / m.mdFont <= 1.45 && (!m.bubbleFont || (m.bubbleFont >= 13 && m.bubbleFont <= 15)), `${m.mdFont}/${m.mdLH} bubble ${m.bubbleFont}`);
     check(`${tag}: the message box 16 px, >= 36 px tall`, m.inFont >= 16 && m.input.h >= 36, `${m.inFont} ${m.input.h}`);
-    check(`${tag}: composer targets >= 36 px on one row, title bar buttons >= 32 px`, m.minTool >= 36 && m.send.h >= 36 && m.tools.h <= 40 && m.headBtn.h >= 32, `${m.minTool} ${m.send.h} ${m.tools.h} ${m.headBtn.h}`);
+    check(`${tag}: composer tools >= 36 px on one row (+ and Send: below), title bar buttons >= 32 px`, m.minTool >= 36 && m.tools.h <= 40 && m.headBtn.h >= 32, `${m.minTool} ${m.tools.h} ${m.headBtn.h}`);
     check(`${tag}: the composer (card, row, box) <= 165 px`, m.foot.h <= 165, m.foot.h);
     check(`${tag}: running-tasks row inside the screen, one line`, m.chip && m.chip.l >= 0 && m.chip.r <= vp.width && m.chipLines === 1 && m.docW <= vp.width, JSON.stringify([m.chip, m.chipLines, m.docW]));
     check(`${tag}: >= 3.7 conversation lines per 100 px`, m.lines / m.scroll.h * 100 >= 3.7, `${m.lines} lines / ${m.scroll.h} px`);
@@ -160,6 +228,13 @@ try {
       check('412x915: >= 24 conversation lines (0.12 candidate: 19)', m.lines >= 24, m.lines);
       if (process.env.REL_SHOT) await p.screenshot({ path: process.env.REL_SHOT, type: 'jpeg', quality: 70 });
     }
+    composerChecks(tag, m, detail[`composer${vp.width}`] = await composer(p, true));
+    await ctx.close();
+  }
+  // the light theme: the same composer
+  {
+    const { ctx, p } = await page(browser, { width: 412, height: 915 }, true, { theme: 'light' });
+    composerChecks('412x915 light', await measure(p), detail.composerLight = await composer(p, true));
     await ctx.close();
   }
 
@@ -219,6 +294,10 @@ try {
   {
     const { ctx, p } = await page(browser, { width: 1600, height: 1000 }, false);
     const m = await measure(p); detail.desk = m;
+    const c = await composer(p, false); detail.deskComposer = c;
+    check('desktop 1600x1000: the composer as 0.12 (box, + 34 px, Send 36 px, the message box\'s own ring, no phone ring)',
+      c.boxRad === '22px' && c.boxPad === '8px 8px 6px 12px' && m.attach.w === 34 && m.send.w === 36 && c.attachSvg === 17 && c.sendSvg === 17 && c.focused && c.inOutline === 2 && c.inOff === 2
+        && !/0px 0px 0px 1px/.test(c.boxShadow) && c.after.every(a => a === 'none'), JSON.stringify([c.boxRad, c.boxPad, m.attach.w, m.send.w, c.attachSvg, c.sendSvg, c.inOutline, c.inOff, c.boxShadow, c.after]));
     check('desktop 1600x1000: window, title bar, messages and card as 0.12', m.win.w === 380 && m.win.h === 500 && m.head.h === 55 && m.mdFont === 15 && m.mdLH === 24.3 && m.inFont === 15 && m.card.h === 37,
       JSON.stringify([m.win.w, m.win.h, m.head.h, m.mdFont, m.mdLH, m.inFont, m.card.h]));
     if ((await card(p)) === 'open') await toggleCard(p);

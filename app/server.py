@@ -71,7 +71,7 @@ except Exception:
     yaml = None
 
 GATEWAY_PROTOCOL_VERSION = 4
-VO_VERSION = "0.12.0"
+VO_VERSION = "0.13.0"
 
 
 def _pl_owns():

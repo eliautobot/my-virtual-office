@@ -3996,12 +3996,15 @@ function _clampZoom(zoom) {
     return Math.max(getMinZoom(), Math.min(getMaxZoom(), z));
 }
 
-// Convert screen (CSS) coords to world coords
+// 3D (v0.13): is the sprite-stack diorama drawing the office?
+function _stackOn() { return !!(window.VOStack && typeof window.VOStack.on === 'function' && window.VOStack.on()); }
+// Convert screen (CSS) coords to world coords (the floor point under them)
 function screenToWorld(sx, sy) {
     const rect = canvas.getBoundingClientRect();
     // CSS pixel to canvas logical coord
     const cx = (sx - rect.left) * (displayW / (rect.width || displayW));
     const cy = (sy - rect.top) * (displayH / (rect.height || displayH));
+    if (_stackOn() && !window.VOStack.isFlat()) return window.VOStack.unproject(cx, cy);
     // Reverse camera transform
     const totalZoom = getBaseScale() * camera.zoom;
     const wx = (cx - displayW / 2) / totalZoom + W / 2 + camera.x;
@@ -4031,12 +4034,30 @@ function _cameraCentre(total) {
     return { x: -((fv.x + fv.w / 2) - displayW / 2) / total, y: -((fv.y + fv.h / 2) - displayH / 2) / total };
 }
 
+// A screen vector (canvas CSS px) at total scale `total` -> the world vector
+// under it (3D, v0.13: on the floor of the turned diorama).
+function _screenVecToWorld(sx, sy, total) {
+    if (_stackTurned()) return window.VOStack.screen1ToWorld(sx / total, sy / total);
+    return { x: sx / total, y: sy / total };
+}
 function clampCamera() {
     const totalZoom = getBaseScale() * camera.zoom;
     const fv = _freeView();
     const centre = _cameraCentre(totalZoom);
     const halfViewW = fv.w / totalZoom / 2;
     const halfViewH = fv.h / totalZoom / 2;
+    if (_stackTurned()) {
+        // 3D (v0.13): clamp in screen space against the turned office's projected box
+        // (floor, slab, back wall): centred while it fits, never showing past it.
+        var S = window.VOStack, ext = S.extent(), sh = S.fitShift();
+        var s = S.worldToScreen1(camera.x - sh.x, camera.y - sh.y);
+        var mxs = Math.max(0, ext.w / 2 - halfViewW), mys = Math.max(0, ext.h / 2 - halfViewH);
+        s.x = Math.max(centre.x - mxs, Math.min(centre.x + mxs, s.x));
+        s.y = Math.max(centre.y - mys, Math.min(centre.y + mys, s.y));
+        var cw = S.screen1ToWorld(s.x, s.y);
+        camera.x = cw.x + sh.x; camera.y = cw.y + sh.y;
+        return;
+    }
     // overX > 0 when the office is wider than the view. When the office fits on
     // an axis it stays centred; when the view is smaller than the office it
     // never shows outside it (bubbles and chips are screen-space and keep
@@ -4121,7 +4142,10 @@ function getBaseScale() {
 function _computeBaseScale() {
     var fv = _freeView();
     var margin = (fv.w > CAM_FIT_MARGIN * 2 + 60 && fv.h > CAM_FIT_MARGIN * 2 + 60) ? CAM_FIT_MARGIN : 0;
-    var scale = Math.min((fv.w - margin * 2) / Math.max(1, W), (fv.h - margin * 2) / Math.max(1, H));
+    // 3D (v0.13): the turned diorama fits its projected box (floor, slab and back wall)
+    var _ext = _stackOn() && !window.VOStack.isFlat() ? window.VOStack.extent() : null;
+    var scale = _ext ? Math.min((fv.w - margin * 2) / Math.max(1, _ext.w), (fv.h - margin * 2) / Math.max(1, _ext.h))
+        : Math.min((fv.w - margin * 2) / Math.max(1, W), (fv.h - margin * 2) / Math.max(1, H));
     if (!isFinite(scale) || scale <= 0) return 1;
     var dpr = DPR || 1;
     return Math.max(0.01, _crispDeviceScale(scale * dpr) / dpr);
@@ -4278,8 +4302,9 @@ function _stepCameraAnimation(now) {
         // A manual zoom glide: the world point under the pointer stays under it the whole way.
         var as = getBaseScale() * (t >= 1 ? a.tz : camera.zoom);
         camera.zoom = t >= 1 ? a.tz : camera.zoom;
-        camera.x = a.anchor.wx - a.anchor.ax / as;
-        camera.y = a.anchor.wy - a.anchor.ay / as;
+        var av = _screenVecToWorld(a.anchor.ax, a.anchor.ay, as);
+        camera.x = a.anchor.wx - av.x;
+        camera.y = a.anchor.wy - av.y;
         clampCamera();
         if (t >= 1) { _camAnim = null; _emitCameraChange(); }
         return true;
@@ -4370,8 +4395,9 @@ function _zoomAtScreenPoint(clientX, clientY, newZoom, animate) {
     _cameraUserMoved();
     if (Math.abs(z1 - z0) < 1e-6) { _emitCameraChange(); return; }
     // Keep the world point under the pointer fixed.
-    var nx = camera.x + (mx - displayW / 2) * (1 / z0 - 1 / z1) / base;
-    var ny = camera.y + (my - displayH / 2) * (1 / z0 - 1 / z1) / base;
+    var zv0 = _screenVecToWorld(mx - displayW / 2, my - displayH / 2, base * z0), zv1 = _screenVecToWorld(mx - displayW / 2, my - displayH / 2, base * z1);
+    var nx = camera.x + zv0.x - zv1.x;
+    var ny = camera.y + zv0.y - zv1.y;
     if (animate) {
         _applyCameraView({ x: nx, y: ny, zoom: z1 }, true, 180);
         _cameraMode = 'free';
@@ -4402,8 +4428,9 @@ function _zoomGlide(clientX, clientY, newZoom, durationMs) {
     var z0 = camera.zoom, base = getBaseScale();
     if (Math.abs(z1 / z0 - 1) < 1e-4) { _emitCameraChange(); return; }
     var ax = mx - displayW / 2, ay = my - displayH / 2;
-    var wx = camera.x + ax / (base * z0), wy = camera.y + ay / (base * z0);
-    _camAnim = { fx: camera.x, fy: camera.y, fz: z0, tz: z1, tx: wx - ax / (base * z1), ty: wy - ay / (base * z1),
+    var gv0 = _screenVecToWorld(ax, ay, base * z0), gv1 = _screenVecToWorld(ax, ay, base * z1);
+    var wx = camera.x + gv0.x, wy = camera.y + gv0.y;
+    _camAnim = { fx: camera.x, fy: camera.y, fz: z0, tz: z1, tx: wx - gv1.x, ty: wy - gv1.y,
         start: performance.now(), dur: durationMs || 180, anchor: { ax: ax, ay: ay, wx: wx, wy: wy } };
     if (typeof _markSceneDirty === 'function') _markSceneDirty();
     _emitCameraChange();
@@ -4411,8 +4438,9 @@ function _zoomGlide(clientX, clientY, newZoom, durationMs) {
 
 function _panByScreen(dx, dy, animate) {
     var total = getBaseScale() * camera.zoom;
-    var tx = (_camAnim ? _camAnim.tx : camera.x) + dx / total;
-    var ty = (_camAnim ? _camAnim.ty : camera.y) + dy / total;
+    var pv = _screenVecToWorld(dx, dy, total);
+    var tx = (_camAnim ? _camAnim.tx : camera.x) + pv.x;
+    var ty = (_camAnim ? _camAnim.ty : camera.y) + pv.y;
     var tz = _camAnim ? _camAnim.tz : camera.zoom;
     _cameraUserMoved();
     _applyCameraView({ x: tx, y: ty, zoom: tz }, !!animate, 160);
@@ -4487,12 +4515,11 @@ window.addEventListener('mousemove', function(e) {
     if (!_isPanning) return;
     const rect = canvas.getBoundingClientRect();
     const total = getBaseScale() * camera.zoom;
-    const dx = (e.clientX - _panStartX) * (displayW / (rect.width || displayW)) / total;
-    const dy = (e.clientY - _panStartY) * (displayH / (rect.height || displayH)) / total;
+    const pv = _screenVecToWorld((e.clientX - _panStartX) * (displayW / (rect.width || displayW)), (e.clientY - _panStartY) * (displayH / (rect.height || displayH)), total);
     if (!_panMoved && Math.abs(e.clientX - _panStartX) + Math.abs(e.clientY - _panStartY) <= 3) return;
     if (!_panMoved) { _panMoved = true; _cameraUserMoved(); }
-    camera.x = _camStartX - dx;
-    camera.y = _camStartY - dy;
+    camera.x = _camStartX - pv.x;
+    camera.y = _camStartY - pv.y;
     clampCamera();
     _emitCameraChange();
 });
@@ -4549,12 +4576,11 @@ canvas.addEventListener('touchmove', function(e) {
     if (e.touches.length === 1 && _isPanning) {
         const rect = canvas.getBoundingClientRect();
         const total = getBaseScale() * camera.zoom;
-        const dx = (e.touches[0].clientX - _panStartX) * (displayW / (rect.width || displayW)) / total;
-        const dy = (e.touches[0].clientY - _panStartY) * (displayH / (rect.height || displayH)) / total;
+        const tv = _screenVecToWorld((e.touches[0].clientX - _panStartX) * (displayW / (rect.width || displayW)), (e.touches[0].clientY - _panStartY) * (displayH / (rect.height || displayH)), total);
         if (!_panMoved && Math.abs(e.touches[0].clientX - _panStartX) + Math.abs(e.touches[0].clientY - _panStartY) <= 6) return;
         if (!_panMoved) { _panMoved = true; _cameraUserMoved(); }
-        camera.x = _camStartX - dx;
-        camera.y = _camStartY - dy;
+        camera.x = _camStartX - tv.x;
+        camera.y = _camStartY - tv.y;
         clampCamera();
         _emitCameraChange();
     } else if (e.touches.length === 2 && _pinchWorld) {
@@ -4569,8 +4595,9 @@ canvas.addEventListener('touchmove', function(e) {
         var mx = (mid.x - rect2.left) * (displayW / (rect2.width || displayW));
         var my = (mid.y - rect2.top) * (displayH / (rect2.height || displayH));
         var total2 = getBaseScale() * camera.zoom;
-        camera.x = _pinchWorld.x - (mx - displayW / 2) / total2 - W / 2;
-        camera.y = _pinchWorld.y - (my - displayH / 2) / total2 - H / 2;
+        var pw = _screenVecToWorld(mx - displayW / 2, my - displayH / 2, total2);
+        camera.x = _pinchWorld.x - pw.x - W / 2;
+        camera.y = _pinchWorld.y - pw.y - H / 2;
         clampCamera();
         _emitCameraChange();
     }
@@ -4619,6 +4646,11 @@ document.addEventListener('keydown', function(e) {
         fitView(); e.preventDefault();
     } else if ((key === 'm' || key === 'M') && !e.repeat && !(typeof editMode !== 'undefined' && editMode)) {
         toggleMiniMap(); e.preventDefault();
+    } else if (/^[qQrRvV]$/.test(key) && !e.repeat && _stackOn() && !(typeof editMode !== 'undefined' && editMode)) {
+        // 3D (v0.13): Q / R turn the diorama a step, V toggles the straight top-down view
+        if (key === 'v' || key === 'V') window.VOStack.togglePlan();
+        else window.VOStack.rotate(key === 'q' || key === 'Q' ? -1 : 1);
+        e.preventDefault();
     }
 });
 
@@ -10053,6 +10085,21 @@ function _worldToCanvas(wx, wy) {
     var total = getBaseScale() * camera.zoom;
     return { x: (wx - W / 2 - camera.x) * total + displayW / 2, y: (wy - H / 2 - camera.y) * total + displayH / 2 };
 }
+// 3D (v0.13): the turned sprite-stack diorama is drawing (the editor and the plan
+// view use the classic straight camera, where everything below is unchanged).
+function _stackTurned() { return _stackOn() && !window.VOStack.isFlat(); }
+// Canvas px of the spot `o` world px above a character's anchor (agent, pet or
+// Office life extra): o = 54 is the name tag's foot, 90 above the head, -8 the
+// feet; (dx, dy) nudge it on screen by world px. In the turned diorama the same
+// spot over the stacked figure (its floor point and the top of its head).
+function _entityCanvasAt(e, o, dx, dy) {
+    if (_stackTurned()) return window.VOStack.entityAt(e, o, dx, dy);
+    return _worldToCanvas(e.x + (dx || 0), e.y - o + (dy || 0));
+}
+function _entityClientAt(e, o, dx, dy) {
+    var p = _entityCanvasAt(e, o, dx, dy), rect = canvas.getBoundingClientRect();
+    return { x: p.x * (rect.width / displayW) + rect.left, y: p.y * (rect.height / displayH) + rect.top };
+}
 
 function _clientToCanvas(clientX, clientY) {
     var rect = canvas.getBoundingClientRect();
@@ -10302,7 +10349,7 @@ function _layoutAgentControls(agent, m, fp) {
     var act = _agentActivity(agent), thinking = !!(act && act.kind === 'thinking');
     var pill = _agentTagPill(agent, fp, thinking);
     var dpr = DPR || 1;
-    var foot = _worldToCanvas(agent.x + (agent._tagDx || 0), agent.y - 54 + dy);
+    var foot = _stackTurned() ? _entityCanvasAt(agent, 54) : _worldToCanvas(agent.x + (agent._tagDx || 0), agent.y - 54 + dy);
     var tag = { x: Math.round((foot.x - pill.w / 2) * dpr) / dpr, y: Math.round((foot.y - pill.h) * dpr) / dpr, w: pill.w, h: pill.h, bmp: pill.bmp, dots: pill.dots };
     // World hit box of the tag (clicks on the name open the agent's menu).
     agent.nameTagRect = { x: agent.x - pill.w / 2 / total, y: agent.y - 54 + dy - pill.h / total, w: pill.w / total, h: pill.h / total };
@@ -11282,6 +11329,20 @@ async function branchDeletePrompt(branchId) {
 // and furniture that never animates: drawn into the cached static layer) or
 // 'dynamic' (animated furniture and live desk monitors, drawn every frame on
 // top of the cached layer).
+// Time-of-day sky colours (top-level since v0.13: the stack renderer reads them too).
+function getTimeOfDaySky() {
+    const t = _getTimeHour();
+    const sun = _getSunTimes();
+    if (t < sun.dawn)                return { sky: '#0d1b2a', upper: '#162032', top: '#0a1020', cloud: 'rgba(200,200,255,0.12)', glow: 'rgba(40,60,120,0.15)', stars: true };
+    if (t < sun.sunrise)             return { sky: '#e65100', upper: '#ff6d00', top: '#ffab40', cloud: 'rgba(255,220,180,0.3)', glow: 'rgba(255,160,60,0.22)', stars: false };
+    if (t < sun.sunrise + 1.5)       return { sky: '#ff8a65', upper: '#ffab91', top: '#ffe082', cloud: 'rgba(255,255,255,0.4)', glow: 'rgba(255,200,100,0.18)', stars: false };
+    if (t < sun.sunrise + 3)         return { sky: '#42a5f5', upper: '#64b5f6', top: '#e3f2fd', cloud: 'rgba(255,255,255,0.5)', glow: 'rgba(255,240,200,0.12)', stars: false };
+    if (t < sun.sunset - 2)          return { sky: '#2196f3', upper: '#42a5f5', top: '#bbdefb', cloud: 'rgba(255,255,255,0.5)', glow: 'rgba(255,255,240,0.08)', stars: false };
+    if (t < sun.sunset - 0.5)        return { sky: '#42a5f5', upper: '#64b5f6', top: '#ffe0b2', cloud: 'rgba(255,255,255,0.45)', glow: 'rgba(255,200,100,0.12)', stars: false };
+    if (t < sun.sunset + 0.3)        return { sky: '#e65100', upper: '#ff6d00', top: '#ff8a65', cloud: 'rgba(255,200,150,0.35)', glow: 'rgba(255,120,40,0.22)', stars: false };
+    if (t < sun.dusk)                return { sky: '#4a148c', upper: '#6a1b9a', top: '#e65100', cloud: 'rgba(180,160,255,0.2)', glow: 'rgba(150,80,180,0.15)', stars: false };
+    return                                  { sky: '#0d1b2a', upper: '#162032', top: '#0a1020', cloud: 'rgba(200,200,255,0.12)', glow: 'rgba(40,60,120,0.15)', stars: true };
+}
 function drawEnvironment(mode) {
     mode = mode || 'all';
     _tod = getTimeOfDaySky(); // refresh for time-lapse
@@ -11320,19 +11381,6 @@ function drawEnvironment(mode) {
 
     // --- HQ WINDOWS (north wall, flanking center text) ---
     // Time-of-day sky colors
-    function getTimeOfDaySky() {
-        const t = _getTimeHour();
-        const sun = _getSunTimes();
-        if (t < sun.dawn)                return { sky: '#0d1b2a', upper: '#162032', top: '#0a1020', cloud: 'rgba(200,200,255,0.12)', glow: 'rgba(40,60,120,0.15)', stars: true };
-        if (t < sun.sunrise)             return { sky: '#e65100', upper: '#ff6d00', top: '#ffab40', cloud: 'rgba(255,220,180,0.3)', glow: 'rgba(255,160,60,0.22)', stars: false };
-        if (t < sun.sunrise + 1.5)       return { sky: '#ff8a65', upper: '#ffab91', top: '#ffe082', cloud: 'rgba(255,255,255,0.4)', glow: 'rgba(255,200,100,0.18)', stars: false };
-        if (t < sun.sunrise + 3)         return { sky: '#42a5f5', upper: '#64b5f6', top: '#e3f2fd', cloud: 'rgba(255,255,255,0.5)', glow: 'rgba(255,240,200,0.12)', stars: false };
-        if (t < sun.sunset - 2)          return { sky: '#2196f3', upper: '#42a5f5', top: '#bbdefb', cloud: 'rgba(255,255,255,0.5)', glow: 'rgba(255,255,240,0.08)', stars: false };
-        if (t < sun.sunset - 0.5)        return { sky: '#42a5f5', upper: '#64b5f6', top: '#ffe0b2', cloud: 'rgba(255,255,255,0.45)', glow: 'rgba(255,200,100,0.12)', stars: false };
-        if (t < sun.sunset + 0.3)        return { sky: '#e65100', upper: '#ff6d00', top: '#ff8a65', cloud: 'rgba(255,200,150,0.35)', glow: 'rgba(255,120,40,0.22)', stars: false };
-        if (t < sun.dusk)                return { sky: '#4a148c', upper: '#6a1b9a', top: '#e65100', cloud: 'rgba(180,160,255,0.2)', glow: 'rgba(150,80,180,0.15)', stars: false };
-        return                                  { sky: '#0d1b2a', upper: '#162032', top: '#0a1020', cloud: 'rgba(200,200,255,0.12)', glow: 'rgba(40,60,120,0.15)', stars: true };
-    }
     _tod = getTimeOfDaySky();
 
 
@@ -14753,10 +14801,11 @@ function _blitSharpLayer(layer, k) {
     ctx.drawImage(layer, 0, 0, layer.width / k, layer.height / k);
     ctx.restore();
 }
-function _ensureStaticLayer(now) {
-    if (typeof document === 'undefined' || !document.createElement) return false;
+// Once a second: catch layout changes made without an explicit invalidate (new
+// version, collision grid), keep desks and their owners in sync, follow desk
+// use. Shared by the classic static layer and the sprite-stack renderer (v0.13).
+function _staticHousekeeping(now) {
     if (now - _staticSigCheckedAt > 1000) {
-        // Catch any layout change made without an explicit invalidate.
         _staticSigCheckedAt = now;
         var sig = W + 'x' + H + '|' + JSON.stringify(officeConfig.furniture) + '|' + JSON.stringify(officeConfig.walls) + '|' +
             JSON.stringify(officeConfig.floor) + '|' + JSON.stringify(getBranchList());
@@ -14765,6 +14814,10 @@ function _ensureStaticLayer(now) {
         var use = _deskUseSig();  // I15: a desk's screens go on/off with its use
         if (use !== _staticDeskUse) { _staticDeskUse = use; _staticLayerForce = true; }
     }
+}
+function _ensureStaticLayer(now) {
+    if (typeof document === 'undefined' || !document.createElement) return false;
+    _staticHousekeeping(now);
     var bw = canvas.width, bh = canvas.height;
     // Keyed on the snapped world origin: sub-pixel camera moves reuse the layer.
     var org = _cameraOrigin();
@@ -16625,12 +16678,32 @@ function _rectHit(rect, x, y, minCssPx) {
 
 // Agents sorted front-most first (the one drawn on top wins a click).
 function _agentsFrontFirst() {
+    if (_stackTurned()) {
+        var S = window.VOStack;
+        return agents.slice().sort(function(a, b) { return S.viewY(b.x, b.y) - S.viewY(a.x, a.y); });
+    }
     return agents.slice().sort(function(a, b) { return b.y - a.y; });
+}
+// 3D (v0.13): an entity (agent / pet) under a canvas point of the turned diorama:
+// the pixel itself first (the id buffer), then the figures' screen boxes grown
+// to minCssPx (front-most first).
+function _stackEntityAt(list, x, y, minCssPx, halfW) {
+    var S = window.VOStack, cp = S.project(x, y, 0), hit = S.pickAt(cp.x, cp.y);
+    if (hit && list.indexOf(hit.ref) >= 0) return hit.ref;
+    // the exact pass also takes the figure's own box where nothing is drawn (the floor
+    // round a small pet or between a person's arms), never over another piece
+    if (!minCssPx && hit) return null;
+    var order = list.slice().sort(function(a, b) { return S.viewY(b.x, b.y) - S.viewY(a.x, a.y); });
+    for (var i = 0; i < order.length; i++) {
+        if (_hitCanvasRect(S.screenBox(order[i], halfW), cp.x, cp.y, minCssPx || 0)) return order[i];
+    }
+    return null;
 }
 
 // Which agent (name tag or body) is under a world point; the tag (again) and 💬 are
 // screen space (_agentControlAtCanvas).
 function _agentAtWorld(x, y, minCssPx) {
+    if (_stackTurned()) return _stackEntityAt(agents, x, y, minCssPx, 15);
     var list = _agentsFrontFirst();
     for (var i = 0; i < list.length; i++) {
         var agent = list[i];
@@ -17032,10 +17105,10 @@ function _placeAgentMenu(force) {
         if (force) { el.style.left = ''; el.style.top = ''; el.style.removeProperty('--vo-am-max-h'); el.classList.remove('has-tail'); }
         return;
     }
-    var head = _worldToScreen(agent.x, agent.y - 92);
-    var feet = _worldToScreen(agent.x, agent.y + 12);
+    var head = _entityClientAt(agent, 92);
+    var feet = _entityClientAt(agent, -12);
     // The name tag (ctl.launcher) keeps its own on-screen size: keep it clear.
-    if (agent._ctl) head = { x: head.x, y: Math.min(head.y, head.y - _worldToCanvas(agent.x, agent.y - 92).y + agent._ctl.launcher.y) };
+    if (agent._ctl) head = { x: head.x, y: Math.min(head.y, head.y - _entityCanvasAt(agent, 92).y + agent._ctl.launcher.y) };
     var posKey = Math.round(head.x) + ',' + Math.round(head.y) + ',' + Math.round(feet.y) + ',' + window.innerWidth + 'x' + window.innerHeight;
     if (!force && posKey === _agentMenu.posKey) return;
     _agentMenu.posKey = posKey;
@@ -17050,7 +17123,7 @@ function _placeAgentMenu(force) {
     }
     el.style.setProperty('--vo-am-max-h', Math.max(180, Math.floor(bounds.bottom - bounds.top)) + 'px');
     var w = el.offsetWidth, h = el.offsetHeight;
-    var halfBody = Math.max(14, _worldToScreen(agent.x + 18, agent.y).x - feet.x);
+    var halfBody = Math.max(14, 18 * getBaseScale() * camera.zoom * (canvas.getBoundingClientRect().width / (displayW || 1)));
     var midY = (head.y + feet.y) / 2;
     var agentBox = { left: feet.x - halfBody, right: feet.x + halfBody, top: head.y, bottom: feet.y };
     var obstacles = _agentMenuObstacles(el);
@@ -17154,6 +17227,12 @@ function handleCanvasClick(clientX, clientY, opts) {
 // Its drawn box, grown to a 44 px finger target on touch.
 function _reactItemAt(wx, wy, touch) {
     if (!_reactionsOn()) return null;
+    if (_stackOn()) {
+        // 3D (v0.13): the piece under the point in the id buffer, as drawn (touch: within a finger's reach)
+        var _cp = window.VOStack.project(wx, wy, 0);
+        var _h = window.VOStack.pickNear(_cp.x, _cp.y, touch ? 22 : 0, function(h) { return h.kind === 'furniture' && !!_rxSpec(h.ref); });
+        return _h ? _h.ref : null;
+    }
     var order = _furnitureDrawOrder(), min = touch ? 44 / Math.max(0.01, getBaseScale() * camera.zoom) : 0, best = null, bestD = Infinity;
     for (var i = order.length - 1; i >= 0; i--) {
         var item = order[i];
@@ -17481,8 +17560,13 @@ var _agentWorkspace = {
     skillSections: { agent: true, library: true, workshop: false }
 };
 
-function _worldToScreen(wx, wy) {
+function _worldToScreen(wx, wy, wz) {
     var rect = canvas.getBoundingClientRect();
+    if (_stackOn() && !window.VOStack.isFlat()) {
+        var p = window.VOStack.project(wx, wy, wz || 0);
+        return { x: p.x * (rect.width / displayW) + rect.left, y: p.y * (rect.height / displayH) + rect.top };
+    }
+    if (wz) wy -= wz;
     var base = getBaseScale();
     var totalZoom = base * camera.zoom;
     var dx = (wx - W / 2 - camera.x) * totalZoom + displayW / 2;
@@ -17516,6 +17600,14 @@ function _findAssignedDeskForPreview(agent) {
 
 function _getAgentPreviewScreenHit(worldX, worldY) {
     var furniture = (officeConfig && officeConfig.furniture) || [];
+    if (_stackTurned()) {
+        // 3D (v0.13): the monitors of the turned desk models, seen along the ray under the point
+        var cp = window.VOStack.project(worldX, worldY, 0);
+        for (var si = furniture.length - 1; si >= 0; si--) {
+            if (_isDeskItem(furniture[si]) && window.VOStack.deskMonitorHit(furniture[si], cp.x, cp.y, 3)) return _getDeskAgent(furniture[si]);
+        }
+        return null;
+    }
     for (var i = furniture.length - 1; i >= 0; i--) {
         var item = furniture[i];
         if (!_isDeskItem(item)) continue;
@@ -17547,9 +17639,15 @@ window.__voResolveAgentPreviewAnchor = function(agentId) {
         }
         anchor = _worldToScreen((x0 + x1) / 2, y0);
         control = _worldToScreen((x0 + x1) / 2, (y0 + y1) / 2);
+        var _sa = _stackTurned() ? window.VOStack.deskMonitorAnchor(desk) : null;
+        if (_sa) {
+            var _cr = canvas.getBoundingClientRect(), _kx = _cr.width / displayW, _ky = _cr.height / displayH;
+            anchor = { x: _sa.top.x * _kx + _cr.left, y: _sa.top.y * _ky + _cr.top };
+            control = { x: _sa.mid.x * _kx + _cr.left, y: _sa.mid.y * _ky + _cr.top };
+        }
     } else {
-        anchor = _worldToScreen(agent.x, agent.y - 88);
-        control = _worldToScreen(agent.x, agent.y - 70);
+        anchor = _entityClientAt(agent, 88);
+        control = _entityClientAt(agent, 70);
     }
     var canvasRect = canvas.getBoundingClientRect();
     return {
@@ -17569,6 +17667,10 @@ function _isDeskItem(item) {
 }
 
 function _findDeskAtScreen(clientX, clientY) {
+    if (_stackTurned()) {
+        var _cp = _clientToCanvas(clientX, clientY), _h = window.VOStack.pickAt(_cp.x, _cp.y);
+        return _h && _h.kind === 'furniture' && _isDeskItem(_h.ref) ? _h.ref : null;
+    }
     var world = screenToWorld(clientX, clientY);
     var item = _findFurnitureAt(world.x, world.y);
     return _isDeskItem(item) ? item : null;
@@ -19537,7 +19639,7 @@ function _agentScreenObstacles() {
     var total = getBaseScale() * camera.zoom;
     var list = [];
     agents.forEach(function(agent) {
-        var top = _worldToCanvas(agent.x - 24, agent.y - 90);
+        var top = _entityCanvasAt(agent, 90, -24, 0);
         list.push({ x: top.x, y: top.y, w: 48 * total, h: 96 * total, owner: agent.statusKey });
         list.push({ x: top.x, y: top.y, w: 48 * total, h: 62 * total, owner: null });
         // The name tag and the fixed-size chip reach above the head when zoomed out.
@@ -19718,8 +19820,8 @@ function drawChatBubbles() {
         var key = agent.statusKey;
         var msgs = agentChatData[key];
         if (!msgs || msgs.length === 0) continue;
-        var head = _worldToCanvas(agent.x, agent.y - 90);
-        var feet = _worldToCanvas(agent.x, agent.y + 8);
+        var head = _entityCanvasAt(agent, 90);
+        var feet = _entityCanvasAt(agent, -8);
         if (expandedKeys.indexOf(key) < 0) {
             tabIcons.push(agent);
             continue;
@@ -19751,7 +19853,7 @@ function drawChatBubbles() {
     if (total > 0.3 && chatBubbles.length) obstacles = obstacles.concat(_agentScreenObstacles());
     var chromeRects = chatBubbles.length ? _canvasChromeObstacles() : [];
     var heads = chatBubbles.length ? agents.map(function(agent) {
-        var p = _worldToCanvas(agent.x, agent.y - 90);
+        var p = _entityCanvasAt(agent, 90);
         return { key: agent.statusKey, x: p.x, y: p.y };
     }) : [];
     _resolveChatPreviewObstacleCollisions(chatBubbles, obstacles, bounds, {
@@ -21372,6 +21474,7 @@ function _petStill() {
 }
 // The pet under a click (its drawn body box, grown to min CSS px for touch).
 function _petAtWorld(x, y, minCssPx) {
+    if (_stackTurned()) return _stackEntityAt(officePets, x, y, minCssPx, 10);
     for (var i = officePets.length - 1; i >= 0; i--) if (_rectHit(officePets[i]._bodyBox, x, y, minCssPx)) return officePets[i];
     return null;
 }
@@ -22796,6 +22899,52 @@ function _cullEntity(e, v) {
     if (e instanceof Agent) { e.characterRect = null; e.nameTagRect = null; if (e._seatT != null) e._seatT = 1; }
     return true;
 }
+// 3D (v0.13) sprite-stack frame: the world is one stacked-pixel diorama (VOStack); the
+// screen-space layer (tags, chips, bubbles, mini-map, edit overlay) is the classic one.
+function _renderStackFrame(now) {
+    _rxTick();
+    _tod = getTimeOfDaySky();
+    if (window.VirtualOfficePreviews && typeof window.VirtualOfficePreviews.updatePositions === 'function') {
+        window.VirtualOfficePreviews.updatePositions();
+    }
+    if (_agentMenu && _agentMenu.agent) _placeAgentMenu(false);
+    _rimFrame++;
+    _perfStart('stack'); window.VOStack.renderWorld(ctx, now); _perfEnd('stack');
+    // the classic world-space extras (desk items, minigames, Office life props): as drawn in
+    // the plan camera, re-anchored onto the turned diorama (stack/stack-overlay.js)
+    _perfStart('stackExtras'); window.VOStack.drawWorldExtras(ctx, now); _perfEnd('stackExtras');
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    _perfStart('chatBubbles'); drawAgentActivityChips();
+    if (window.VOLife && typeof window.VOLife.drawScreen === 'function') window.VOLife.drawScreen(ctx);
+    drawChatBubbles(); _perfEnd('chatBubbles');
+    _drawMiniMap();
+    if (_chatTooltip) {
+        ctx.save();
+        var ttW = Math.ceil(_canvasTextWidth(_chatTooltip.text, 1)) + 10, ttH = 17;
+        var ttX = Math.max(2, Math.min(displayW - ttW - 2, _chatTooltip.x - 2)), ttY = _chatTooltip.y;
+        ctx.fillStyle = 'rgba(20,20,40,0.92)'; ctx.fillRect(ttX, ttY, ttW, ttH);
+        ctx.strokeStyle = 'rgba(100,140,255,0.6)'; ctx.lineWidth = 1; ctx.strokeRect(ttX, ttY, ttW, ttH);
+        _canvasText(_chatTooltip.text, ttX + 5, ttY + 5, '#dde', 1, 'left', 'top');
+        ctx.restore();
+    }
+    _fpsFrames++;
+    var _fpsNow = Date.now();
+    if (_fpsNow - _fpsLast >= 1000) { _fpsDisplay = _fpsFrames; _fpsFrames = 0; _fpsLast = _fpsNow; }
+    if (VO_DEBUG) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(8, displayH - 26, 52, 18);
+        ctx.fillStyle = _fpsDisplay < 30 ? '#f44336' : (_fpsDisplay < 50 ? '#ffc107' : '#4caf50');
+        _canvasText(_fpsDisplay + ' fps', 12, displayH - 13, ctx.fillStyle, 1, 'left', 'bottom');
+        ctx.restore();
+    }
+    if (editMode && window.VOStack.isFlat()) {
+        ctx.save();
+        applyCameraTransform();
+        drawEditOverlay();
+        ctx.restore();
+        drawEditHUD();
+    }
+}
 function _renderFrame(now) {
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     if (_stepCameraAnimation(now)) _sceneDirty = true;
@@ -22809,6 +22958,9 @@ function _renderFrame(now) {
     // Clear entire canvas (the same surround in every UI theme)
     ctx.fillStyle = OFFICE_SURROUND;
     ctx.fillRect(0, 0, displayW, displayH);
+    // 3D (v0.13): the sprite-stack diorama draws the world (stack/*.js); the classic
+    // renderer below stays as the fallback (no WebGL2, ?classic=1).
+    if (window.VOStack && window.VOStack.on()) { _renderStackFrame(now); return; }
     // A still sharp layer: one copy, before the world clip (_envBeforeClip).
     _perfStart('environment'); _envBeforeClip(now); _perfEnd('environment');
 
@@ -25124,7 +25276,17 @@ function _mmLoadCurrentSettings() {
     if (fitSel) fitSel.value = prefs.officeFit === 'fill' ? 'fill' : 'sharp';
     var nightSel = document.getElementById('mm-night-look');
     if (nightSel) nightSel.value = prefs.nightLook === 'dim' ? 'dim' : 'lit';
+    _mmGraphicsSync();
 }
+// Settings > Display > Graphics (stack/stack-loader.js, window.VOGraphics): the
+// form shows the saved choice and what it uses on this device.
+function _mmGraphicsSync() {
+    var sel = document.getElementById('mm-graphics'), hint = document.getElementById('mm-graphics-status');
+    var G = window.VOGraphics;
+    if (sel) { sel.value = G ? G.pref() : '2d'; sel.disabled = !G; }
+    if (hint) hint.textContent = G ? G.describe() : '3D graphics are not part of this version.';
+}
+window.addEventListener('vo:graphics-change', function() { _mmGraphicsSync(); });
 
 
 // PC Metrics toggle in settings
@@ -25378,14 +25540,19 @@ function mmSaveSettings() {
     var _elNames = document.getElementById('mm-show-names');
     var _elFit = document.getElementById('mm-office-fit');
     var _elNight = document.getElementById('mm-night-look');
+    var _elGfx = document.getElementById('mm-graphics');
+    var _gfxBefore = window.VOGraphics ? window.VOGraphics.pref() : null;
     var displayPrefs = {
         showBubbles: _elBubbles ? _elBubbles.checked : true,
         showWeather: _elWeather ? _elWeather.checked : true,
         showNames: _elNames ? _elNames.checked : true,
         officeFit: _elFit && _elFit.value === 'fill' ? 'fill' : 'sharp',
         nightLook: _elNight && _elNight.value === 'dim' ? 'dim' : 'lit',
+        graphics: _elGfx && (_elGfx.value === '3d' || _elGfx.value === '2d') ? _elGfx.value : 'auto',
     };
     localStorage.setItem('vo-display-prefs', JSON.stringify(displayPrefs));
+    // Graphics: switched in place (no reload) when the choice changed
+    if (window.VOGraphics && _gfxBefore !== displayPrefs.graphics) window.VOGraphics.set(displayPrefs.graphics);
     var fitChanged = _officeFitMode() !== displayPrefs.officeFit;
     _displayPrefs = displayPrefs;
     if (fitChanged) _applyOfficeFitMode();
@@ -29857,11 +30024,22 @@ function _drawMiniMap() {
         ctx.fillStyle = a.color || '#ffd600';
         ctx.beginPath(); ctx.arc(L.x + a.x * L.k, L.y + a.y * L.k, displayW < 520 ? 2.5 : 3, 0, Math.PI * 2); ctx.fill();
     });
-    var vx = W / 2 + camera.x - vw / 2, vy = H / 2 + camera.y - vh / 2;
-    var rx0 = Math.max(0, vx), ry0 = Math.max(0, vy), rx1 = Math.min(W, vx + vw), ry1 = Math.min(H, vy + vh);
     ctx.strokeStyle = '#ffd600';
     ctx.lineWidth = 1.5;
+    if (_stackTurned()) {
+        // 3D (v0.13): the turned view sees a turned patch of floor
+        var S8 = window.VOStack, cs8 = [[0, 0], [displayW, 0], [displayW, displayH], [0, displayH]];
+        ctx.save();
+        ctx.beginPath(); ctx.rect(L.x, L.y, L.w, L.h); ctx.clip();
+        ctx.beginPath();
+        cs8.forEach(function(c, i) { var p = S8.unproject(c[0], c[1]); if (i) ctx.lineTo(L.x + p.x * L.k, L.y + p.y * L.k); else ctx.moveTo(L.x + p.x * L.k, L.y + p.y * L.k); });
+        ctx.closePath(); ctx.stroke();
+        ctx.restore();
+    } else {
+    var vx = W / 2 + camera.x - vw / 2, vy = H / 2 + camera.y - vh / 2;
+    var rx0 = Math.max(0, vx), ry0 = Math.max(0, vy), rx1 = Math.min(W, vx + vw), ry1 = Math.min(H, vy + vh);
     ctx.strokeRect(L.x + rx0 * L.k, L.y + ry0 * L.k, Math.max(2, (rx1 - rx0) * L.k), Math.max(2, (ry1 - ry0) * L.k));
+    }
     ctx.restore();
     _miniMapRect = L;
 }
@@ -30230,8 +30408,9 @@ window.VOLifeHost = {
             return _segHitsRect(x0, y0, x1, y1, r.x, r.y, r.w, r.h);
         });
     },
-    worldToCanvas: function(x, y) { return _worldToCanvas(x, y); },
+    worldToCanvas: function(x, y) { return _stackTurned() ? window.VOStack.classicToCanvas(x, y) : _worldToCanvas(x, y); },
     canvasToWorld: function(cx, cy) {
+        if (_stackTurned()) return window.VOStack.unproject(cx, cy);
         var total = getBaseScale() * camera.zoom;
         return { x: (cx - displayW / 2) / total + W / 2 + camera.x, y: (cy - displayH / 2) / total + H / 2 + camera.y };
     },
@@ -30258,7 +30437,7 @@ window.VOLifeHost = {
             var b = _tagPillBitmap({ name: text, color: color }, fp, _tagMaxDev(fp));
             m = ch._xTag = { text: text, color: color, fp: fp, dpr: dpr, gen: _chipCacheGen, bmp: b.bmp, w: b.w / dpr, h: b.h / dpr };
         }
-        var foot = _worldToCanvas(ch.x + (ch._tagDx || 0), ch.y - 54 + (ch._tagDy || 0));
+        var foot = _stackTurned() ? _entityCanvasAt(ch, 54) : _worldToCanvas(ch.x + (ch._tagDx || 0), ch.y - 54 + (ch._tagDy || 0));
         var r = { x: foot.x - m.w / 2, y: foot.y - m.h, w: m.w, h: m.h };
         if (opts && opts.avoid) {
             var hits = function(o) { return o && r.x < o.x + o.w - 1 && r.x + r.w > o.x + 1 && r.y < o.y + o.h - 1 && r.y + r.h > o.y + 1; };

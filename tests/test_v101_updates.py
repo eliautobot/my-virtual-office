@@ -249,7 +249,7 @@ class UpdatesHttpTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="vo-v101-updates-case-")
         self.store = vo_access.AccessStore(self.temp.name, env={})
-        self.fake = FakeGitHub(release("v0.13.0"))
+        self.fake = FakeGitHub(release("v0.14.0"))
         self.patches = [
             mock.patch.object(server, "ACCESS_STORE", self.store),
             mock.patch.object(server, "UPDATE_CHECKER", vc.UpdateChecker(server.VO_VERSION, fetch=self.fake, env={})),
@@ -283,17 +283,17 @@ class UpdatesHttpTests(unittest.TestCase):
         return res.status, json.loads(payload.decode() or "null")
 
     def test_version_is_one_source(self):
-        self.assertEqual("0.12.0", server.VO_VERSION)
+        self.assertEqual("0.13.0", server.VO_VERSION)
         status, data = self.get("/api/version")
         self.assertEqual(200, status)
-        self.assertEqual({"current": "0.12.0", "version": "0.12.0"}, {k: data[k] for k in ("current", "version")})
+        self.assertEqual({"current": "0.13.0", "version": "0.13.0"}, {k: data[k] for k in ("current", "version")})
         self.assertTrue((PROJECT_ROOT / "docs" / f"RELEASE-NOTES-{server.VO_VERSION}.md").is_file())
 
     def test_updates_route_and_check_now(self):
         status, data = self.get("/api/version/updates")
         self.assertEqual(200, status)
         self.assertTrue(data["newer"])
-        self.assertEqual("0.13.0", data["latest"])
+        self.assertEqual("0.14.0", data["latest"])
         self.get("/api/version/updates")
         self.assertEqual(1, len(self.fake.calls))
         status, data = self.get("/api/version/updates?refresh=1")
@@ -332,8 +332,8 @@ class UpdatesHttpTests(unittest.TestCase):
     def test_release_notes_served_locally(self):
         status, data = self.get("/api/version/notes")
         self.assertEqual(200, status)
-        self.assertEqual("0.12.0", data["version"])
-        self.assertTrue(data["markdown"].startswith("# My Virtual Office v0.12.0"))
+        self.assertEqual("0.13.0", data["version"])
+        self.assertTrue(data["markdown"].startswith("# My Virtual Office v0.13.0"))
         self.assertEqual(({"ok": False, "error": "bad_version"}, 400), server._release_notes_answer("../x"))
 
     def test_image_copy_of_release_notes_matches_docs(self):

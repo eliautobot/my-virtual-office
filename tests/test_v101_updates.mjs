@@ -306,9 +306,9 @@ try {
 
     // v0.11 relux (playtest #10): the notes' links are targets you can hit: heading chips 24 px (44 px on touch), links in
     // sentences 24 px or more, and the text lines do not move. Measured at rest (after the window's pop-in, which scales
-    // it from 0.985), with the 0.10.1 fixture notes and with the current release's notes (0.12.0: links in headings).
+    // it from 0.985), with the 0.10.1 fixture notes and with the current release's notes (links in headings).
     const savedNotes = fixtures['/api/version/notes'], savedVersion = fixtures['/api/version'];
-    const CURRENT = '0.12.0', CURRENT_NOTES = fs.readFileSync(path.resolve(APP, '..', 'docs', `RELEASE-NOTES-${CURRENT}.md`), 'utf8');
+    const CURRENT = '0.13.0', CURRENT_NOTES = fs.readFileSync(path.resolve(APP, '..', 'docs', `RELEASE-NOTES-${CURRENT}.md`), 'utf8');
     for (const [notesVersion, phone] of [['0.10.1', false], ['0.10.1', true], [CURRENT, false], [CURRENT, true]]) {
         if (notesVersion === CURRENT) {
             fixtures['/api/version'] = Object.assign({}, savedVersion, { version: CURRENT, current: CURRENT });
