@@ -1017,3 +1017,22 @@ details.hv-tool.edit > .hv-tb { padding: 0; }
 .cw-dock.browsing .cw-dock-body:has(> .cw-screen) { padding: 0; overflow: hidden; display: flex; flex-direction: column; }
 .cw-screen { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .cw-pc { flex: 1; min-height: 0; border-radius: 0 0 12px 12px; }
+
+/* (VO 0.13.1) Permissions button: Codex / Claude Code agents (chat-window.js permMenu) */
+.cw-perm.warn { color: #ffb74d; }
+.cw-pop-perm .cw-pi.danger .cw-pi-l { color: #ffb74d; }
+.cw-pop-perm .cw-pi .cw-pi-s { white-space: normal; max-width: 300px; }
+.chatwin.voice-mode .cw-perm .cw-tool-lb { display: none; }
+/* the mode is the point of the button: its label stays whole (the model chip gives up room first) */
+.cw-tools .cw-perm { max-width: none; flex-shrink: 0; }
+@container cw (max-width: 300px) { .cw-perm .cw-tool-lb { display: none; } }
+.cw-pop-perm .cw-pi { padding-top: 6px; padding-bottom: 6px; }
+/* (0.13.1) a Codex / Claude Code agent shows model, thinking and permissions together: in a narrow window thinking and
+   permissions keep their icon (the label is in the tooltip), so the row stays one line */
+@container cw (max-width: 460px) {
+  .cw-tools:has(.cw-model:not(.hidden)):has(.cw-perm:not(.hidden)) .cw-perm .cw-tool-lb,
+  .cw-tools:has(.cw-model:not(.hidden)):has(.cw-perm:not(.hidden)) .cw-chev { display: none; }
+  .cw-tools:has(.cw-perm:not(.hidden)) .cw-model { max-width: 100px; }
+  .cw-tools:has(.cw-perm:not(.hidden)) { gap: 2px; }
+  .cw-tools:has(.cw-perm:not(.hidden)) .cw-tool { padding-left: 6px; padding-right: 6px; }
+}

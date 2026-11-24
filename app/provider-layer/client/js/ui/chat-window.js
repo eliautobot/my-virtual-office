@@ -349,7 +349,7 @@ export function create(a, mgr, o = {}) {
     const tok = ++W.token;
     const other = W.agentId !== id;
     W.obs = null; W.helperAt = 0; stopWatching();
-    W.agentId = id; W.session = null; W.messages = []; W.models = null; W.subs = new Map(); W.pending = { model: null, effort: null, mode: null }; W.newIn = project; W.usage = null; W.prov = null; W.plan = null;
+    W.agentId = id; W.perm = null; W.runOpts = null; W.session = null; W.messages = []; W.models = null; W.subs = new Map(); W.pending = { model: null, effort: null, mode: null }; W.newIn = project; W.usage = null; W.prov = null; W.plan = null;
     W.want = sessionId;   // (the chat it is opening: the other windows know it is taken before it has loaded)
     if (other) W.limits = null;
     if (other) W.commands = null;
@@ -518,8 +518,9 @@ export function create(a, mgr, o = {}) {
             <div class="cw-tools">
               <button type="button" class="cw-tool cw-attach" title="Attach files (images, PDFs, documents, code)" aria-label="Attach files">＋</button>
               <input type="file" class="cw-file" multiple hidden>
-              <button type="button" class="cw-tool cw-model" aria-haspopup="listbox" title="Model"><span class="cw-tool-lb">Model</span> ▾</button>
-              <button type="button" class="cw-tool cw-effort" aria-haspopup="listbox" title="Thinking effort"><span aria-hidden="true">💡</span> <span class="cw-tool-lb">Default</span> ▾</button>
+              <button type="button" class="cw-tool cw-model" aria-haspopup="listbox" title="Model"><span class="cw-tool-lb">Model</span><span class="cw-chev" aria-hidden="true"> ▾</span></button>
+              <button type="button" class="cw-tool cw-effort" aria-haspopup="listbox" title="Thinking effort"><span aria-hidden="true">💡</span> <span class="cw-tool-lb">Default</span><span class="cw-chev" aria-hidden="true"> ▾</span></button>
+              <button type="button" class="cw-tool cw-perm hidden" aria-haspopup="listbox" title="Permissions"><span class="cw-perm-ic" aria-hidden="true">✋</span> <span class="cw-tool-lb">Permissions</span><span class="cw-chev" aria-hidden="true"> ▾</span></button>
               <button type="button" class="cw-tool cw-ctx hidden" title="Context"><svg class="cw-ring" viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8"/><circle class="cw-ring-v" cx="10" cy="10" r="8"/></svg><span class="cw-tool-lb">0%</span></button>
               <div class="cw-cmode hidden" role="radiogroup" aria-label="Work or Life">
                 <button type="button" class="cw-tool" data-cm="work" role="radio" aria-checked="false" title="Work: on the job for you — the real date and time, its job, what it knows and its notes; nothing of its city life"><span aria-hidden="true">💼</span><span class="cw-tool-lb">Work</span></button>
@@ -569,8 +570,9 @@ export function create(a, mgr, o = {}) {
     // the dimmed chat behind the Sidebar (when it slides over): a tap closes the Sidebar
     // (the dimming is the chat's ::after, over all of it: what is tapped is the chat itself)
     $('.cw-main').addEventListener('pointerdown', e => { if (e.target === e.currentTarget && W.el.querySelector('.chatwin.drawer')) { e.preventDefault(); toggleSide(false); } });
-    $('.cw-model').onclick = e => modelMenu(e.currentTarget);
-    $('.cw-effort').onclick = e => effortMenu(e.currentTarget);
+    $('.cw-model').onclick = e => (permTarget() ? runModelMenu(e.currentTarget) : modelMenu(e.currentTarget));
+    $('.cw-effort').onclick = e => (permTarget() ? runEffortMenu(e.currentTarget) : effortMenu(e.currentTarget));
+    $('.cw-perm').onclick = e => permMenu(e.currentTarget);
     $('.cw-ctx').onclick = e => ctxInfo(e.currentTarget);
     // (a step card a person opens or closes stays so as the answer is written)
     el.addEventListener('toggle', e => {
@@ -1330,6 +1332,149 @@ export function create(a, mgr, o = {}) {
     const cur = curEffort() || '';
     popup(anchor, efforts().map(([v, l, s]) => ({ label: l, sub: s, on: v === cur, run: () => setPref('effort', v || null) })), { cls: 'cw-pop-effort' });
   }
+  // (VO 0.13.1) Permissions: Codex and Claude Code agents are started by the office itself, so the office decides how
+  // much they may do; the owner picks it per agent here (the office's /api/agent-permissions keeps it and applies it
+  // to the agent's next run). OpenClaw and Hermes keep theirs in their own gateway: no button for them.
+  const PERM_KINDS = ['codex', 'claude-code'];
+  const PERM_ICONS = { 'read-only': '👁', plan: '📝', ask: '✋', edits: '✏️', full: '⚠️' };
+  function permTarget() {
+    if (!W || W?.can?.kind !== 'office') return null;
+    const a = (S.agentList || []).find(x => x.id === W.agentId);
+    const kind = String(a?.provider?.provider || '').toLowerCase();
+    return a && a.officeId && PERM_KINDS.includes(kind) ? { kind, agent: String(a.officeId), key: `${kind}:${a.officeId}` } : null;
+  }
+  async function loadPerm(force = false) {
+    const t = permTarget(), w = W;
+    if (!t) return null;
+    if (!force && w.perm && w.perm.key === t.key) return w.perm;
+    try {
+      const d = await getJSON(`/api/agent-permissions?kind=${encodeURIComponent(t.kind)}&agent=${encodeURIComponent(t.agent)}`);
+      if (W !== w || !d || d.ok === false) return null;
+      w.perm = { ...d, key: t.key };
+      paintComposer();
+      return w.perm;
+    } catch { return null; }
+  }
+  function paintPerm() {
+    const b = $w('.cw-perm'), t = permTarget();
+    b.classList.toggle('hidden', !t);
+    if (!t) return;
+    const p = W.perm && W.perm.key === t.key ? W.perm : null;
+    if (!p) { loadPerm(); }
+    const opt = p?.options?.find(o => o.id === p.mode);
+    b.querySelector('.cw-tool-lb').textContent = opt ? opt.label : 'Permissions';
+    b.querySelector('.cw-perm-ic').textContent = PERM_ICONS[p?.mode] || '✋';
+    b.dataset.mode = p?.mode || '';
+    b.classList.toggle('warn', p?.mode === 'full');
+    b.title = opt ? `What this agent may do without asking you: ${opt.label}. ${opt.hint}` : 'Permissions';
+  }
+  async function permMenu(anchor) {
+    const t = permTarget();
+    if (!t) return;
+    const p = await loadPerm(true);
+    if (!p || W?.perm?.key !== t.key) return app.toast?.('Could not read this agent\'s permissions.', 'bad');
+    const items = p.options.map(o => ({ label: `${PERM_ICONS[o.id] || ''}  ${o.label}`, sub: o.hint, on: o.id === p.mode, danger: !!o.warn,
+      disabled: !p.canChange, run: () => setPerm(t, o, p) }));
+    // what is not offered here, and why (a disabled row: its reason wraps under it)
+    if (t.kind === 'codex' && !p.options.some(o => o.id === 'read-only')) items.push({ label: `${PERM_ICONS['read-only']}  Read only`, sub: 'Not in Docker: Codex\'s sandbox cannot start here.', disabled: true });
+    if (t.kind === 'claude-code') items.push({ sep: true }, { label: 'ℹ️  Ask first', sub: 'Not yet for Claude Code: it has no way to ask you here.', disabled: true });
+    if (!p.canChange) items.push({ sep: true }, { label: '🔒  Only the office\'s owner can change this', sub: 'Sign in with the office passcode.', disabled: true });
+    popup(anchor, items, { cls: 'cw-pop-perm' });
+  }
+  async function setPerm(t, o, p) {
+    if (o.id === p.mode) return;
+    if (o.warn && !(await confirmBox({ title: 'Give this agent full access?', body: p.warning || 'It will act without asking you first.', yes: 'Give full access' }))) return;
+    const w = W;
+    try {
+      const d = await post('/api/agent-permissions', { kind: t.kind, agent: t.agent, mode: o.id });
+      if (!d || d.ok === false) throw new Error(d?.error || 'Could not change it.');
+      if (W === w) { w.perm = { ...d, key: t.key }; paintComposer(); }
+      app.toast?.(`${o.label} from this agent's next message.`, '', 3200, PERM_ICONS[o.id] || '✋');
+    } catch (e) { app.toast?.(e.message || 'Could not change it.', 'bad'); }
+  }
+  // (VO 0.13.1) Model and thinking level of a Codex / Claude Code agent (the same agents as Permissions): the office
+  // starts them, so it uses what is picked here on the agent's next run, from the models the agent's own program offers
+  // (Codex: its model list and each model's levels; Claude Code: its model names and --effort levels), as the native
+  // apps' pickers. Kept per agent by the office (/api/agent-run-options); "Default" = the agent's own model / the
+  // model's own level.
+  async function loadRunOpts(force = false) {
+    const t = permTarget(), w = W;
+    if (!t) return null;
+    if (!force && w.runOpts && w.runOpts.key === t.key) return w.runOpts;
+    if (!force && w.runLoading === t.key) return null;
+    w.runLoading = t.key;
+    try {
+      const d = await getJSON(`/api/agent-run-options?kind=${encodeURIComponent(t.kind)}&agent=${encodeURIComponent(t.agent)}`);
+      if (W !== w || !d || d.ok === false) return null;
+      w.runOpts = { ...d, models: Array.isArray(d.models) ? d.models : [], key: t.key };
+      paintComposer();
+      return w.runOpts;
+    } catch { return null; } finally { if (w.runLoading === t.key) w.runLoading = null; }
+  }
+  const runModelOf = r => r.model || r.agentModel || r.models.find(m => m.isDefault)?.id || '';
+  const runMetaOf = r => r.models.find(m => m.id === runModelOf(r)) || null;
+  const LEVEL_NAMES = { none: 'None', minimal: 'Minimal', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultra: 'Ultra' };
+  const levelName = id => LEVEL_NAMES[id] || cap1(id);
+  const runLabelOf = (r, id) => (r.models.find(m => m.id === id)?.label || id || '').replace(/^[\w-]+\//, '').slice(0, 28);
+  function runLevelsOf(r) {
+    const meta = runMetaOf(r);
+    if (meta) return meta.effort || [];
+    const lists = r.models.map(m => (m.effort || []).map(e => e.id).join(','));
+    return lists.length && lists.every(x => x === lists[0]) ? (r.models[0].effort || []) : [];
+  }
+  function paintRunOpts() {
+    const t = permTarget();
+    if (!t) return;
+    const r = W.runOpts && W.runOpts.key === t.key ? W.runOpts : null;
+    if (!r) loadRunOpts();
+    const mb = $w('.cw-model'), eb = $w('.cw-effort'), mid = r ? runModelOf(r) : '';
+    mb.classList.toggle('hidden', !r || (!mid && !r.models.length));
+    mb.classList.remove('cw-fixed'); mb.setAttribute('aria-disabled', 'false');
+    mb.title = 'Model';
+    mb.querySelector('.cw-tool-lb').textContent = r ? (runLabelOf(r, mid) || 'Default') : 'Model';
+    if (r) mb.title = `Model: ${r.model ? runLabelOf(r, r.model) : `Default${mid ? ` (${runLabelOf(r, mid)})` : ''}`}${r.canChange ? '' : ' — only the office\'s owner can change it'}`;
+    const levels = r ? runLevelsOf(r) : [];
+    eb.classList.toggle('hidden', !r || !levels.length);
+    eb.querySelector('.cw-tool-lb').textContent = r?.effort ? levelName(r.effort) : 'Default';
+    eb.classList.toggle('on', !!r?.effort);
+    eb.title = `Thinking effort: ${r?.effort ? levelName(r.effort) : 'Default'}`;
+  }
+  async function runModelMenu(anchor) {
+    const t = permTarget();
+    if (!t) return;
+    const r = await loadRunOpts(true);
+    if (!r || W?.runOpts?.key !== t.key) return app.toast?.('Could not read this agent\'s models.', 'bad');
+    const own = r.agentModel || r.models.find(m => m.isDefault)?.id || '';
+    const items = [{ label: 'Default', sub: own ? `The agent's own: ${runLabelOf(r, own)}` : 'The agent\'s own model', on: !r.model, disabled: !r.canChange,
+      run: () => setRunOpts(t, { model: '' }, 'Its own model') }];
+    for (const m of r.models) items.push({ label: m.label || m.id, sub: [m.description, m.id !== m.label ? m.id : ''].filter(Boolean).join(' · '),
+      on: r.model === m.id, disabled: !r.canChange, run: () => setRunOpts(t, { model: m.id }, m.label || m.id) });
+    if (!r.models.length) items.push({ label: 'No model list here', sub: r.modelsError || 'Its program did not name its models.', disabled: true });
+    if (!r.canChange) items.push({ sep: true }, { label: '🔒  Only the office\'s owner can change this', sub: 'Sign in with the office passcode.', disabled: true });
+    popup(anchor, items, { cls: 'cw-pop-perm cw-pop-run' });
+  }
+  async function runEffortMenu(anchor) {
+    const t = permTarget();
+    if (!t) return;
+    const r = await loadRunOpts(true);
+    if (!r || W?.runOpts?.key !== t.key) return app.toast?.('Could not read this agent\'s thinking levels.', 'bad');
+    const meta = runMetaOf(r), levels = runLevelsOf(r);
+    const items = [{ label: 'Default', sub: meta?.effortDefault ? `The model's own: ${levelName(meta.effortDefault)}` : 'The model\'s own', on: !r.effort, disabled: !r.canChange,
+      run: () => setRunOpts(t, { effort: '' }, 'The model\'s own thinking') }];
+    for (const e of levels) items.push({ label: levelName(e.id), sub: e.description || '', on: r.effort === e.id, disabled: !r.canChange,
+      run: () => setRunOpts(t, { effort: e.id }, `${levelName(e.id)} thinking`) });
+    if (!r.canChange) items.push({ sep: true }, { label: '🔒  Only the office\'s owner can change this', sub: 'Sign in with the office passcode.', disabled: true });
+    popup(anchor, items, { cls: 'cw-pop-perm cw-pop-run' });
+  }
+  async function setRunOpts(t, patch, what) {
+    const w = W;
+    try {
+      const d = await post('/api/agent-run-options', { kind: t.kind, agent: t.agent, ...patch });
+      if (!d || d.ok === false) throw new Error(d?.error || 'Could not change it.');
+      if (W === w) { w.runOpts = { ...d, models: Array.isArray(d.models) ? d.models : [], key: t.key }; paintComposer(); }
+      app.toast?.(`${what} from this agent's next message.`, '', 3200, '🧠');
+    } catch (e) { app.toast?.(e.message || 'Could not change it.', 'bad'); }
+  }
   function paintCtx(caps) {
     const b = $w('.cw-ctx'), u = W.usage, pct = pctOf(u);
     b.classList.toggle('hidden', !caps.context || pct === null);
@@ -1937,6 +2082,8 @@ export function create(a, mgr, o = {}) {
     eb.querySelector('.cw-tool-lb').textContent = efforts().find(x => x[0] === (ef || ''))?.[1] || 'Default';
     eb.classList.toggle('on', !!ef && ef !== 'off');
     paintCtx(caps);
+    paintPerm();
+    paintRunOpts();
     const cm = curMode(), mw = $w('.cw-cmode');
     mw.classList.toggle('hidden', !cm);
     for (const b of mw.querySelectorAll('[data-cm]')) { const on = b.dataset.cm === cm; b.classList.toggle('on', on); b.setAttribute('aria-checked', String(on)); }
@@ -2284,7 +2431,7 @@ export function create(a, mgr, o = {}) {
       hasProviderSession: () => !!(W.session && W.session.key && W.session.key !== '@new'),
       repaint: () => paintThread(),
       newChat: () => newChat(),
-      models: () => { const b = $w('.cw-model'); if (b && !b.classList.contains('hidden')) modelMenu(b); },
+      models: () => { const b = $w('.cw-model'); if (b && !b.classList.contains('hidden')) (permTarget() ? runModelMenu(b) : modelMenu(b)); },
       efforts: () => efforts().map(x => x[0]).filter(Boolean),
       effort: v => setPref('effort', v),
       chats: () => W.sessions || [],

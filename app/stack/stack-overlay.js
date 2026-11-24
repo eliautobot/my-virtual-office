@@ -95,18 +95,50 @@
     S.houseKeeping = function (now) { if (typeof _staticHousekeeping === 'function') _staticHousekeeping(now); };
 
     // ---------- the re-anchoring context ----------
+    // A path keeps one anchor (its first point): its shape stays rigid even where its
+    // points would land on different things (a paper plane's wing over a desk edge);
+    // a point far from that anchor (a long line) is placed on its own.
+    var PATH_RIGID = 32;
     S.billboardCtx = function (g, map) {
-        var dpr = DPR || 1, M = [1, 0, 0, 1, 0, 0], stack = [], raw = null;
+        var dpr = DPR || 1, M = [1, 0, 0, 1, 0, 0], stack = [], raw = null, path = null, pin = null, groupDepth = 0;
         map = map || S.overlayPoint;
+        function setA(P, Q) {
+            var s = scaleNow(), A = mul([s, 0, 0, s, Q.x - s * P[0], Q.y - s * P[1]], M);
+            g.setTransform(dpr * A[0], dpr * A[1], dpr * A[2], dpr * A[3], dpr * A[4], dpr * A[5]);
+        }
         function place(x, y) {
             if (raw) { g.setTransform(raw[0], raw[1], raw[2], raw[3], raw[4], raw[5]); return; }
-            var P = apply(M, x, y), Q = map(P[0], P[1]), s = scaleNow();
-            var A = mul([s, 0, 0, s, Q.x - s * P[0], Q.y - s * P[1]], M);
-            g.setTransform(dpr * A[0], dpr * A[1], dpr * A[2], dpr * A[3], dpr * A[4], dpr * A[5]);
+            if (pin) { setA(pin.P, pin.Q); return; }
+            var P = apply(M, x, y);
+            setA(P, map(P[0], P[1]));
+        }
+        function vertex(x, y) {
+            if (raw || pin) { place(x, y); return; }
+            var P = apply(M, x, y);
+            if (path && Math.abs(P[0] - path.P[0]) + Math.abs(P[1] - path.P[1]) <= PATH_RIGID) { setA(path.P, path.Q); return; }
+            var Q = map(P[0], P[1]);
+            if (!path) path = { P: P, Q: Q };
+            setA(P, Q);
         }
         function xf(n) { if (raw) raw = mul(raw, n); else M = mul(M, n); }
         var o = {
             __billboard: true,
+            // Pin everything drawn until __unpin to one 3D point: the classic point (px, py)
+            // is drawn at the world point (wx, wy, wz), the drawing rigid around it (things
+            // in the air, whose classic spot is not a point on anything).
+            __pin: function (px, py, wx, wy, wz) { pin = { P: [px, py], Q: S.project(wx, wy, wz || 0) }; },
+            __unpin: function () { pin = null; },
+            // One anchor for a group of primitives (a line of pixel text: one rect per run):
+            // the group is drawn rigid where its first point lands. Inside a pin: the pin holds.
+            __group: function (x, y) {
+                if (groupDepth++ || pin || raw) return;
+                var P = apply(M, x, y);
+                pin = { P: P, Q: map(P[0], P[1]), group: true };
+            },
+            __ungroup: function () {
+                if (groupDepth > 0 && --groupDepth === 0 && pin && pin.group) pin = null;
+            },
+            beginPath: function () { path = null; g.beginPath(); },
             save: function () { stack.push([M.slice(), raw ? raw.slice() : null]); g.save(); },
             restore: function () { var s = stack.pop(); if (s) { M = s[0]; raw = s[1]; } g.restore(); },
             translate: function (x, y) { xf([1, 0, 0, 1, x, y]); },
@@ -136,15 +168,15 @@
                 else place(a[0] + (img && img.width || 0) / 2, a[1] + (img && img.height || 0) / 2);
                 g.drawImage.apply(g, arguments);
             },
-            moveTo: function (x, y) { place(x, y); g.moveTo(x, y); },
-            lineTo: function (x, y) { place(x, y); g.lineTo(x, y); },
-            arc: function (x, y, r, a0, a1, ccw) { place(x, y); g.arc(x, y, r, a0, a1, ccw); },
-            ellipse: function (x, y, rx, ry, rot, a0, a1, ccw) { place(x, y); g.ellipse(x, y, rx, ry, rot, a0, a1, ccw); },
-            rect: function (x, y, w, h) { place(x + w / 2, y + h / 2); g.rect(x, y, w, h); },
-            roundRect: function (x, y, w, h, r) { place(x + w / 2, y + h / 2); g.roundRect(x, y, w, h, r); },
-            quadraticCurveTo: function (cx, cy, x, y) { place(x, y); g.quadraticCurveTo(cx, cy, x, y); },
-            bezierCurveTo: function (a, b, c, d, x, y) { place(x, y); g.bezierCurveTo(a, b, c, d, x, y); },
-            arcTo: function (x1, y1, x2, y2, r) { place(x1, y1); g.arcTo(x1, y1, x2, y2, r); }
+            moveTo: function (x, y) { vertex(x, y); g.moveTo(x, y); },
+            lineTo: function (x, y) { vertex(x, y); g.lineTo(x, y); },
+            arc: function (x, y, r, a0, a1, ccw) { vertex(x, y); g.arc(x, y, r, a0, a1, ccw); },
+            ellipse: function (x, y, rx, ry, rot, a0, a1, ccw) { vertex(x, y); g.ellipse(x, y, rx, ry, rot, a0, a1, ccw); },
+            rect: function (x, y, w, h) { vertex(x + w / 2, y + h / 2); g.rect(x, y, w, h); },
+            roundRect: function (x, y, w, h, r) { vertex(x + w / 2, y + h / 2); g.roundRect(x, y, w, h, r); },
+            quadraticCurveTo: function (cx, cy, x, y) { vertex(x, y); g.quadraticCurveTo(cx, cy, x, y); },
+            bezierCurveTo: function (a, b, c, d, x, y) { vertex(x, y); g.bezierCurveTo(a, b, c, d, x, y); },
+            arcTo: function (x1, y1, x2, y2, r) { vertex(x1, y1); g.arcTo(x1, y1, x2, y2, r); }
         };
         return new Proxy(o, {
             get: function (t, k) {

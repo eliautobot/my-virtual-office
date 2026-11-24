@@ -283,10 +283,10 @@ class UpdatesHttpTests(unittest.TestCase):
         return res.status, json.loads(payload.decode() or "null")
 
     def test_version_is_one_source(self):
-        self.assertEqual("0.13.0", server.VO_VERSION)
+        self.assertEqual("0.13.1", server.VO_VERSION)
         status, data = self.get("/api/version")
         self.assertEqual(200, status)
-        self.assertEqual({"current": "0.13.0", "version": "0.13.0"}, {k: data[k] for k in ("current", "version")})
+        self.assertEqual({"current": "0.13.1", "version": "0.13.1"}, {k: data[k] for k in ("current", "version")})
         self.assertTrue((PROJECT_ROOT / "docs" / f"RELEASE-NOTES-{server.VO_VERSION}.md").is_file())
 
     def test_updates_route_and_check_now(self):
@@ -332,8 +332,8 @@ class UpdatesHttpTests(unittest.TestCase):
     def test_release_notes_served_locally(self):
         status, data = self.get("/api/version/notes")
         self.assertEqual(200, status)
-        self.assertEqual("0.13.0", data["version"])
-        self.assertTrue(data["markdown"].startswith("# My Virtual Office v0.13.0"))
+        self.assertEqual("0.13.1", data["version"])
+        self.assertTrue(data["markdown"].startswith("# My Virtual Office v0.13.1"))
         self.assertEqual(({"ok": False, "error": "bad_version"}, 400), server._release_notes_answer("../x"))
 
     def test_image_copy_of_release_notes_matches_docs(self):

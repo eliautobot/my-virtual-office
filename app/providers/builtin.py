@@ -7,6 +7,7 @@ provider-neutral.  Third-party providers use the extension loader instead.
 from __future__ import annotations
 
 import json
+import copy
 import inspect
 import os
 import re
@@ -156,6 +157,9 @@ def _creation_schema(
         ])
     return {"fields": fields}
 
+
+# Agents the office launches itself, whose Permissions mode (agent_permissions.py) every run must get
+AGENT_PERMISSION_KINDS = ("codex", "claude-code")
 
 def _field(key: str, label: str, field_type: str = "text", **extra: Any) -> dict[str, Any]:
     """Build a browser-safe provider settings field declaration."""
@@ -656,9 +660,16 @@ class NativeOfficeProvider:
         return self.native.delete_agent(profile)
 
     def send_chat_message(self, profile: str, message: str, **kwargs: Any) -> dict[str, Any]:
-        kwargs.pop("agent", None)
+        agent = kwargs.pop("agent", None)
+        native = self.native
+        apply_permissions = self.context.get("applyAgentPermissions")
+        if callable(apply_permissions) and self.provider_kind in AGENT_PERMISSION_KINDS:
+            # (v0.13.1) the agent's Permissions mode from the chat window, for this run only: a turn another agent or
+            # a meeting starts gets the same mode as the owner's own chat; the shared provider keeps its settings
+            native = copy.copy(self.native)
+            apply_permissions(self.provider_kind, agent, native)
         message, kwargs = self._prepare_native_chat(message, kwargs)
-        return self.native.send_chat_message(profile, message, **kwargs)
+        return native.send_chat_message(profile, message, **kwargs)
 
     def _prepare_native_chat(self, message: str, kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         """Adapt canonical file attachments to each native chat signature."""
@@ -1113,7 +1124,7 @@ def build_provider_registry(context: dict[str, Any]) -> ProviderRegistry:
         timeout_sec=int(codex_cfg.get("timeoutSec") or 900),
         model=codex_cfg.get("model") or "",
         sandbox=codex_cfg.get("sandbox") or "workspace-write",
-        approval_policy=codex_cfg.get("approvalPolicy") or "never",
+        approval_policy=codex_cfg.get("approvalPolicy") or "untrusted",
         prefer_app_server=codex_cfg.get("preferAppServer", True),
         main_workspace=codex_cfg.get("mainWorkspace"),
         include_main=codex_cfg.get("includeMain", True),
@@ -1149,7 +1160,9 @@ def build_provider_registry(context: dict[str, Any]) -> ProviderRegistry:
                         {"value": "workspace-write", "label": "Workspace write"},
                         {"value": "danger-full-access", "label": "Full access"},
                     ]),
-                    _field("approvalPolicy", "Approval policy", "select", default="never", options=[
+                    _field("approvalPolicy", "Starting approval for new agents", "select", default="untrusted",
+                           help="Only for agents nobody has set yet. What you pick in an agent's chat window (Permissions) is kept and wins over this.",
+                           options=[
                         {"value": "untrusted", "label": "Untrusted"},
                         {"value": "on-request", "label": "On request"},
                         {"value": "on-failure", "label": "On failure"},
@@ -1204,7 +1217,9 @@ def build_provider_registry(context: dict[str, Any]) -> ProviderRegistry:
                 config_key="claudeCode",
                 display_name="Claude Code",
                 permission_fields=[
-                    _field("permissionMode", "Permission mode", "select", default="acceptEdits", options=[
+                    _field("permissionMode", "Starting permission mode for new agents", "select", default="acceptEdits",
+                           help="Only for agents nobody has set yet. What you pick in an agent's chat window (Permissions) is kept and wins over this.",
+                           options=[
                         {"value": "default", "label": "Default"},
                         {"value": "acceptEdits", "label": "Accept edits"},
                         {"value": "plan", "label": "Plan"},

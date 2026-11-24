@@ -426,3 +426,16 @@
   #chat-panel .chat-sessions-panel.open .chat-session-item:has(.chat-session-delete), .chat-panel .chat-sessions-panel.open .chat-session-item:has(.chat-session-delete) { padding-right: 48px; }
   .hp-media-viewer-bar button, .hp-media-viewer-bar a { min-height: 44px; min-width: 44px; }
 }
+
+/* v0.13.1 Permissions picker (chat-permissions.js): Codex / Claude Code agents */
+.hp-perm-btn { display: inline-flex; align-items: center; gap: 5px; }
+.hp-perm-btn[hidden] { display: none; }
+.hp-perm-icon { font-size: 12px; line-height: 1; }
+.hp-perm-btn[data-mode="full"] { border-color: rgba(255, 183, 77, 0.55); color: var(--vo-warning, #ffb74d); }
+.hp-perm-pop { min-width: 260px; max-width: 340px; }
+.hp-perm-row { align-items: flex-start; }
+.hp-perm-row:disabled { opacity: 0.6; cursor: not-allowed; }
+.hp-perm-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; text-align: left; }
+.hp-perm-hint { font-size: var(--vo-text-xs, 12px); color: var(--vo-text-3, #9aa3b5); font-weight: normal; white-space: normal; }
+.hp-perm-row[data-warn="1"] .hp-picker-label { color: var(--vo-warning, #ffb74d); }
+@media (max-width: 600px) { .hp-perm-label { display: none; } }

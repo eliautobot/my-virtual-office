@@ -12779,6 +12779,13 @@ function _fitCanvasText(str, maxW, px) {
     return out;
 }
 function _canvasText(str, x, y, color, px, align, baseline) {
+    if (ctx && typeof ctx.__group === 'function') {
+        ctx.__group(x, y);
+        try { return _canvasTextDraw(str, x, y, color, px, align, baseline); } finally { ctx.__ungroup(); }
+    }
+    return _canvasTextDraw(str, x, y, color, px, align, baseline);
+}
+function _canvasTextDraw(str, x, y, color, px, align, baseline) {
     var F = window.VOPixelFont;
     str = String(str); px = px || 1;
     var w = _canvasTextWidth(str, px);
@@ -12797,6 +12804,14 @@ function _canvasText(str, x, y, color, px, align, baseline) {
 }
 // (x, y) = top of the text; align 'left' | 'center' | 'right'. Returns the width.
 function _drawPixelText(str, x, y, color, scale, align) {
+    // 3D overlay: the line's runs keep one anchor (stack-overlay.js __group)
+    if (ctx && typeof ctx.__group === 'function') {
+        ctx.__group(x, y);
+        try { return _drawPixelTextRuns(str, x, y, color, scale, align); } finally { ctx.__ungroup(); }
+    }
+    return _drawPixelTextRuns(str, x, y, color, scale, align);
+}
+function _drawPixelTextRuns(str, x, y, color, scale, align) {
     str = String(str);
     var s = scale || 1;
     var w = _pixelTextWidth(str, s);
@@ -16222,6 +16237,17 @@ function updatePongGames() {
     }
 }
 
+// 3D (v0.13.1): pin what follows, in the turned view, to a world spot: a sign the classic
+// camera draws standing on the floor line footY (its point (cx, cy) is cy px above it) is
+// put at (cx, footY) that high, + dz, and drawn rigid (box and text together, not each
+// rect on whatever is under it). false (nothing to undo) in the classic and straight views.
+function _pin3d(cx, cy, footY, dz) {
+    if (!ctx || typeof ctx.__pin !== 'function') return false;
+    ctx.__pin(cx, cy, cx, footY, Math.max(0, footY - cy + (dz || 0)));
+    return true;
+}
+function _unpin3d(pinned) { if (pinned) ctx.__unpin(); }
+
 function drawPongGames() {
     for (var i = 0; i < pongGames.length; i++) {
         var g = pongGames[i];
@@ -16234,18 +16260,22 @@ function drawPongGames() {
 
         // Paddles removed — rackets are drawn on agents now
 
-        // Scoreboard (names stacked to avoid overlap)
+        // Scoreboard (names stacked to avoid overlap), over the table's middle (3D: in the air above it)
+        var pin = _pin3d(tx, ty - 32, PONG_TABLE.y, 2);
         ctx.fillStyle = 'rgba(0,0,0,0.6)';
         ctx.fillRect(tx - 30, ty - 42, 60, 20);
         _drawPixelText(g.p1.name + ': ' + g.p1Score, tx, ty - 39, '#ef9a9a', 1, 'center');
         _drawPixelText(g.p2.name + ': ' + g.p2Score, tx, ty - 30, '#90caf9', 1, 'center');
+        _unpin3d(pin);
 
         // Result
         if (g.phase === 'result') {
             var winnerName = g.p1Score > g.p2Score ? g.p1.name : g.p2.name;
+            var pinR = _pin3d(tx, ty - 2, PONG_TABLE.y, 2);
             ctx.fillStyle = 'rgba(0,0,0,0.7)';
             ctx.fillRect(tx - 30, ty - 10, 60, 16);
             _drawPixelText(winnerName + ' WINS!', tx, ty - 4, '#ffd600', 1, 'center');
+            _unpin3d(pinR);
         }
     }
 }
@@ -20072,6 +20102,17 @@ function updateAirplanes() {
     }
 }
 
+// 3D (v0.13): where a flying plane / folder really is, as the turned view draws
+// it: over the floor point under its straight line (x, fy), up its arc (z), and
+// its heading on screen. null in the classic and straight views.
+function _airplane3d(p) {
+    if (!ctx || typeof ctx.__pin !== 'function' || !window.VOStack || typeof window.VOStack.project !== 'function') return null;
+    var t = Math.max(0, Math.min(1, p.progress)), lift = 30;       // launchAirplane: start / end = the people's spots - 30
+    var fy0 = p.startY + lift, fy1 = p.endY + lift;
+    var a = window.VOStack.project(p.startX, fy0, lift), b = window.VOStack.project(p.endX, fy1, lift);
+    return { fy: fy0 + (fy1 - fy0) * t, z: lift + 60 * Math.sin(t * Math.PI), dx: b.x - a.x, dy: b.y - a.y };
+}
+
 function drawAirplanes() {
     for (let i = 0; i < paperAirplanes.length; i++) {
         const p = paperAirplanes[i];
@@ -20090,18 +20131,25 @@ function drawAirplanes() {
             }
             continue;
         }
+        const air = _airplane3d(p);
         if (p.sprite === 'folder') {
             // Office life handoff: a folder of work floats over in an arc.
+            if (air) ctx.__pin(p.x, p.y, p.x, air.fy, air.z);
             _drawLifeProp('folder', p.x, p.y + Math.sin(p.wobble) * 1.5);
+            if (air) ctx.__unpin();
             ctx.fillStyle = 'rgba(0,0,0,0.08)';
-            ctx.fillRect(p.x - 5, Math.min(p.startY, p.endY) + 60, 10, 3);
+            const fsy = Math.min(p.startY, p.endY) + 60;
+            if (air) ctx.__pin(p.x, fsy + 1.5, p.x, air.fy, 0);
+            ctx.fillRect(p.x - 5, fsy, 10, 3);
+            if (air) ctx.__unpin();
             continue;
         }
         ctx.save();
+        if (air) ctx.__pin(p.x, p.y, p.x, air.fy, air.z);
         ctx.translate(p.x, p.y);
-        // Rotate airplane based on flight direction + wobble
-        const dx = p.endX - p.startX;
-        const angle = Math.atan2(p.endY - p.startY, dx) + Math.sin(p.wobble) * 0.15;
+        // Rotate airplane based on flight direction + wobble (3D: its heading on screen)
+        const dx = air ? air.dx : p.endX - p.startX;
+        const angle = Math.atan2(air ? air.dy : p.endY - p.startY, dx) + Math.sin(p.wobble) * 0.15;
         const flip = dx < 0 ? -1 : 1;
         ctx.scale(flip, 1);
         ctx.rotate(angle * flip);
@@ -20128,10 +20176,13 @@ function drawAirplanes() {
         ctx.fillRect(5, -1, 2, 2);
         // Shadow on ground (faint)
         ctx.restore();
+        if (air) ctx.__unpin();
         // Ground shadow
         ctx.fillStyle = 'rgba(0,0,0,0.08)';
         const shadowY = Math.min(p.startY, p.endY) + 60;
+        if (air) ctx.__pin(p.x, shadowY + 1.5, p.x, air.fy, 0);
         ctx.fillRect(p.x - 4, shadowY, 8, 3);
+        if (air) ctx.__unpin();
     }
 }
 
@@ -20907,6 +20958,7 @@ function drawDartGames() {
         }
         var boardX = _dbItem ? _dbItem.x : (LOCATIONS.lounge.x + 210);
         var boardY = _dbItem ? (_dbItem.y + 10) : (LOCATIONS.lounge.y - 8);
+        var boardFoot = boardY + 41;   // the stand's feet (manifest: board centre + 51)
 
         if (g.phase === 'p_aim') {
             // Aiming wobble indicator
@@ -20937,11 +20989,14 @@ function drawDartGames() {
             var alpha = Math.max(0, 1 - g.timer / 60);
             ctx.save();
             ctx.globalAlpha = alpha;
+            var pinS = _pin3d(boardX, boardY - 22 + bob, boardFoot);
             _canvasText(score.pts + (score.pts >= 25 ? ' ' + score.label : ''), boardX, boardY - 22 + bob, score.pts >= 25 ? '#ffd700' : '#fff', 1, 'center', 'bottom');
+            _unpin3d(pinS);
             ctx.restore();
         } else if (g.phase === 'result') {
             // Final scores
             var bob = Math.sin(g.timer * 0.08) * 2;
+            var pinF = _pin3d(boardX, boardY - 22 + bob, boardFoot);
             ctx.fillStyle = 'rgba(0,0,0,0.7)';
             ctx.fillRect(boardX - 45, boardY - 40 + bob, 90, 36);
             ctx.strokeStyle = '#ffd700'; ctx.lineWidth = 1;
@@ -20953,6 +21008,7 @@ function drawDartGames() {
             _drawPixelText(p1.name + ': ' + g.p1Score, boardX, by0 - 34, p1Win ? '#ffd700' : '#cccccc', 1, 'center');
             _drawPixelText(p2.name + ': ' + g.p2Score, boardX, by0 - 25, !p1Win && !tie ? '#ffd700' : '#cccccc', 1, 'center');
             _drawPixelText(tie ? 'TIE!' : (p1Win ? p1.name : p2.name) + ' WINS!', boardX, by0 - 15, '#ffd700', 1, 'center');
+            _unpin3d(pinF);
             // Winner celebrates
             if (!tie) {
                 var winner = p1Win ? p1 : p2;
@@ -20962,10 +21018,12 @@ function drawDartGames() {
 
         // Scoreboard during game (small)
         if (g.phase !== 'result' && g.phase !== 'walking') {
+            var pinG = _pin3d(boardX, boardY + 25, boardFoot);
             ctx.fillStyle = 'rgba(0,0,0,0.5)';
             ctx.fillRect(boardX - 35, boardY + 18, 70, 14);
             _drawPixelText(p1.name + ':' + g.p1Score, boardX - 17, boardY + 22, '#ef9a9a', 1, 'center');
             _drawPixelText(p2.name + ':' + g.p2Score, boardX + 17, boardY + 22, '#90caf9', 1, 'center');
+            _unpin3d(pinG);
         }
     }
 }
@@ -22945,6 +23003,35 @@ function _renderStackFrame(now) {
         drawEditHUD();
     }
 }
+// 3D at start (v0.13.1): when this browser's Graphics setting resolves to 3D, the
+// office area stays empty (the surround, then a quiet "Loading" line) until the 3D
+// files are in, the 3D renderer is on and the layout has come from the server; it
+// then opens straight in the diorama at its 3D angle. Before, the classic look drew
+// first, then the 3D view took over flat and tilted in. Classic 2D, no WebGL 2, a 3D
+// start that fails or takes over 10 s: the office draws as before.
+var _boot3d = { done: false, t0: 0 };
+function _boot3dWait(now) {
+    var b = _boot3d;
+    if (b.done) return false;
+    if (!b.t0) b.t0 = now;
+    var G = window.VOGraphics, S = window.VOStack;
+    var want = !!(G && typeof G.resolved === 'function' && G.resolved() === '3d');
+    var layout = _serverConfigLoaded || _serverConfigAttempts > 1;   // (a server that did not answer: the cached layout)
+    var ready = want && layout && !!(S && typeof S.on === 'function' && S.on());
+    if (!want || ready || now - b.t0 > 10000) {
+        b.done = true;
+        if (ready && typeof S.snapCam === 'function') S.snapCam();
+        _markSceneDirty();
+        return false;
+    }
+    return true;
+}
+function _drawBoot3dWait(now) {
+    _markSceneDirty();                                  // keep checking every frame
+    if (now - _boot3d.t0 < 600) return;                 // a quick start shows no text at all
+    _canvasText('Loading the office...', Math.round(displayW / 2), Math.round(displayH / 2), '#6f7a91', 1, 'center', 'middle');
+}
+
 function _renderFrame(now) {
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     if (_stepCameraAnimation(now)) _sceneDirty = true;
@@ -22958,6 +23045,8 @@ function _renderFrame(now) {
     // Clear entire canvas (the same surround in every UI theme)
     ctx.fillStyle = OFFICE_SURROUND;
     ctx.fillRect(0, 0, displayW, displayH);
+    // 3D at start: a browser set to 3D opens in 3D (no classic frames first)
+    if (_boot3dWait(now)) { _drawBoot3dWait(now); return; }
     // 3D (v0.13): the sprite-stack diorama draws the world (stack/*.js); the classic
     // renderer below stays as the fallback (no WebGL2, ?classic=1).
     if (window.VOStack && window.VOStack.on()) { _renderStackFrame(now); return; }

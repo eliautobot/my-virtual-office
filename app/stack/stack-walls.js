@@ -9,6 +9,7 @@
     var S = window.VOStack = window.VOStack || {};
     var C = S.color, T = 40;
     var BACK_T = 10, PART_H = 36, SLAB = 14;
+    S.partitionH = PART_H;   // a drawn wall's height (signs on it: stack-scene.js partitionPlace)
 
     function dispColor(c, fb) {
         try { return typeof _wallDisplayColor === 'function' ? _wallDisplayColor(c || fb) : (c || fb); } catch (e) { return c || fb; }

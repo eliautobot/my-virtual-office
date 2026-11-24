@@ -44,21 +44,25 @@ docker compose up -d virtual-office
 ```
 
 To stay on a chosen version instead of `latest`, set `VO_IMAGE` (in `.env` or on the command
-line), for example `VO_IMAGE=ghcr.io/eliautobot/my-virtual-office:0.13.0`.
+line), for example `VO_IMAGE=ghcr.io/eliautobot/my-virtual-office:0.13.1`.
 
 ### Docker Compose, built from the source you checked out
 
 ```bash
 cd my-virtual-office
 git pull
-docker build -t my-virtual-office:0.13.0 ./app
-VO_IMAGE=my-virtual-office:0.13.0 docker compose up -d virtual-office
+docker build -t my-virtual-office:0.13.1 ./app
+VO_IMAGE=my-virtual-office:0.13.1 docker compose up -d virtual-office
 ```
 
 Use the version you pulled in the tag (it is `VO_VERSION` in `app/server.py`).
 
 `docker compose up -d virtual-office` recreates only the office container. The `vo-data` volume,
 your OpenClaw home and any Hermes sidecar are kept.
+
+The Permissions mode you picked for each Codex and Claude Code agent (since 0.13.1, kept in
+`agent-permissions.json` in the data folder) is kept too: an update never changes it. A new
+version's starting mode (Ask first for Codex) only applies to agents nobody has set yet.
 
 ### Plain Python (no Docker)
 

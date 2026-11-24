@@ -42,6 +42,7 @@ from pathlib import Path
 import gateway_presence
 import vo_access
 import agent_providers
+import agent_permissions
 import provider_hub
 import office_life
 import office_life.hooks
@@ -71,7 +72,7 @@ except Exception:
     yaml = None
 
 GATEWAY_PROTOCOL_VERSION = 4
-VO_VERSION = "0.13.0"
+VO_VERSION = "0.13.1"
 
 
 def _pl_owns():
@@ -731,7 +732,7 @@ def _build_vo_config(cfg):
             "timeoutSec": int(_env_or("VO_CODEX_TIMEOUT_SEC", codex_cfg.get("timeoutSec", 900))),
             "model": _env_or("VO_CODEX_MODEL", codex_cfg.get("model", "")),
             "sandbox": _env_or("VO_CODEX_SANDBOX", codex_cfg.get("sandbox", "workspace-write")),
-            "approvalPolicy": _env_or("VO_CODEX_APPROVAL_POLICY", codex_cfg.get("approvalPolicy", "never")),
+            "approvalPolicy": _env_or("VO_CODEX_APPROVAL_POLICY", codex_cfg.get("approvalPolicy", "untrusted")),
             "preferAppServer": str(_env_or("VO_CODEX_PREFER_APP_SERVER", codex_cfg.get("preferAppServer", True))).lower() not in ("0", "false", "no", "off"),
             "includeMain": str(_env_or("VO_CODEX_INCLUDE_MAIN", codex_cfg.get("includeMain", True))).lower() not in ("0", "false", "no", "off"),
             "includeNativeAgents": str(_env_or("VO_CODEX_INCLUDE_NATIVE_AGENTS", codex_cfg.get("includeNativeAgents", True))).lower() not in ("0", "false", "no", "off"),
@@ -2747,7 +2748,7 @@ def _get_codex_native_setup_state():
         "mainWorkspace": cfg.get("mainWorkspace") or "",
         "model": cfg.get("model") or "",
         "sandbox": cfg.get("sandbox") or "workspace-write",
-        "approvalPolicy": cfg.get("approvalPolicy") or "never",
+        "approvalPolicy": cfg.get("approvalPolicy") or "untrusted",
         "preferAppServer": bool(cfg.get("preferAppServer", True)),
         "includeMain": bool(cfg.get("includeMain", True)),
         "includeNativeAgents": bool(cfg.get("includeNativeAgents", True)),
@@ -4612,6 +4613,14 @@ def _handle_agent_workspace_update_locked(agent_key, body):
                         "error": native_result.get("error") or "Native profile update failed",
                         "_status": 502,
                     }
+            kind = str(agent.get("providerKind") or "")
+            if ("model" in patch and kind in agent_permissions.KINDS
+                    and patch["model"] != str(agent.get("model") or "").strip()):
+                # (a model changed in the agent's settings wins over the one picked in its chat window: latest wins)
+                try:
+                    agent_permissions.set_run_settings(STATUS_DIR, kind, agent.get("id") or key, model=None)
+                except (OSError, ValueError) as exc:
+                    print(f"[AGENT] Could not clear the chat model of {key}: {exc}")
             # Agent Studio saves the office copy itself in the same action (officeSaved): writing it here
             # too changed the layout under that save and showed a false "changed somewhere else" (B1).
             if body.get("officeSaved") is not True:
@@ -5092,6 +5101,7 @@ def _provider_registry_context():
         }),
         "hermesInterrupt": lambda profile: _handle_hermes_interrupt({"agentId": profile}),
         "sessionList": lambda profile, limit=40: handle_chat_sessions_list(profile, limit=limit)[0],
+        "applyAgentPermissions": lambda kind, agent, provider: _apply_agent_permissions(kind, agent, provider),
     }
 
 
@@ -6121,13 +6131,197 @@ def _codex_provider():
         timeout_sec=int(codex_cfg.get("timeoutSec") or 900),
         model=codex_cfg.get("model") or "",
         sandbox=codex_cfg.get("sandbox") or "workspace-write",
-        approval_policy=codex_cfg.get("approvalPolicy") or "never",
+        approval_policy=codex_cfg.get("approvalPolicy") or "untrusted",
         prefer_app_server=codex_cfg.get("preferAppServer", True),
         main_workspace=codex_cfg.get("mainWorkspace"),
         include_main=codex_cfg.get("includeMain", True),
         include_native_agents=codex_cfg.get("includeNativeAgents", True),
         register_native_agents=codex_cfg.get("registerNativeAgents", True),
     )
+
+
+# v0.13.1: the permission mode the owner chose for this agent in the chat window (agent_permissions.py), applied
+# to the provider object of this one run. OpenClaw / Hermes keep their permissions in their own gateway.
+_CODEX_APPROVAL_RANK = {"untrusted": 0, "on-failure": 1, "on-request": 1, "never": 2}
+
+
+def _apply_codex_permissions(agent, provider):
+    sandbox_ok = agent_permissions.codex_sandbox_works(getattr(provider, "binary", "") or "codex")
+    mode, _saved = agent_permissions.current(STATUS_DIR, "codex", (agent or {}).get("id") or "",
+                                             VO_CONFIG.get("codex", {}), sandbox_ok)
+    provider.sandbox, provider.approval_policy = agent_permissions.codex_run_settings(mode, sandbox_ok)
+    _apply_agent_run_settings("codex", agent, provider)
+    return mode
+
+
+def _apply_claude_code_permissions(agent, provider):
+    mode, _saved = agent_permissions.current(STATUS_DIR, "claude-code", (agent or {}).get("id") or "",
+                                             VO_CONFIG.get("claudeCode", {}))
+    provider.permission_mode = agent_permissions.claude_permission_mode(mode)
+    _apply_agent_run_settings("claude-code", agent, provider)
+    return mode
+
+
+def _apply_agent_run_settings(kind, agent, provider):
+    """The model and thinking level picked for this agent in the chat window, for this run ("" = its own)."""
+    saved = agent_permissions.run_settings(STATUS_DIR, kind, (agent or {}).get("id") or "")
+    if saved["model"]:
+        provider.model = saved["model"]
+    provider.effort = saved["effort"]
+    return saved
+
+
+_AGENT_MODELS_CACHE = {}
+_AGENT_MODELS_LOCK = threading.Lock()
+
+
+def _agent_model_list(kind, provider, refresh=False):
+    """The models (and thinking levels) the agent's program offers: Codex asks its app-server (kept 10 min)."""
+    key = f"{kind}:{getattr(provider, 'binary', '') or ''}"
+    now = time.time()
+    with _AGENT_MODELS_LOCK:
+        hit = _AGENT_MODELS_CACHE.get(key)
+    if hit and not refresh and now - hit[0] < (600 if hit[1].get("ok") else 60):
+        return hit[1]
+    lister = getattr(provider, "list_models", None)
+    try:
+        result = lister() if callable(lister) else {"ok": False, "error": "This agent's program lists no models", "models": []}
+    except Exception as exc:
+        result = {"ok": False, "error": str(exc), "models": []}
+    if not isinstance(result, dict):
+        result = {"ok": False, "error": "Invalid model list", "models": []}
+    with _AGENT_MODELS_LOCK:
+        _AGENT_MODELS_CACHE[key] = (now, result)
+    return result
+
+
+def _agent_owner_only(access):
+    """None for the office's owner; the refusal for anyone else (an agent, through the agent API token, never)."""
+    agent_caller = bool(getattr(access, "via_token", False)) and not getattr(access, "via_session", False)
+    if access is None or not getattr(access, "can_manage", False) or getattr(access, "as_agent", False) or agent_caller:
+        return {"ok": False, "error": "Only the office's owner can change this.", "_status": 403}
+    return None
+
+
+def _agent_run_target(kind, agent_key):
+    if kind == "codex":
+        agent = _get_codex_agent(agent_key)
+        return agent, (_codex_provider() if agent else None)
+    if kind == "claude-code":
+        agent = _get_claude_code_agent(agent_key)
+        return agent, (_claude_code_provider() if agent else None)
+    return None, None
+
+
+def _agent_run_options_view(kind, agent_key, access, refresh=False):
+    agent, provider = _agent_run_target(kind, agent_key)
+    if not agent:
+        return {"ok": False, "error": "This agent is not a Codex or Claude Code agent of this office.", "_status": 404}
+    agent_id = agent.get("id") or agent_key
+    listing = _agent_model_list(kind, provider, refresh)
+    saved = agent_permissions.run_settings(STATUS_DIR, kind, agent_id)
+    own = str(agent.get("model") or "").strip()
+    own = "" if own == "inherit" else own
+    own = own or str(getattr(provider, "model", "") or "")
+    return {"ok": True, "kind": kind, "agent": agent_id, "model": saved["model"], "effort": saved["effort"],
+            "agentModel": own, "models": listing.get("models") or [],
+            "modelsError": "" if listing.get("ok") else str(listing.get("error") or ""),
+            "canChange": _agent_owner_only(access) is None}
+
+
+def _agent_run_options_set(body, access):
+    body = body if isinstance(body, dict) else {}
+    denied = _agent_owner_only(access)
+    if denied:
+        return denied
+    kind = str(body.get("kind") or "").strip()
+    agent_key = str(body.get("agent") or body.get("agentId") or "").strip()
+    agent, provider = _agent_run_target(kind, agent_key)
+    if not agent:
+        return {"ok": False, "error": "This agent is not a Codex or Claude Code agent of this office.", "_status": 404}
+    agent_id = agent.get("id") or agent_key
+    changes = {k: str(body.get(k) or "").strip() for k in ("model", "effort") if k in body}
+    if not changes:
+        return {"ok": False, "error": "model or effort is required", "_status": 400}
+    listing = _agent_model_list(kind, provider)
+    models = {m.get("id"): m for m in (listing.get("models") or []) if isinstance(m, dict)}
+    saved = agent_permissions.run_settings(STATUS_DIR, kind, agent_id)
+    if changes.get("model") and models and changes["model"] not in models:
+        return {"ok": False, "error": "That model is not offered here.", "_status": 400}
+    # the model the next run uses: the one picked now, else the saved one, else the agent's own / the default
+    model = changes["model"] if "model" in changes else saved["model"]
+    default_model = next((mid for mid, m in models.items() if m.get("isDefault")), "")
+    own = str(agent.get("model") or "").strip()
+    meta = models.get(model or ("" if own == "inherit" else own) or default_model) or {}
+    levels = {e.get("id") for e in (meta.get("effort") or []) if isinstance(e, dict)}
+    if changes.get("effort") and models:
+        offered = levels or {e.get("id") for m in models.values() for e in (m.get("effort") or []) if isinstance(e, dict)}
+        if changes["effort"] not in offered:
+            return {"ok": False, "error": "That thinking level is not offered for this model.", "_status": 400}
+    if "model" in changes and "effort" not in changes and saved["effort"] and levels and saved["effort"] not in levels:
+        changes["effort"] = ""   # (the new model does not have the saved level: back to the model's own)
+    try:
+        agent_permissions.set_run_settings(STATUS_DIR, kind, agent_id, **changes)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "_status": 400}
+    except OSError as exc:
+        print(f"🔐 Run settings: could not save {kind} agent {agent_id}: {exc}", flush=True)
+        return {"ok": False, "error": "The office could not save this (agent-permissions.json in its data folder "
+                "cannot be read or written). Nothing was changed.", "_status": 500}
+    print(f"🧠 Run settings: {kind} agent {agent_id} -> " + ", ".join(f"{k}={v or 'default'}" for k, v in changes.items()), flush=True)
+    return _agent_run_options_view(kind, agent_key, access)
+
+
+def _apply_agent_permissions(kind, agent, provider):
+    """Any Codex / Claude Code run, whoever starts it (the chat window, another agent, a meeting): the agent's mode."""
+    if kind == "codex":
+        return _apply_codex_permissions(agent, provider)
+    if kind == "claude-code":
+        return _apply_claude_code_permissions(agent, provider)
+    return None
+
+
+def _agent_permissions_target(kind, agent_key):
+    if kind == "codex":
+        agent = _get_codex_agent(agent_key)
+        return agent, (_codex_provider() if agent else None)
+    if kind == "claude-code":
+        return _get_claude_code_agent(agent_key), None
+    return None, None
+
+
+def _agent_permissions_view(kind, agent_key, access):
+    agent, provider = _agent_permissions_target(kind, agent_key)
+    if not agent:
+        return {"ok": False, "error": "This agent is not a Codex or Claude Code agent of this office.", "_status": 404}
+    sandbox_ok = agent_permissions.codex_sandbox_works(getattr(provider, "binary", "") or "codex") if kind == "codex" else True
+    cfg = VO_CONFIG.get("codex" if kind == "codex" else "claudeCode", {})
+    can_change = access is not None and bool(getattr(access, "can_manage", False)) and not getattr(access, "as_agent", False)
+    return agent_permissions.describe(STATUS_DIR, kind, agent.get("id") or agent_key, cfg, sandbox_ok, can_change)
+
+
+def _agent_permissions_set(body, access):
+    body = body if isinstance(body, dict) else {}
+    kind = str(body.get("kind") or "").strip()
+    agent_key = str(body.get("agent") or body.get("agentId") or "").strip()
+    mode = str(body.get("mode") or "").strip()
+    # Only the office's owner: an agent (the agent API token) never changes what agents may do
+    if _agent_owner_only(access):
+        return {"ok": False, "error": "Only the office's owner can change an agent's permissions.", "_status": 403}
+    agent, provider = _agent_permissions_target(kind, agent_key)
+    if not agent:
+        return {"ok": False, "error": "This agent is not a Codex or Claude Code agent of this office.", "_status": 404}
+    sandbox_ok = agent_permissions.codex_sandbox_works(getattr(provider, "binary", "") or "codex") if kind == "codex" else True
+    try:
+        agent_permissions.set_mode(STATUS_DIR, kind, agent.get("id") or agent_key, mode, sandbox_ok)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc), "_status": 400}
+    except OSError as exc:
+        print(f"🔐 Permissions: could not save {kind} agent {agent.get('id') or agent_key}: {exc}", flush=True)
+        return {"ok": False, "error": "The office could not save this permission (agent-permissions.json in its data "
+                "folder cannot be read or written). Nothing was changed.", "_status": 500}
+    print(f"🔐 Permissions: {kind} agent {agent.get('id') or agent_key} -> {mode}", flush=True)
+    return _agent_permissions_view(kind, agent_key, access)
 
 
 def _codex_history_path(profile="default"):
@@ -8684,8 +8878,11 @@ def _handle_codex_chat(body):
     try:
         provider = _codex_provider()
         provider.model = agent.get("model") or provider.model or ""
+        _apply_codex_permissions(agent, provider)
         requested_approval_policy = str(body.get("approvalPolicy") or body.get("codexApprovalPolicy") or "").strip()
-        if requested_approval_policy in {"untrusted", "on-request", "on-failure", "never"}:
+        # A request may only ask for more asking, never less (the owner's mode in the chat window decides)
+        if (requested_approval_policy in _CODEX_APPROVAL_RANK
+                and _CODEX_APPROVAL_RANK[requested_approval_policy] < _CODEX_APPROVAL_RANK.get(provider.approval_policy, 2)):
             provider.approval_policy = requested_approval_policy
         session_id = "" if origin_session_id.startswith("@new:") else origin_session_id
         status_key = agent.get("statusKey") or agent.get("id")
@@ -8956,6 +9153,7 @@ def _handle_codex_run_start(body):
     provider = _codex_provider()
     if not provider:
         return {"ok": False, "error": "Codex provider module unavailable", "_status": 503}
+    _apply_codex_permissions(agent, provider)
     if not getattr(provider, "prefer_app_server", False):
         # (exec mode, codex.preferAppServer off: not a conflict but "use /api/codex/chat"; a 200 the chat window
         # follows at once, so no turn logs a console 409)
@@ -9210,7 +9408,7 @@ def _handle_codex_test(body=None):
         timeout_sec=int(cfg.get("timeoutSec") or 900),
         model=cfg.get("model") or "",
         sandbox=cfg.get("sandbox") or "workspace-write",
-        approval_policy=cfg.get("approvalPolicy") or "never",
+        approval_policy=cfg.get("approvalPolicy") or "untrusted",
         prefer_app_server=cfg.get("preferAppServer", True),
         main_workspace=cfg.get("mainWorkspace"),
         include_main=cfg.get("includeMain", True),
@@ -9296,6 +9494,7 @@ def _handle_claude_code_chat(body):
         agent_model = agent.get("model") or ""
         if agent_model and agent_model != "inherit":
             provider.model = agent_model
+        _apply_claude_code_permissions(agent, provider)
         requested_permission_mode = str(body.get("permissionMode") or body.get("claudePermissionMode") or "").strip()
         # A request may only narrow what the owner configured, never widen it
         # (no "bypassPermissions" from a chat request, BE-01/CH-04).
@@ -17762,6 +17961,13 @@ def _handle_agent_delete(body):
             except OSError as exc:
                 print(f"[PROVIDERS] Failed to remove {filename}: {exc}")
         _delete_chat_session_mirrors(provider_kind, profile)
+        if provider_kind in agent_permissions.KINDS:
+            # (a new agent with the same name starts at the default, not at what this one was allowed)
+            for key in {agent_id, str(agent.get("id") or "")} - {""}:
+                try:
+                    agent_permissions.forget(STATUS_DIR, provider_kind, key)
+                except OSError as exc:
+                    print(f"[PROVIDERS] Could not forget the permissions of {key}: {exc}")
 
         # Refresh discovery
         _discovered_at = 0
@@ -21740,6 +21946,23 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
         elif request_path.startswith("/api/provider-runs/") and request_path.endswith("/events"):
             run_id = urllib.parse.unquote(request_path[len("/api/provider-runs/"):-len("/events")].strip("/"))
             _handle_provider_run_events(self, run_id)
+        elif request_path == "/api/agent-permissions":
+            # v0.13.1: an agent's permission mode (Codex, Claude Code: the agents the office launches)
+            kind = (query_params.get("kind") or [""])[0]
+            agent_key = (query_params.get("agent") or query_params.get("agentId") or [""])[0]
+            if kind not in agent_permissions.KINDS or not agent_key:
+                return self._send_json({"ok": False, "error": "kind (codex or claude-code) and agent are required"}, 400)
+            result = _agent_permissions_view(kind, agent_key, self._vo_access())
+            return self._send_json(result, result.pop("_status", 200))
+        elif request_path == "/api/agent-run-options":
+            # v0.13.1: the model and thinking level picked for a Codex / Claude Code agent, and what its program offers
+            kind = (query_params.get("kind") or [""])[0]
+            agent_key = (query_params.get("agent") or query_params.get("agentId") or [""])[0]
+            if kind not in agent_permissions.KINDS or not agent_key:
+                return self._send_json({"ok": False, "error": "kind (codex or claude-code) and agent are required"}, 400)
+            refresh = (query_params.get("refresh") or [""])[0] in ("1", "true")
+            result = _agent_run_options_view(kind, agent_key, self._vo_access(), refresh)
+            return self._send_json(result, result.pop("_status", 200))
         elif request_path == "/api/codex/approval/pending":
             agent_key = (query_params.get("agentId") or query_params.get("key") or ["codex-default"])[0]
             result = _handle_codex_approval_pending(agent_key)
@@ -22013,7 +22236,7 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
                     "timeoutSec": VO_CONFIG.get("codex", {}).get("timeoutSec", 900),
                     "model": VO_CONFIG.get("codex", {}).get("model"),
                     "sandbox": VO_CONFIG.get("codex", {}).get("sandbox", "workspace-write"),
-                    "approvalPolicy": VO_CONFIG.get("codex", {}).get("approvalPolicy", "never"),
+                    "approvalPolicy": VO_CONFIG.get("codex", {}).get("approvalPolicy", "untrusted"),
                     "preferAppServer": VO_CONFIG.get("codex", {}).get("preferAppServer", True),
                     "includeMain": VO_CONFIG.get("codex", {}).get("includeMain", True),
                     "includeNativeAgents": VO_CONFIG.get("codex", {}).get("includeNativeAgents", True),
@@ -23949,6 +24172,14 @@ class OfficeHandler(http.server.SimpleHTTPRequestHandler):
             result.pop("_status", None)
             self.wfile.write(json.dumps(result).encode())
             return
+        elif request_path == "/api/agent-permissions":
+            body = self._read_json_body(int(self.headers.get('Content-Length', 0)))
+            result = _agent_permissions_set(body, self._vo_access())
+            return self._send_json(result, result.pop("_status", 200))
+        elif request_path == "/api/agent-run-options":
+            body = self._read_json_body(int(self.headers.get('Content-Length', 0)))
+            result = _agent_run_options_set(body, self._vo_access())
+            return self._send_json(result, result.pop("_status", 200))
         elif request_path == "/api/codex/approval/respond":
             length = int(self.headers.get('Content-Length', 0))
             body = self._read_json_body(length)

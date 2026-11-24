@@ -92,45 +92,68 @@
     function rxOf(ctx) { return ctx && ctx.rx ? ctx.rx : null; }
 
     // =====================================================================
-    // kitchenCounter: 72 x 24 base cabinet run, worktop at z 23..25
+    // kitchenCounter: 72 x 24 base cabinet run, worktop at z 22..24
     // =====================================================================
-    var CARC = '#e9e6df', DOOR = '#eeebe4', PANEL = '#e2ded5', KICK = '#8f8a7f', TOP = '#c9c3b6', EDGE = '#a9a396', UP = '#d8d3c8';
+    // Reads as kitchen base cabinets at every zoom (not a table): a drawer over
+    // each door, dark shadow gaps round the fronts, metal pulls, a dark kick
+    // plate set back under the doors, a thick worktop edge and a tiled
+    // backsplash against the wall. Appliances stand on the worktop (z 25).
+    var CARC = '#e9e6df', DOOR = '#f1eee8', PANEL = '#e3dfd6', GAP = '#9c968b', KICK = '#5f5a52', TOP = '#bcb4a5', EDGE = '#8f887b';
+    var PULL = '#6f777e', PULL2 = '#59616a', GLINT = '#d3d9dd', TILE = '#f1f3f2', GROUT = '#dbe1e1';
     function buildCounter() {
-        var m = S.model(0, 4, 72, 30, 29);
-        // carcass + end panels (end panels are the full depth, with the toe-kick notch at the front)
-        m.box(2, 4, 3, 68, 21, 20, CARC);                              // y 4..24, z 3..22
-        m.box(0, 4, 0, 2, 23, 23, T(CARC, 0.98));                      // left end panel, face at y 27
-        m.box(70, 4, 0, 2, 23, 23, T(CARC, 0.98));                     // right end panel
-        m.carve(0, 26, 0, 2, 1, 3); m.carve(70, 26, 0, 2, 1, 3);       // toe-kick notches
-        m.box(2, 4, 0, 68, 22, 3, KICK);                               // toe kick, 1 px behind the doors (face y 26)
-        m.paint(2, 25, 0, 68, 1, 1, T(KICK, 0.85));                    // its shadowed foot
-        // inset panels on the end panels (classic turned view)
-        m.paint(0, 7, 6, 1, 15, 14, T(CARC, 0.94)); m.paint(71, 7, 6, 1, 15, 14, T(CARC, 0.94));
-        m.paint(0, 8, 7, 1, 13, 12, T(CARC, 1.0)); m.paint(71, 8, 7, 1, 13, 12, T(CARC, 1.0));
-        // back panel seams (classic 180 view)
-        m.paint(24, 4, 3, 1, 1, 20, T(CARC, 0.88)); m.paint(48, 4, 3, 1, 1, 20, T(CARC, 0.88));
-        // two cabinets, one shaker door each (2 px slabs, a 2 px joint between them)
-        [[2, 33, 28], [37, 33, 42]].forEach(function (dd) {
+        var m = S.model(0, 4, 72, 30, 31);
+        // carcass + end panels (full depth, toe-kick notch at the front)
+        m.box(2, 4, 3, 68, 21, 19, CARC);                              // y 4..24, z 3..21
+        m.box(0, 4, 0, 2, 23, 22, T(CARC, 0.97));                      // left end panel, face at y 26
+        m.box(70, 4, 0, 2, 23, 22, T(CARC, 0.97));                     // right end panel
+        m.carve(0, 24, 0, 2, 3, 3); m.carve(70, 24, 0, 2, 3, 3);       // toe-kick notches
+        // kick plate: dark, 3 px behind the fronts, so the cabinets stand on a shadow line
+        m.box(2, 4, 0, 68, 20, 3, KICK);                               // face y 23
+        m.paint(2, 23, 2, 68, 1, 1, T(KICK, 1.18));                    // its lit top edge
+        // inset panels on the end panels (seen when turned)
+        m.paint(0, 7, 5, 1, 15, 14, T(CARC, 0.92)); m.paint(71, 7, 5, 1, 15, 14, T(CARC, 0.92));
+        m.paint(0, 8, 6, 1, 13, 12, T(CARC, 1.0)); m.paint(71, 8, 6, 1, 13, 12, T(CARC, 1.0));
+        // back panel seams (seen from behind)
+        m.paint(24, 4, 3, 1, 1, 19, T(CARC, 0.88)); m.paint(48, 4, 3, 1, 1, 19, T(CARC, 0.88));
+        // the carcass front shows as dark gaps between and round the fronts
+        m.paint(2, 24, 3, 68, 1, 19, GAP);
+        // two cabinets: a drawer (z 17..20) over a shaker door (z 3..15), fronts are 2 px slabs (y 25..26)
+        [[2, 33, 29], [37, 33, 39]].forEach(function (dd) {
             var dx = dd[0], w = dd[1], hx = dd[2];
-            m.box(dx, 25, 3, w, 2, 19, DOOR);                          // y 25..26, z 3..21
-            m.carve(dx + 3, 26, 6, w - 6, 1, 13);                      // recessed centre panel
-            m.paint(dx + 3, 25, 6, w - 6, 1, 13, PANEL);
-            m.paint(dx, 26, 21, w, 1, 1, T(DOOR, 1.04));               // light top edge of the frame
-            // handle: a raised 2 px bar on two standoffs
-            m.box(hx, 27, 9, 2, 2, 8, '#9ea5ab', MAT.SHINY);
-            m.box(hx, 26, 9, 2, 1, 2, '#7d858c', MAT.SHINY);
-            m.box(hx, 26, 15, 2, 1, 2, '#7d858c', MAT.SHINY);
-            m.paint(hx, 28, 15, 1, 1, 2, '#c9d0d5', MAT.SHINY);        // glint
+            // door
+            m.box(dx, 25, 3, w, 2, 13, DOOR);                          // z 3..15
+            m.carve(dx + 3, 26, 5, w - 6, 1, 9);                       // recessed centre panel
+            m.paint(dx + 3, 25, 5, w - 6, 1, 9, PANEL);
+            m.paint(dx + 3, 25, 13, w - 6, 1, 1, T(PANEL, 0.9));       // the recess's shadowed top
+            m.paint(dx, 26, 15, w, 1, 1, T(DOOR, 1.04));               // light top edge
+            m.paint(dx, 26, 3, w, 1, 1, T(DOOR, 0.9));                 // shaded bottom edge
+            // drawer
+            m.box(dx, 25, 17, w, 2, 4, DOOR);                          // z 17..20
+            m.paint(dx, 26, 20, w, 1, 1, T(DOOR, 1.04));
+            m.paint(dx, 26, 17, w, 1, 1, T(DOOR, 0.92));
+            // drawer pull: a horizontal bar on two standoffs
+            var px = dx + Math.floor(w / 2) - 4;
+            m.box(px, 27, 18, 8, 1, 2, PULL, MAT.SHINY);
+            m.box(px, 26, 18, 1, 1, 2, PULL2, MAT.SHINY); m.box(px + 7, 26, 18, 1, 1, 2, PULL2, MAT.SHINY);
+            m.paint(px + 1, 27, 19, 5, 1, 1, GLINT, MAT.SHINY);
+            // door handle: a vertical bar on two standoffs, by the cabinets' meeting edge
+            m.box(hx, 27, 7, 2, 1, 7, PULL, MAT.SHINY);
+            m.box(hx, 26, 7, 2, 1, 1, PULL2, MAT.SHINY); m.box(hx, 26, 13, 2, 1, 1, PULL2, MAT.SHINY);
+            m.paint(hx, 27, 11, 1, 1, 2, GLINT, MAT.SHINY);
         });
-        m.paint(35, 24, 3, 2, 1, 19, T(CARC, 0.8));                    // the joint reads dark
-        // worktop (2 px slab, 1 px overhang over the doors) + its edge band
-        m.box(0, 4, 23, 72, 24, 2, stone(TOP));
-        m.paint(0, 26, 23, 72, 2, 2, function (x) { return (x % 24 === 0) ? T(EDGE, 0.92) : EDGE; });
-        m.paint(0, 26, 24, 72, 1, 1, '#b8b2a5');                       // the front lip on the top
-        // upstand along the back
-        m.box(0, 4, 25, 72, 3, 3, UP);
-        m.paint(0, 4, 27, 72, 3, 1, T(UP, 1.05));
-        m.paint(0, 6, 25, 72, 1, 1, T(UP, 0.92));                      // sealant line
+        // worktop: a 3 px slab, 1 px over the fronts, with a darker edge band and a lit front lip
+        m.box(0, 4, 22, 72, 24, 3, stone(TOP));
+        m.paint(0, 27, 22, 72, 1, 3, function (x, y, z) { return z === 24 ? T(EDGE, 1.25) : (x % 24 === 0 ? T(EDGE, 0.9) : EDGE); });
+        m.paint(0, 4, 22, 1, 24, 3, T(EDGE, 1.05)); m.paint(71, 4, 22, 1, 24, 3, T(EDGE, 1.05));   // the ends of the slab
+        // tiled backsplash along the back: 4 px thick (a thin tall slab steps into stripes when the
+        // view turns), 6 tall, two rows of soft white tiles with a grout joint, a lighter cap
+        m.box(0, 4, 25, 72, 4, 6, function (x, y, z) {
+            var row = z - 25, off = row >= 3 ? 4 : 0;
+            if (row === 2) return GROUT;                              // the joint between the tile rows
+            return H3(Math.floor((x + off) / 8), row >= 3 ? 1 : 0, 7) > 0.5 ? T(TILE, 0.98) : TILE;
+        });
+        m.paint(0, 4, 30, 72, 4, 1, T(TILE, 1.02));                   // the cap
+        m.paint(0, 7, 25, 72, 1, 1, T(GROUT, 0.9));                   // sealant line on the worktop
         return m;
     }
     S.def('kitchenCounter', buildCounter, null, { surfaceZ: 25 });

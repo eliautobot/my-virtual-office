@@ -18,6 +18,13 @@ and Antigravity) and shows what each agent is really doing, live: the command it
 it reads, the file it edits, the approval it waits for. Click an agent to chat with it, open its
 PC, or change its settings.
 
+Version 0.13.1 adds **Permissions**, **model** and **thinking** pickers to the chat window of
+Codex and Claude Code agents, like the native apps: you choose per agent what it may do without
+asking (new Codex agents ask first), which model it uses and how hard it thinks, and your choices
+are kept through updates. It also fixes the 3D view (it opens straight in 3D, counters look like
+cabinets, wall signs, the paper plane and the game scoreboards). See the
+[0.13.1 release notes](docs/RELEASE-NOTES-0.13.1.md).
+
 Version 0.13.0 is the **3D** release: the office becomes a turnable 3D pixel-art diorama. Every
 piece of furniture, every desk design, the walls, every character look and pose and every pet is
 rebuilt as a stacked-slice 3D model, with shadows that follow the time of day and lamps and screens
@@ -68,12 +75,12 @@ exactly the source you checked out (for example before its image is published), 
 point Compose at it:
 
 ```bash
-docker build -t my-virtual-office:0.13.0 ./app
-VO_IMAGE=my-virtual-office:0.13.0 docker compose up -d virtual-office
+docker build -t my-virtual-office:0.13.1 ./app
+VO_IMAGE=my-virtual-office:0.13.1 docker compose up -d virtual-office
 ```
 
 Check which version is running at `http://localhost:8090/health` (it answers
-`{"ok": true, "status": "running", "version": "0.13.0"}`).
+`{"ok": true, "status": "running", "version": "0.13.1"}`).
 
 The image includes Node.js 24 and the npm packages OpenClaw and Hermes need. The compose file uses
 Docker's bridge network, so the office reaches OpenClaw on your computer at
@@ -133,7 +140,7 @@ approval" and the `openclaw devices approve <id>` command to run on the OpenClaw
 ### Images and platforms
 
 - `ghcr.io/eliautobot/my-virtual-office:latest`
-- `ghcr.io/eliautobot/my-virtual-office:<version>` for release tags, such as `0.13.0`
+- `ghcr.io/eliautobot/my-virtual-office:<version>` for release tags, such as `0.13.1`
 - `ghcr.io/eliautobot/my-virtual-office:<commit-sha-prefix>` for exact pins
 
 Images are published for `linux/amd64` and `linux/arm64`, so the office itself runs on x86_64
@@ -240,7 +247,8 @@ in a custom parent folder (project-local `.codex/agents/<profile>.toml`).
 Install Codex in the image or set `VO_CODEX_BIN` to a Codex executable inside the container, and
 set `VO_CODEX_HOME` to a deployment-specific Codex home. The Docker example sets
 `VO_CODEX_SANDBOX=danger-full-access` because Codex's bubblewrap sandbox usually needs extra
-container privileges; use a stricter mode when your deployment supports it.
+container privileges; use a stricter mode when your deployment supports it. What a Codex agent may
+do without asking is up to you, per agent: see [Agent permissions](#agent-permissions).
 
 ### Claude Code
 
@@ -382,6 +390,40 @@ and headline is filled in from data the office already has, so it never costs to
   ([Task Progress](docs/TASK-PROGRESS.md)).
 - Chat bubbles above the agents in the office: readable at any zoom, newest on top, never
   covering faces or other bubbles; phones show one open bubble at a time.
+
+### Agent permissions
+
+My Virtual Office connects to your agents; it does not decide for them. OpenClaw and Hermes
+agents run in their own gateway, so what they may do is set there, as before.
+
+Codex and Claude Code agents are different: the office starts their command-line programs
+itself. So their chat window has a **Permissions** button next to the message box, like the
+native Codex and Claude apps, and you pick a mode per agent:
+
+| Agent | Modes | A new agent starts at |
+|---|---|---|
+| Codex | **Read only** (only where Codex's own sandbox can start; not inside Docker), **Ask first** (it asks in the chat before running a command or changing files; you approve or decline on the card), **Full access** | Ask first |
+| Claude Code | **Read only**, **Plan only**, **Edit files**, **Full access** | Edit files |
+
+- What you pick applies from the agent's next message, wherever the message comes from (your
+  chat, another agent, a meeting), and is saved in the data folder
+  (`/data/agent-permissions.json`). It stays through updates, image rebuilds and restarts, and
+  always wins over the office's settings; those (`VO_CODEX_APPROVAL_POLICY`,
+  `VO_CLAUDE_CODE_PERMISSION_MODE`) only give the starting mode of an agent nobody has set yet.
+- **Full access** asks you to confirm first.
+- Only the office's owner changes a mode (this machine, or a browser signed in with the office
+  passcode). An agent cannot change its own or another agent's mode, not even with the agent API
+  token.
+- Deleting an agent forgets its mode, so a new agent with the same name starts at the default.
+- Claude Code runs without a way to ask you, so a step its mode does not allow is refused rather
+  than asked about.
+
+Next to **Permissions**, the same agents get a **model** picker and a **thinking** picker, as in
+the native apps. Codex lists its own models and the thinking levels each one offers (asked from
+Codex itself, so new models show up on their own); Claude Code offers Fable, Opus, Sonnet and Haiku
+with Low to Max. **Default** keeps the agent's own model and the model's own level. The pick is
+saved per agent in the same file, stays through updates and applies from the next message;
+changing the model in the agent's settings (Agent Studio) replaces the one picked in the chat.
 
 ### 🖥️ Agent PC
 - One persistent Agent PC per agent, opened from its launcher, its desk monitor or a Preview
@@ -675,13 +717,13 @@ reach the container count: with Docker Compose that means the variables listed u
 | `VO_CODEX_WORKSPACE_ROOT`, `VO_CODEX_MAIN_WORKSPACE` | /data/codex-agents, /data/codex-main | Codex workspaces |
 | `VO_CODEX_PREFER_APP_SERVER` | 1 | Use `codex app-server` |
 | `VO_CODEX_SANDBOX` | danger-full-access | Codex sandbox mode |
-| `VO_CODEX_APPROVAL_POLICY` | never | Codex approval policy |
+| `VO_CODEX_APPROVAL_POLICY` | untrusted | Starting [permissions](#agent-permissions) of a Codex agent nobody has set yet (`untrusted` = Ask first, `never` = Full access) |
 | `VO_CODEX_INCLUDE_MAIN`, `VO_CODEX_INCLUDE_NATIVE_AGENTS`, `VO_CODEX_REGISTER_NATIVE_AGENTS` | 1 | Codex discovery and registration |
 | `VO_CLAUDE_CODE_ENABLED` | true | Claude Code provider |
 | `VO_CLAUDE_CODE_HOME` | /data/claude-code-home | Claude config folder (also sets `CLAUDE_CONFIG_DIR`) |
 | `VO_CLAUDE_CODE_BIN` | claude | Claude Code CLI inside the container |
 | `VO_CLAUDE_CODE_WORKSPACE_ROOT`, `VO_CLAUDE_CODE_MAIN_WORKSPACE` | /data/claude-code-agents, /data/claude-code-main | Claude Code workspaces |
-| `VO_CLAUDE_CODE_PERMISSION_MODE` | acceptEdits | Claude Code permission mode |
+| `VO_CLAUDE_CODE_PERMISSION_MODE` | acceptEdits | Starting [permissions](#agent-permissions) of a Claude Code agent nobody has set yet (`acceptEdits` = Edit files) |
 | `VO_CLAUDE_CODE_MODEL` | *(empty)* | Default Claude Code model |
 | `VO_CLAUDE_CODE_INCLUDE_MAIN`, `VO_CLAUDE_CODE_INCLUDE_NATIVE_AGENTS`, `VO_CLAUDE_CODE_REGISTER_NATIVE_AGENTS` | 1 | Claude Code discovery and registration |
 | `VO_OPENCODE_ENABLED` | false | OpenCode provider |
@@ -741,6 +783,8 @@ services:
 - `/data` (the `vo-data` volume): `vo-config.json` (settings), `office-config.json` (layout),
   `license.json`, `access.json` (passcode hash, agent token, sign-in sessions), saved layouts,
   projects, Agent PC history and chat metadata.
+- `/data/agent-permissions.json`: the Permissions mode you picked for each Codex and Claude
+  Code agent (private to the office, mode 0600).
 - `/data/office-life/`: the Office life journal (one small file per day, kept 14 days by default,
   40 MB at most), printed newspapers and stand-up state. No message text is stored there.
 - Agent Providers files in `/data`, all private to the office (files 0600, folder 0700):
@@ -796,8 +840,8 @@ Or build the source you checked out:
 
 ```bash
 git pull
-docker build -t my-virtual-office:0.13.0 ./app
-VO_IMAGE=my-virtual-office:0.13.0 docker compose up -d virtual-office
+docker build -t my-virtual-office:0.13.1 ./app
+VO_IMAGE=my-virtual-office:0.13.1 docker compose up -d virtual-office
 ```
 
 `docker compose up -d virtual-office` recreates only the office container. The `vo-data` volume,
@@ -815,8 +859,9 @@ Checking out an older git tag alone does not change the running image. If the ol
 trouble with data written by the newer one, restore the backup into the volume (stop the
 container first, then extract `vo-data-backup.tgz` into it the same way).
 
-Read the [0.13.0 release notes](docs/RELEASE-NOTES-0.13.0.md) before upgrading (no breaking changes
-from 0.12.0). Read the [0.12.0 release notes](docs/RELEASE-NOTES-0.12.0.md) too if you upgrade from
+Read the [0.13.1 release notes](docs/RELEASE-NOTES-0.13.1.md) before upgrading (no breaking changes;
+new Codex agents now ask first) and the [0.13.0 release notes](docs/RELEASE-NOTES-0.13.0.md) coming
+from 0.12.0. Read the [0.12.0 release notes](docs/RELEASE-NOTES-0.12.0.md) too if you upgrade from
 an older version. Coming from 0.7.x,
 their first section lists every breaking change since then (OpenClaw pairing, Node.js, host names
 behind a reverse proxy, the data folder, API routes); [docs/UPDATING.md](docs/UPDATING.md#upgrading-from-07x)
@@ -869,7 +914,7 @@ are missing. Live tests need `VO_TEST_URL` pointing at a disposable office.
 
 ## Documentation
 
-- [Release notes 0.13.0](docs/RELEASE-NOTES-0.13.0.md), [0.12.0](docs/RELEASE-NOTES-0.12.0.md) (start here coming from 0.7.x), [0.11.0](docs/RELEASE-NOTES-0.11.0.md), [0.10.1](docs/RELEASE-NOTES-0.10.1.md), [0.10.0](docs/RELEASE-NOTES-0.10.0.md), [0.9.0](docs/RELEASE-NOTES-0.9.0.md),
+- [Release notes 0.13.1](docs/RELEASE-NOTES-0.13.1.md), [0.13.0](docs/RELEASE-NOTES-0.13.0.md), [0.12.0](docs/RELEASE-NOTES-0.12.0.md) (start here coming from 0.7.x), [0.11.0](docs/RELEASE-NOTES-0.11.0.md), [0.10.1](docs/RELEASE-NOTES-0.10.1.md), [0.10.0](docs/RELEASE-NOTES-0.10.0.md), [0.9.0](docs/RELEASE-NOTES-0.9.0.md),
   [0.8.0](docs/RELEASE-NOTES-0.8.0.md),
   [0.7.4](docs/RELEASE-NOTES-0.7.4.md),
   [0.7.3](docs/RELEASE-NOTES-0.7.3.md), [0.7.2](docs/RELEASE-NOTES-0.7.2.md)

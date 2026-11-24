@@ -10,7 +10,7 @@
 // game.js reads window.VOStack.on() (stack-scene.js), which follows VOGraphics.resolved().
 (function () {
     'use strict';
-    var VERSION = '0.13.0';
+    var VERSION = '0.13.1';
     var FILES = [
         'stack/stack-core.js', 'stack/stack-gl.js', 'stack/stack-scene.js', 'stack/stack-overlay.js',
         'stack/stack-legacy.js', 'stack/stack-walls.js', 'stack/stack-people.js',

@@ -87,7 +87,7 @@ Codex configuration is product-neutral:
 - `VO_CODEX_REGISTER_NATIVE_AGENTS`: write `$CODEX_HOME/agents/<profile>.toml` when creating VO Codex agents, enabled by default
 - `VO_CODEX_PREFER_APP_SERVER`: native app-server integration on by default
 - `VO_CODEX_SANDBOX`: Codex sandbox mode, Docker example defaults to `danger-full-access` because bubblewrap sandboxing usually needs extra container privileges
-- `VO_CODEX_APPROVAL_POLICY`: Codex approval policy, default `never` so unattended Office runs do not hang on approval prompts
+- `VO_CODEX_APPROVAL_POLICY`: starting approval policy of a Codex agent nobody has set yet, default `untrusted` (Ask first). The owner's choice in the agent's chat window (Permissions, saved in `agent-permissions.json`) wins over it; with Ask first a run waits for the approval card in that agent's chat
 
 Claude Code configuration is product-neutral:
 
@@ -96,7 +96,7 @@ Claude Code configuration is product-neutral:
 - `VO_CLAUDE_CODE_WORKSPACE_ROOT`: Office-created Claude Code agent workspaces
 - `VO_CLAUDE_CODE_MAIN_WORKSPACE`: Workspace used by `claude-code-main` and native subagents
 - `VO_CLAUDE_CODE_MODEL`: optional default Claude Code model
-- `VO_CLAUDE_CODE_PERMISSION_MODE`: Claude Code permission mode, default `acceptEdits`
+- `VO_CLAUDE_CODE_PERMISSION_MODE`: starting permission mode of a Claude Code agent nobody has set yet, default `acceptEdits` (Edit files); the owner's choice in the chat window wins over it
 - `VO_CLAUDE_CODE_INCLUDE_MAIN`: include Claude Code's default Main agent, enabled by default
 - `VO_CLAUDE_CODE_INCLUDE_NATIVE_AGENTS`: read `$CLAUDE_CONFIG_DIR/agents/*.md`, enabled by default
 - `VO_CLAUDE_CODE_REGISTER_NATIVE_AGENTS`: write `$CLAUDE_CONFIG_DIR/agents/<profile>.md` when creating standard VO Claude Code agents, enabled by default

@@ -51,8 +51,9 @@ class CodexProvider:
     enabled: bool = True
     timeout_sec: int = 900
     model: str = ""
+    effort: str = ""                  # thinking level of the next turn ("" = the model's own); see list_models()
     sandbox: str = "workspace-write"
-    approval_policy: str = "never"
+    approval_policy: str = "untrusted"
     prefer_app_server: bool | None = None
     main_workspace: str | None = None
     include_main: bool | None = None
@@ -82,7 +83,7 @@ class CodexProvider:
             or self.workspace_root
         )
         self.sandbox = str(self.sandbox or "workspace-write")
-        self.approval_policy = str(self.approval_policy or "never")
+        self.approval_policy = str(self.approval_policy or "untrusted")
         self.model = str(self.model or "")
         self.prefer_app_server = _flag(self.prefer_app_server, "VO_CODEX_PREFER_APP_SERVER")
         self.include_main = _flag(self.include_main, "VO_CODEX_INCLUDE_MAIN")
@@ -94,6 +95,53 @@ class CodexProvider:
         )
         self._observed_auth_mtime = self._auth_file_mtime()
         self._sync_auth_error_state()
+
+    def list_models(self, timeout_sec: int = 25) -> dict[str, Any]:
+        """The models this Codex can use and each one's thinking levels (app-server ``model/list``), as the native
+        app's model picker shows them. Hidden models are left out."""
+        if not self.is_available():
+            return {"ok": False, "error": f"Codex CLI is not available at {self.binary}", "models": []}
+        cwd = next((p for p in (self.main_workspace, self.workspace_root, self.home_path) if p and os.path.isdir(p)), "/")
+        client = None
+        try:
+            client = CodexAppServerClient(self, cwd=cwd, timeout_sec=timeout_sec)
+            client.initialize()
+            models: list[dict[str, Any]] = []
+            cursor = None
+            for _ in range(10):
+                response = client.request("model/list", {"cursor": cursor} if cursor else {}, timeout_sec=timeout_sec)
+                result = (response.get("result") or {}) if isinstance(response, dict) else {}
+                for row in result.get("data") or []:
+                    if not isinstance(row, dict) or row.get("hidden"):
+                        continue
+                    model_id = str(row.get("model") or row.get("id") or "").strip()
+                    if not model_id:
+                        continue
+                    efforts = []
+                    for opt in row.get("supportedReasoningEfforts") or []:
+                        level = str((opt or {}).get("reasoningEffort") or "").strip() if isinstance(opt, dict) else str(opt or "")
+                        if level:
+                            efforts.append({"id": level, "description": str((opt or {}).get("description") or "") if isinstance(opt, dict) else ""})
+                    models.append({
+                        "id": model_id,
+                        "label": str(row.get("displayName") or model_id),
+                        "description": str(row.get("description") or ""),
+                        "isDefault": bool(row.get("isDefault")),
+                        "effort": efforts,
+                        "effortDefault": str(row.get("defaultReasoningEffort") or ""),
+                    })
+                cursor = result.get("nextCursor")
+                if not cursor:
+                    break
+            return {"ok": True, "models": models}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc), "models": []}
+        finally:
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
     def is_available(self) -> bool:
         return bool(
@@ -452,6 +500,7 @@ class CodexProvider:
                     "cwd": agent_dir,
                     "approvalPolicy": self.approval_policy,
                     "model": self.model or None,
+                    "effort": self.effort or None,
                 },
                 event_handler=capture_initial,
             )
@@ -717,6 +766,7 @@ class CodexProvider:
                     "cwd": agent_dir,
                     "approvalPolicy": self.approval_policy,
                     "model": self.model or None,
+                    "effort": self.effort or None,
                 },
                 event_handler=handle_turn_event,
             )
@@ -798,11 +848,15 @@ class CodexProvider:
             cmd.extend(["resume", "--json", "--skip-git-repo-check"])
             if self.model:
                 cmd.extend(["-m", self.model])
+            if self.effort:
+                cmd.extend(["-c", f"model_reasoning_effort={json.dumps(self.effort)}"])
             cmd.extend([session_id, "-"])
         else:
             cmd.extend(["--json", "--skip-git-repo-check", "-C", agent_dir, "--sandbox", self.sandbox])
             if self.model:
                 cmd.extend(["-m", self.model])
+            if self.effort:
+                cmd.extend(["-c", f"model_reasoning_effort={json.dumps(self.effort)}"])
             cmd.append("-")
 
         try:

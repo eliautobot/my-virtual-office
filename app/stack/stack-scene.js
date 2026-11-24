@@ -55,8 +55,15 @@
         return st.active;
     }
     function mark() { document.documentElement.classList.toggle('vo-stack', !!(st.renderer && st.active)); }
+    // The 3D files load one by one (stack-loader.js) and the page draws between them:
+    // the diorama starts only when all of them are in, so no piece is built before its
+    // model file has registered it (it would get the stand-in model, a top on legs, and keep it).
+    function filesIn() {
+        var G = window.VOGraphics;
+        return !G || typeof G.loaded !== 'function' || G.loaded();
+    }
     S.on = function () {
-        if (!st.tried) init();
+        if (!st.tried) { if (!filesIn()) return false; init(); }
         return !!(st.renderer && st.active);
     };
     // Switch the diorama on or off while the office runs (the Graphics setting).
@@ -78,6 +85,15 @@
         }
         syncButtons();
         return now;
+    };
+    // Jump the camera to its target (no ease): the office opening in 3D starts at the
+    // diorama angle instead of tilting in from the flat view (game.js _boot3dWait).
+    S.snapCam = function () {
+        var t = targetCam(), c = st.cur;
+        c.yaw = t.yaw; c.squash = t.squash; c.spacing = t.spacing; st.moving = false;
+        try { if (typeof _baseScaleMemo !== 'undefined') _baseScaleMemo.w = -1; } catch (e) { /* older game.js */ }
+        try { if (typeof clampCamera === 'function') clampCamera(); } catch (e) { /* keep going */ }
+        try { if (typeof _markSceneDirty === 'function') _markSceneDirty(); } catch (e) { /* keep going */ }
     };
     S.setClassic = function (on) {
         if (window.VOGraphics) window.VOGraphics.set(on ? '2d' : '3d');
@@ -271,7 +287,8 @@
         try { rx = typeof _rxOf === 'function' && typeof _rxTable !== 'undefined' && _rxTable.size ? _rxOf(item) : null; } catch (e) { rx = null; }
         var colors = null;
         try { colors = typeof _itemColor === 'function' && (item.type === 'desk' || item.type === 'bossDesk') ? _itemColor(item).t : null; } catch (e) { colors = null; }
-        return { rx: rx, wallH: wallH(), colors: colors, manifest: (typeof FURNITURE_MANIFEST !== 'undefined' && FURNITURE_MANIFEST[typeof _mk === 'function' ? _mk(item) : item.type]) || null };
+        var lw = item.type === 'textLabel' || item.type === 'branchSign' ? !!placement(item).wall : undefined;   // a sign hangs on a wall or lies on the floor
+        return { rx: rx, wallH: wallH(), labelWall: lw, colors: colors, manifest: (typeof FURNITURE_MANIFEST !== 'undefined' && FURNITURE_MANIFEST[typeof _mk === 'function' ? _mk(item) : item.type]) || null };
     };
 
     // How a piece stands in the world: anchor, height base, turn.
@@ -280,7 +297,7 @@
         var mount = m && m.mount ? m.mount : (typeof FURNITURE_MANIFEST !== 'undefined' && FURNITURE_MANIFEST[item.type] || {}).mount;
         if (item.type === 'textLabel' || item.type === 'branchSign') {
             if (item.y < wallH() - 4) return wallPlace(item);
-            return { x: item.x, y: item.y, z: 0, turn: 0 };
+            return partitionPlace(item) || { x: item.x, y: item.y, z: 0, turn: 0 };
         }
         if (mount === 'wall') return wallPlace(item);
         if (mount === 'surface') {
@@ -302,6 +319,44 @@
         var f = wallFace(), lift = 0;
         try { if (typeof _getItemWorldRect === 'function') { var r = _getItemWorldRect(item); lift = Math.max(0, r.y + r.h - f); } } catch (e) { lift = 0; }
         return { x: item.x, y: f, z: f - item.y + lift, turn: 0, wall: true };
+    }
+    // A sign (text label, branch sign) put on a drawn wall: on that wall in 3D, not on
+    // the floor. A horizontal wall shows its south face in the classic view (36 px, from
+    // its line + 3 up to its line - 39), so a sign over that face hangs on it at the
+    // height it has there (the straight view shows it where the classic does); a
+    // vertical wall is a 10 px strip from above, so a sign over it hangs half way up
+    // the side it leans to (in the straight view it lies on the wall's top, drawn
+    // where the classic draws it). The sign stays inside the wall's height and length.
+    function partitionPlace(item) {
+        var interior = (officeConfig.walls && officeConfig.walls.interior) || [];
+        if (!interior.length) return null;
+        var T = typeof TILE !== 'undefined' ? TILE : 40, PH = S.partitionH || 36, f = wallFace();
+        var x = +item.x || 0, y = +item.y || 0, best = null, bestD = Infinity;
+        var r = null;
+        try { r = S.labelSize ? S.labelSize(item) : null; } catch (e) { r = null; }
+        var hw = r ? r.w / 2 : 30, hh = r ? r.h / 2 : 9;
+        var zOn = function (z) { return Math.max(Math.min(hh + 1, PH / 2), Math.min(Math.max(PH - hh - 1, PH / 2), z)); };
+        for (var i = 0; i < interior.length; i++) {
+            var wl = interior[i], d, cand;
+            if (wl.x1 !== wl.x2) {
+                var a0 = Math.min(wl.x1, wl.x2) * T, a1 = Math.max(wl.x1, wl.x2) * T, line = wl.y1 * T;
+                if (line <= f || x < a0 - 2 || x > a1 + 2 || y < line - 44 || y > line + 8) continue;
+                d = Math.abs(y - (line - 18));
+                cand = { x: Math.max(a0 + Math.min(hw, (a1 - a0) / 2), Math.min(a1 - Math.min(hw, (a1 - a0) / 2), x)),
+                    y: line + 3, z: zOn(line + 3 - y), turn: 0, wall: true };
+            } else {
+                var b0 = Math.min(wl.y1, wl.y2) * T, b1 = Math.max(wl.y1, wl.y2) * T, lx = wl.x1 * T;
+                if (b1 <= f || y < Math.max(b0, f) - 2 || y > b1 + 2 || Math.abs(x - lx) > 14) continue;
+                var east = x >= lx, lo = Math.max(b0, f);
+                d = Math.abs(x - lx);
+                // the straight view looks down the wall's sides: the sign lies on its top, where the classic shows it
+                if (S.isFlat && S.isFlat()) cand = { x: x, y: y + PH + 1, z: PH + 1, turn: 0 };
+                else cand = { x: lx + (east ? 5 : -5), y: Math.max(lo + Math.min(hw, (b1 - lo) / 2), Math.min(b1 - Math.min(hw, (b1 - lo) / 2), y)),
+                    z: zOn(PH / 2), turn: east ? -Math.PI / 2 : Math.PI / 2, wall: true };
+            }
+            if (d < bestD) { bestD = d; best = cand; }
+        }
+        return best;
     }
     // How far a floor piece is moved south so it stands in the room, not inside a wall
     // (0 for most): see boardNudge and backWallNudge. Seats and sitters move with it.
@@ -373,7 +428,8 @@
 
     var lastKeyOf = new WeakMap();
     function furnitureMesh(item) {
-        var key = 'f|' + itemKey(item), d0 = defOf(item), pool = d0 && d0.pool;
+        // (a stand-in has its own key: when the piece's model is registered, it is built)
+        var d0 = defOf(item), key = 'f|' + itemKey(item) + (d0 ? '' : '|stand-in'), pool = d0 && d0.pool;
         if (pool === 'dynamic') {
             // a look that changes on its own (the clock's hands): the old mesh is let go
             var was = lastKeyOf.get(item);

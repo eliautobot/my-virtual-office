@@ -305,13 +305,14 @@
                         <option value="danger-full-access">danger-full-access</option>
                         <option value="read-only">read-only</option>
                     </select>
-                    <label for="s-codex-approval">Approval Policy</label>
+                    <label for="s-codex-approval">Starting approval for new agents</label>
                     <select id="s-codex-approval" data-section="codex">
-                        <option value="never">never</option>
+                        <option value="untrusted">untrusted (Ask first)</option>
                         <option value="on-request">on-request</option>
                         <option value="on-failure">on-failure</option>
-                        <option value="untrusted">untrusted</option>
+                        <option value="never">never (Full access)</option>
                     </select>
+                    <div class="hint">Only for Codex agents nobody has set yet. What you pick in an agent's chat window (Permissions) is saved and wins over this.</div>
                     <label class="check"><input type="checkbox" id="s-codex-appserver" data-section="codex"> Prefer app-server protocol</label>
                     <div class="inline-actions"><button type="button" class="small" data-action="test-codex"><svg class="vo-icon" aria-hidden="true" focusable="false"><use href="#i-search"/></svg>Test Codex</button></div>
                     <div id="codex-test-status" role="status"></div>
@@ -333,13 +334,14 @@
                     <input type="text" id="s-claude-main-workspace" data-section="claudeCode" placeholder="/data/claude-code-main" autocomplete="off" spellcheck="false">
                     <label for="s-claude-model">Default Model <span class="optional">(optional)</span></label>
                     <input type="text" id="s-claude-model" data-section="claudeCode" placeholder="leave blank to use the Claude Code default" autocomplete="off">
-                    <label for="s-claude-permission">Permission Mode</label>
+                    <label for="s-claude-permission">Starting permission mode for new agents</label>
                     <select id="s-claude-permission" data-section="claudeCode">
                         <option value="acceptEdits">Accept edits</option>
                         <option value="default">Default (ask)</option>
                         <option value="plan">Plan only</option>
                         <option value="bypassPermissions">Bypass permissions</option>
                     </select>
+                    <div class="hint">Only for Claude Code agents nobody has set yet. What you pick in an agent's chat window (Permissions) is saved and wins over this.</div>
                     <label class="check"><input type="checkbox" id="s-claude-main" data-section="claudeCode"> Show Claude Code Main agent</label>
                     <label class="check"><input type="checkbox" id="s-claude-native" data-section="claudeCode"> Discover native Claude Code subagents</label>
                     <label class="check"><input type="checkbox" id="s-claude-register" data-section="claudeCode"> Register new standard agents in native Claude Code</label>
@@ -665,7 +667,7 @@
             setValue('s-codex-workspace', c.workspaceRoot || ''); setValue('s-codex-main-workspace', c.mainWorkspace || '');
             setValue('s-codex-model', c.model || '');
             setSelect('s-codex-sandbox', c.sandbox || 'workspace-write');
-            setSelect('s-codex-approval', c.approvalPolicy || 'never');
+            setSelect('s-codex-approval', c.approvalPolicy || 'untrusted');
             setChecked('s-codex-appserver', c.preferAppServer !== false);
 
             var cl = cfg.claudeCode || {};

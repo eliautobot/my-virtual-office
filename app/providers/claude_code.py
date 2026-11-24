@@ -27,6 +27,22 @@ import data_owner   # (folders and files made as root keep the data folder's own
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 _ACTIVE_RUNS: dict[str, "CliRun"] = {}
+_EFFORT_SUPPORT: dict[str, bool] = {}
+# (aliases `claude --model` takes for the latest model of each family; `claude --help` names them)
+CLAUDE_MODELS = (
+    ("fable", "Fable", "The most capable model"),
+    ("opus", "Opus", "Deep reasoning and long tasks"),
+    ("sonnet", "Sonnet", "Fast and capable for everyday work"),
+    ("haiku", "Haiku", "Fastest, for quick tasks"),
+)
+# (`claude --effort` levels)
+CLAUDE_EFFORTS = (
+    ("low", "Thinks briefly"),
+    ("medium", "Thinks it through"),
+    ("high", "Thinks harder"),
+    ("xhigh", "Thinks much harder; slower"),
+    ("max", "Thinks hardest; slowest and costs the most"),
+)
 _ACTIVE_RUNS_LOCK = threading.Lock()
 
 def _flag(value, env_key, default=True):
@@ -47,6 +63,7 @@ class ClaudeCodeProvider:
     enabled: bool = True
     timeout_sec: int = 900
     model: str = ""
+    effort: str = ""                  # --effort of the next run ("" = Claude Code's own); see CLAUDE_EFFORTS
     permission_mode: str = "acceptEdits"
     main_workspace: str | None = None
     include_main: bool | None = None
@@ -84,6 +101,29 @@ class ClaudeCodeProvider:
         self.include_main = _flag(self.include_main, "VO_CLAUDE_CODE_INCLUDE_MAIN")
         self.include_native_agents = _flag(self.include_native_agents, "VO_CLAUDE_CODE_INCLUDE_NATIVE_AGENTS")
         self.register_native_agents = _flag(self.register_native_agents, "VO_CLAUDE_CODE_REGISTER_NATIVE_AGENTS")
+
+    def supports_effort(self) -> bool:
+        """True when this Claude Code takes --effort (newer versions); checked once per binary."""
+        binary = str(self.binary or "")
+        if binary not in _EFFORT_SUPPORT:
+            works = False
+            if self.is_available():
+                try:
+                    out = subprocess.run([binary, "--help"], capture_output=True, text=True, timeout=15,
+                                         stdin=subprocess.DEVNULL, env=self._subprocess_env())
+                    works = "--effort" in (out.stdout or "")
+                except (OSError, subprocess.SubprocessError):
+                    works = False
+            _EFFORT_SUPPORT[binary] = works
+        return _EFFORT_SUPPORT[binary]
+
+    def list_models(self) -> dict[str, Any]:
+        """The models Claude Code takes by name (its aliases for the latest of each) and their thinking levels, as
+        the native app's model picker shows them. Claude Code has no list command, so these are its documented
+        aliases; any full model name still works from the agent's own settings."""
+        efforts = [{"id": e, "description": d} for e, d in CLAUDE_EFFORTS] if self.supports_effort() else []
+        return {"ok": True, "models": [{"id": mid, "label": label, "description": desc, "isDefault": False,
+                                        "effort": efforts, "effortDefault": ""} for mid, label, desc in CLAUDE_MODELS]}
 
     def is_available(self) -> bool:
         return bool(
@@ -360,6 +400,8 @@ class ClaudeCodeProvider:
             cmd.extend(["--agent", safe_profile])
         if self.model:
             cmd.extend(["--model", self.model])
+        if self.effort and self.supports_effort():
+            cmd.extend(["--effort", self.effort])
         permission_mode = str(self.permission_mode or "").strip()
         if permission_mode == "bypassPermissions":
             cmd.append("--dangerously-skip-permissions")

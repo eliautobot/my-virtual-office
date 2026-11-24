@@ -438,7 +438,8 @@
     // x 0 and z 0, standing out 0..3); on the floor it lies flat (letters 1 voxel up).
     // =====================================================================
     var PL = { body: '#2b373e', rim: '#1d272c', bevel: '#3f4e57', screw: '#9aa7ad' };
-    function onWall(item, ctx) { var wh = (ctx && ctx.wallH) || 90; return (+item.y || 0) < wh - 4; }
+    // On a wall (the back wall or a drawn wall: the scene's placement says), else a floor label.
+    function onWall(item, ctx) { if (ctx && ctx.labelWall != null) return ctx.labelWall; var wh = (ctx && ctx.wallH) || 90; return (+item.y || 0) < wh - 4; }
     function labelModel(text, color, sc, wall, branch, stripe) {
         var tw = S.textWidth(text, sc);
         var w = tw + (branch ? 16 : sc === 2 ? 20 : 14), h = branch ? 18 : 7 * sc + (sc === 2 ? 12 : 10);
@@ -484,6 +485,12 @@
         var fs = Math.max(8, Math.min(32, +item.fontSize || 12));
         return { text: text, color: calmColor(safeHex(item.labelColor, '#ffffff')), sc: fs >= 14 ? 2 : 1 };
     }
+    // A sign's plaque size in world px (as labelModel builds it): where it fits on a wall.
+    S.labelSize = function (item) {
+        var branch = item.type === 'branchSign', L = branch ? branchLook(item) : textLabelLook(item), sc = branch ? 1 : L.sc;
+        var tw = S.textWidth(L.text, sc);
+        return { w: tw + (branch ? 16 : sc === 2 ? 20 : 14), h: branch ? 18 : 7 * sc + (sc === 2 ? 12 : 10) };
+    };
     S.def('textLabel', function (item, ctx) {
         var L = textLabelLook(item);
         return labelModel(L.text, L.color, L.sc, onWall(item, ctx), false, null);

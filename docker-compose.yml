@@ -89,7 +89,9 @@ services:
       - VO_CODEX_MAIN_WORKSPACE=${VO_CODEX_MAIN_WORKSPACE:-/data/codex-main}
       - VO_CODEX_PREFER_APP_SERVER=${VO_CODEX_PREFER_APP_SERVER:-1}
       - VO_CODEX_SANDBOX=${VO_CODEX_SANDBOX:-danger-full-access}
-      - VO_CODEX_APPROVAL_POLICY=${VO_CODEX_APPROVAL_POLICY:-never}
+      # Starting mode of a Codex agent nobody has set yet (untrusted = Ask first). What you pick in the
+      # agent's chat window (Permissions) is saved in /data and always wins over these two.
+      - VO_CODEX_APPROVAL_POLICY=${VO_CODEX_APPROVAL_POLICY:-untrusted}
       - VO_CODEX_INCLUDE_MAIN=${VO_CODEX_INCLUDE_MAIN:-1}
       - VO_CODEX_INCLUDE_NATIVE_AGENTS=${VO_CODEX_INCLUDE_NATIVE_AGENTS:-1}
       - VO_CODEX_REGISTER_NATIVE_AGENTS=${VO_CODEX_REGISTER_NATIVE_AGENTS:-1}

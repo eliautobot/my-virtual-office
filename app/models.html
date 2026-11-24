@@ -129,7 +129,7 @@ const CLAUDE_PERMISSION_MODES = [
     ['bypassPermissions', 'Bypass permissions'],
 ];
 const CODEX_SANDBOX = [['workspace-write', 'workspace-write'], ['read-only', 'read-only'], ['danger-full-access', 'danger-full-access']];
-const CODEX_APPROVAL = [['never', 'never'], ['on-request', 'on-request'], ['on-failure', 'on-failure'], ['untrusted', 'untrusted']];
+const CODEX_APPROVAL = [['untrusted', 'untrusted (Ask first)'], ['on-request', 'on-request'], ['on-failure', 'on-failure'], ['never', 'never (Full access)']];
 
 function esc(value) {
     return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -765,7 +765,7 @@ function renderCodex() {
             <div class="row"><label for="setup-codex-main-workspace">Main Workspace</label><input id="setup-codex-main-workspace" value="${esc(codex.mainWorkspace || '')}" placeholder="/data/codex-main"></div>
             <div class="row"><label for="setup-codex-model">Default Model</label><input id="setup-codex-model" value="${esc(codex.model || '')}" placeholder="optional"></div>
             <div class="row"><label for="setup-codex-sandbox">Sandbox</label><select id="setup-codex-sandbox">${selectOptions(CODEX_SANDBOX, codex.sandbox || 'workspace-write')}</select></div>
-            <div class="row"><label for="setup-codex-approval">Approvals</label><select id="setup-codex-approval">${selectOptions(CODEX_APPROVAL, codex.approvalPolicy || 'never')}</select></div>
+            <div class="row"><label for="setup-codex-approval" title="Only for Codex agents nobody has set yet: what you pick in an agent's chat window (Permissions) is saved and wins over this">Starting approval</label><select id="setup-codex-approval">${selectOptions(CODEX_APPROVAL, codex.approvalPolicy || 'untrusted')}</select></div>
             <div class="provider-tools" style="justify-content:flex-start">
                 <button type="button" class="btn btn-green" data-action="save-codex">Save Codex Setup</button>
                 <button type="button" class="btn btn-blue" data-action="test-codex">Test Codex</button>
@@ -793,7 +793,7 @@ function renderClaudeCode() {
             <div class="row"><label for="setup-claude-workspace">Workspace Root</label><input id="setup-claude-workspace" value="${esc(claude.workspaceRoot || '')}" placeholder="/data/claude-code-agents"></div>
             <div class="row"><label for="setup-claude-main-workspace">Main Workspace</label><input id="setup-claude-main-workspace" value="${esc(claude.mainWorkspace || '')}" placeholder="/data/claude-code-main"></div>
             <div class="row"><label for="setup-claude-model">Default Model</label><input id="setup-claude-model" value="${esc(claude.model || '')}" placeholder="optional"></div>
-            <div class="row"><label for="setup-claude-permission">Permission Mode</label><select id="setup-claude-permission">${selectOptions(CLAUDE_PERMISSION_MODES, claude.permissionMode || 'acceptEdits')}</select></div>
+            <div class="row"><label for="setup-claude-permission" title="Only for Claude Code agents nobody has set yet: what you pick in an agent's chat window (Permissions) is saved and wins over this">Starting permission mode</label><select id="setup-claude-permission">${selectOptions(CLAUDE_PERMISSION_MODES, claude.permissionMode || 'acceptEdits')}</select></div>
             <div class="provider-tools" style="justify-content:flex-start">
                 <button type="button" class="btn btn-green" data-action="save-claude">Save Claude Code Setup</button>
                 <button type="button" class="btn btn-blue" data-action="test-claude">Test Claude Code</button>
@@ -916,7 +916,7 @@ function codexSetupPayload() {
         mainWorkspace: val('setup-codex-main-workspace') || null,
         model: val('setup-codex-model') || '',
         sandbox: val('setup-codex-sandbox') || 'workspace-write',
-        approvalPolicy: val('setup-codex-approval') || 'never',
+        approvalPolicy: val('setup-codex-approval') || 'untrusted',
         preferAppServer: checked('setup-codex-appserver'),
         includeMain: checked('setup-codex-main'),
         includeNativeAgents: checked('setup-codex-native')

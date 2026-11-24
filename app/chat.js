@@ -809,6 +809,16 @@
         toast: (text, kind) => { if (kind === 'error') globalThis.VOUI?.toast?.(text, { kind }); },
         onChange: (prefs) => { if (prefs.model) { this.sessionModel = prefs.model; this.updateModelBar(); } }
       }) : null;
+      // Permissions picker (v0.13.1): Codex and Claude Code agents, which the office launches itself.
+      this.permissions = globalThis.ChatPermissions ? globalThis.ChatPermissions.controller({
+        doc: document,
+        bar: root.querySelector('.chat-model-bar'),
+        load: (kind, agent) => this.chatFetch('/api/agent-permissions', { kind, agent }).then(({ data }) => data),
+        save: (kind, agent, mode) => this.chatFetch('/api/agent-permissions', null, { kind, agent, mode }).then(({ data }) => data),
+        confirm: (text) => confirmAction({ title: 'Give this agent full access?', body: text, okLabel: 'Give full access', danger: true }),
+        isPhone: () => (chatViewportWidth() || 1600) <= 600,
+        toast: (text, kind) => globalThis.VOUI?.toast?.(text, kind === 'error' ? { kind } : undefined)
+      }) : null;
       this.queue = globalThis.ChatQueue ? globalThis.ChatQueue.create({ storage: safeSessionStorage() }) : null;
       this.queueEl = null;
       this.input = root.querySelector('.chat-input');
@@ -1991,6 +2001,10 @@
 
     /** Pickers follow the manifest and the chat (design 4.2 "Model + effort pickers"). */
     syncPickers() {
+      if (this.permissions) {
+        const permKind = this.isCodexSelected() ? 'codex' : (this.isClaudeCodeSelected() ? 'claude-code' : '');
+        this.permissions.setAgent(permKind, permKind ? this.chatAgentId() : '');
+      }
       if (!this.pickers) return;
       const view = this.serverCapsView();
       // A chat's own choice is read with its model list (`current`); until then the bar shows the session model.
@@ -6599,7 +6613,7 @@
     panel.setAttribute('aria-hidden', 'true');
     panel.querySelectorAll('[id]').forEach((el) => el.removeAttribute('id'));
     // The primary window's live parts (pickers, meter, queue, lines, plan) belong to it: each window builds its own.
-    panel.querySelectorAll('.hp-pickers, .hp-picker-pop, .hp-context-meter, .hp-queue, .hp-busy-hint, .hp-stream-line, .hp-conn-line, .hp-plan-msg, .hp-plan-card, .hp-side, .hp-side-btn, .hp-task-chip')
+    panel.querySelectorAll('.hp-pickers, .hp-picker-pop, .hp-context-meter, .hp-queue, .hp-perm-btn, .hp-busy-hint, .hp-stream-line, .hp-conn-line, .hp-plan-msg, .hp-plan-card, .hp-side, .hp-side-btn, .hp-task-chip')
       .forEach((el) => el.remove());
     panel.querySelectorAll('.chat-model-name, .chat-context-info').forEach((el) => { el.hidden = false; });
     panel.querySelector('.chat-secondary-controls')?.remove();
